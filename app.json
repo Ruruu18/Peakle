@@ -1,0 +1,66 @@
+{
+  "expo": {
+    "name": "Peakle",
+    "slug": "peakle",
+    "scheme": [
+      "peakle",
+      "com.peakle.app"
+    ],
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "userInterfaceStyle": "light",
+    "backgroundColor": "#F3F5EF",
+    "splash": {
+      "backgroundColor": "#0E2321",
+      "resizeMode": "contain"
+    },
+    "ios": {
+      "buildNumber": "1",
+      "supportsTablet": true,
+      "bundleIdentifier": "com.peakle.app",
+      "infoPlist": {
+        "NSLocationWhenInUseUsageDescription": "Peakle uses your location to sort courts and teams by distance."
+      }
+    },
+    "android": {
+      "versionCode": 1,
+      "allowBackup": false,
+      "softwareKeyboardLayoutMode": "resize",
+      "package": "com.peakle.app",
+      "adaptiveIcon": {
+        "backgroundColor": "#0E2321"
+      },
+      "permissions": [
+        "android.permission.ACCESS_COARSE_LOCATION",
+        "android.permission.ACCESS_FINE_LOCATION"
+      ]
+    },
+    "platforms": [
+      "ios",
+      "android"
+    ],
+    "plugins": [
+      [
+        "expo-build-properties",
+        {
+          "android": {
+            "enableMinifyInReleaseBuilds": true,
+            "enableShrinkResourcesInReleaseBuilds": true
+          }
+        }
+      ],
+      [
+        "expo-location",
+        {
+          "locationWhenInUsePermission": "Allow Peakle to use your location to find nearby courts and teams."
+        }
+      ],
+      "expo-web-browser"
+    ],
+    "extra": {
+      "eas": {
+        "projectId": "b1ea19b2-fa42-4318-9171-55c0dd48c7be"
+      }
+    }
+  }
+}
