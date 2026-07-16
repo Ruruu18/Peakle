@@ -288,6 +288,7 @@ declare
   local_start timestamp;
   local_end timestamp;
   lines jsonb := '[]'::jsonb;
+  promo_matched boolean := false;
   created public.booking_quotes;
 begin
   if auth.uid() is null then raise exception 'Authentication required'; end if;
@@ -333,6 +334,7 @@ begin
       ))
     order by rule.priority desc, rule.created_at desc limit 1;
     if found then
+      promo_matched := promo_matched or matching_rule.rule_type = 'promotion';
       line_total := case matching_rule.adjustment_type
         when 'fixed_hourly' then round(greatest(0, matching_rule.adjustment_value) * hours, 2)
         when 'percentage' then round(greatest(0, line_base * (1 + matching_rule.adjustment_value / 100)), 2)
@@ -346,6 +348,7 @@ begin
       'amount', line_total, 'ruleId', matching_rule.id, 'ruleName', matching_rule.name
     ));
   end loop;
+  if nullif(trim(p_promo_code), '') is not null and not promo_matched then raise exception 'Promo code is invalid or not eligible for this time'; end if;
   discount_value := greatest(0, subtotal_value - total_value);
   insert into public.booking_quotes(user_id, venue_id, court_ids, starts_at, ends_at, promo_code,
     subtotal, discount_amount, fee_amount, total, breakdown)
