@@ -320,6 +320,16 @@ export async function saveCourtBlackout(blackout) {
   return data;
 }
 
+export async function deleteVenuePricingRule(id) {
+  const { error } = await requireSupabase().from('venue_pricing_rules').delete().eq('id', id);
+  if (error) throw error;
+}
+
+export async function deleteCourtBlackout(id) {
+  const { error } = await requireSupabase().from('court_blackouts').delete().eq('id', id);
+  if (error) throw error;
+}
+
 export async function loadActiveOpenPlay() {
   const client = requireSupabase();
   const { data: root, error } = await client.from('open_play_sessions').select('*').eq('status', 'active').order('updated_at', { ascending: false }).limit(1).maybeSingle();

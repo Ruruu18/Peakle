@@ -7,6 +7,7 @@ import { createManagedCourt, createManagedVenue, listManagedVenues, reviewManage
 import { hasValidVenueCoordinates, resolveVenueCoordinates } from '../services/venueLocation';
 import { requireSupabase } from '../lib/supabase';
 import { createDarkStyleSheet, DARK_CONTENT_COLORS, useTheme } from '../context/ThemeContext';
+import BookingRulesManager from './BookingRulesManager';
 
 const LIGHT_C = {
   ink: '#0E2321', paper: '#F3F5EF', surface: '#FFFFFF', optic: '#D6E94A', teal: '#1C6B66',
@@ -276,6 +277,7 @@ export default function VenueCourtManager() {
       {error ? <View style={styles.errorBox}><Icon name="alert-circle-outline" size={17} color={C.error} /><Text style={styles.errorText}>{error}</Text></View> : null}
       <View style={styles.courtList}>{venue.courts.length ? venue.courts.map((court, index) => <View key={court.id} style={[styles.courtRow, index > 0 && styles.rowBorder]}><View style={[styles.courtIcon, !court.active && styles.courtIconInactive]}><Icon name="tennisball-outline" color={court.active ? C.teal : C.ink40} /></View><Pressable style={styles.courtCopy} onPress={() => { setEditingCourt(court); setFormOpen(true); }}><Text style={styles.courtName}>{court.name}</Text><Text style={styles.courtMeta}>{court.environment} · {court.surface}</Text><Text style={styles.courtPrice}>₱{Number(court.hourly_price).toLocaleString()} / hour</Text></Pressable><View style={styles.courtActions}><Pressable accessibilityLabel={`Edit ${court.name}`} onPress={() => { setEditingCourt(court); setFormOpen(true); }} style={styles.editButton}><Icon name="create-outline" size={17} color={C.teal} /></Pressable><Pressable disabled={busyId === court.id} accessibilityRole="switch" accessibilityLabel={`${court.name} active`} accessibilityState={{ checked: court.active }} onPress={() => toggleCourt(court)} style={[styles.toggle, court.active && styles.toggleOn]}><View style={[styles.toggleKnob, court.active && styles.toggleKnobOn]} /></Pressable></View></View>) : <View style={styles.emptyCourts}><Icon name="add-circle-outline" size={34} color={C.teal} /><Text style={styles.stateTitle}>No courts added</Text><Text style={styles.stateBody}>Add the first bookable court for this venue.</Text></View>}</View>
       <View style={styles.helpNote}><Icon name="information-circle-outline" size={17} color={C.teal} /><Text style={styles.helpText}>Inactive courts remain in your dashboard but disappear from booking and match selection.</Text></View>
+      {['owner', 'manager', 'admin'].includes(venue.role) && <BookingRulesManager venue={venue} />}
       <CourtForm visible={formOpen} court={editingCourt} venue={venue} onClose={() => { setFormOpen(false); setEditingCourt(null); }} onSaved={replaceCourt} />
       <VenueForm visible={venueFormOpen} onClose={() => setVenueFormOpen(false)} onSaved={addVenue} />
     </View>

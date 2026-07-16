@@ -29,6 +29,9 @@ where booking_group_id is null or reference is null or subtotal = 0;
 
 alter table public.bookings alter column booking_group_id set not null;
 alter table public.bookings alter column reference set not null;
+alter table public.bookings alter column booking_group_id set default gen_random_uuid();
+alter table public.bookings alter column reference set default
+  ('PKL-' || to_char(now() at time zone 'Asia/Manila', 'YYMMDD') || '-' || upper(substr(replace(gen_random_uuid()::text, '-', ''), 1, 8)));
 alter table public.bookings drop constraint if exists bookings_refund_status_check;
 alter table public.bookings add constraint bookings_refund_status_check
   check (refund_status in ('not_applicable', 'pending', 'partially_refunded', 'refunded', 'failed'));
@@ -36,6 +39,12 @@ create unique index if not exists bookings_reference_idx on public.bookings(refe
 create unique index if not exists bookings_idempotency_idx
   on public.bookings(user_id, idempotency_key, court_id) where idempotency_key is not null;
 create index if not exists bookings_group_idx on public.bookings(booking_group_id);
+
+-- Booking writes must go through revision-checked, idempotent RPCs. The
+-- original self-write policies allowed a client to bypass price calculation.
+drop policy if exists "users create own bookings" on public.bookings;
+drop policy if exists "users update own bookings" on public.bookings;
+revoke insert, update, delete on public.bookings from authenticated;
 
 create table if not exists public.venue_pricing_rules (
   id uuid primary key default gen_random_uuid(),
@@ -88,6 +97,30 @@ create table if not exists public.court_blackouts (
 );
 create index if not exists court_blackouts_window_idx
   on public.court_blackouts(venue_id, court_id, starts_at, ends_at);
+
+create or replace function public.validate_court_blackout()
+returns trigger language plpgsql security definer set search_path = '' as $$
+declare target_court text;
+begin
+  if new.court_id is not null and not exists (
+    select 1 from public.courts c where c.id = new.court_id and c.venue_id = new.venue_id
+  ) then raise exception 'The selected court does not belong to this venue'; end if;
+  for target_court in select c.id from public.courts c
+    where c.venue_id = new.venue_id and (new.court_id is null or c.id = new.court_id) order by c.id
+  loop
+    perform pg_advisory_xact_lock(hashtextextended(target_court, 0));
+  end loop;
+  if exists (
+    select 1 from public.bookings b where b.venue_id = new.venue_id
+      and (new.court_id is null or b.court_id = new.court_id)
+      and b.status in ('pending','confirmed')
+      and tstzrange(b.starts_at, b.ends_at, '[)') && tstzrange(new.starts_at, new.ends_at, '[)')
+  ) then raise exception 'A confirmed booking overlaps this blackout. Change or cancel it first'; end if;
+  return new;
+end $$;
+drop trigger if exists validate_court_blackout_before_write on public.court_blackouts;
+create trigger validate_court_blackout_before_write before insert or update on public.court_blackouts
+for each row execute function public.validate_court_blackout();
 
 create table if not exists public.booking_quotes (
   id uuid primary key default gen_random_uuid(),
@@ -146,14 +179,24 @@ alter table public.booking_quotes enable row level security;
 alter table public.court_waitlist enable row level security;
 alter table public.booking_audit_log enable row level security;
 
+-- Priority 3 created the notification outbox. Extend its contract before
+-- compiling booking functions that write the new booking_id column.
+alter table public.user_notifications drop constraint if exists user_notifications_kind_check;
+alter table public.user_notifications add constraint user_notifications_kind_check check (kind in (
+  'approval','waitlist_promotion','check_in_reminder','court_assignment','match_point','result',
+  'cancellation','venue_announcement','booking_reminder','court_waitlist','booking_changed'
+));
+alter table public.user_notifications add column if not exists booking_id uuid references public.bookings(id) on delete cascade;
+
 create policy "staff manage venue pricing" on public.venue_pricing_rules for all to authenticated
-  using (public.can_manage_venue(venue_id)) with check (public.can_manage_venue(venue_id));
+  using (public.can_manage_venue(venue_id) or public.is_platform_admin()) with check (public.can_manage_venue(venue_id) or public.is_platform_admin());
 create policy "staff manage venue memberships" on public.venue_membership_entitlements for all to authenticated
-  using (public.can_manage_venue(venue_id)) with check (public.can_manage_venue(venue_id));
+  using (public.can_manage_venue(venue_id) or public.is_platform_admin()) with check (public.can_manage_venue(venue_id) or public.is_platform_admin());
 create policy "members read own venue membership" on public.venue_membership_entitlements for select to authenticated
   using (user_id = auth.uid());
 create policy "staff manage court blackouts" on public.court_blackouts for all to authenticated
-  using (public.can_manage_venue(venue_id)) with check (public.can_manage_venue(venue_id) and created_by = auth.uid());
+  using (public.can_manage_venue(venue_id) or public.is_platform_admin())
+  with check ((public.can_manage_venue(venue_id) or public.is_platform_admin()) and created_by = auth.uid());
 create policy "users read own booking quotes" on public.booking_quotes for select to authenticated
   using (user_id = auth.uid());
 create policy "users read own waitlist" on public.court_waitlist for select to authenticated
@@ -177,6 +220,11 @@ create or replace function public.booking_court_is_available(
     where blackout.venue_id = c.venue_id
       and (blackout.court_id is null or blackout.court_id = p_court_id)
       and tstzrange(blackout.starts_at, blackout.ends_at, '[)') && tstzrange(p_starts_at, p_ends_at, '[)')
+  ) and not exists (
+    select 1 from public.court_waitlist hold
+    where hold.court_id = p_court_id and hold.status = 'offered'
+      and hold.offer_expires_at > now() and hold.user_id is distinct from auth.uid()
+      and tstzrange(hold.starts_at, hold.ends_at, '[)') && tstzrange(p_starts_at, p_ends_at, '[)')
   )
 $$;
 
@@ -193,6 +241,9 @@ language sql stable security definer set search_path = '' as $$
         and tstzrange(x.starts_at, x.ends_at, '[)') && tstzrange(p_starts_at, p_ends_at, '[)')) then 'Venue blackout'
       when exists (select 1 from public.bookings b where b.court_id = c.id and b.status in ('pending','confirmed')
         and tstzrange(b.starts_at, b.ends_at, '[)') && tstzrange(p_starts_at, p_ends_at, '[)')) then 'Booked'
+      when exists (select 1 from public.court_waitlist hold where hold.court_id = c.id and hold.status = 'offered'
+        and hold.offer_expires_at > now() and hold.user_id is distinct from auth.uid()
+        and tstzrange(hold.starts_at, hold.ends_at, '[)') && tstzrange(p_starts_at, p_ends_at, '[)')) then 'Waitlist hold'
       else null end
   from public.courts c where c.id = any(p_court_ids)
 $$;
@@ -212,6 +263,12 @@ language sql stable security definer set search_path = '' as $$
     and (blackout.court_id is null or blackout.court_id = c.id)
   where c.id = any(p_court_ids)
     and tstzrange(blackout.starts_at, blackout.ends_at, '[)') && tstzrange(p_starts_at, p_ends_at, '[)')
+  union all
+  select hold.court_id, hold.starts_at, hold.ends_at, 'Waitlist hold'::text
+  from public.court_waitlist hold
+  where hold.court_id = any(p_court_ids) and hold.status = 'offered'
+    and hold.offer_expires_at > now() and hold.user_id is distinct from auth.uid()
+    and tstzrange(hold.starts_at, hold.ends_at, '[)') && tstzrange(p_starts_at, p_ends_at, '[)')
 $$;
 
 create or replace function public.quote_booking(
@@ -343,6 +400,9 @@ begin
     returning * into created;
     insert into public.booking_audit_log(booking_id, actor_id, action, after_state)
       values(created.id, auth.uid(), 'created', to_jsonb(created));
+    update public.court_waitlist set status = 'booked', updated_at = now()
+      where user_id = auth.uid() and court_id = court_id_value and status = 'offered'
+        and tstzrange(starts_at, ends_at, '[)') && tstzrange(quote.starts_at, quote.ends_at, '[)');
     return next created;
   end loop;
   update public.booking_quotes set consumed_at = now() where id = quote.id;
@@ -350,18 +410,31 @@ exception when exclusion_violation or unique_violation then
   raise exception 'A selected court was just reserved. No duplicate booking was created';
 end $$;
 
+-- Forward declaration allows change/cancellation and blackout triggers to be
+-- compiled before the full FIFO implementation below.
+create or replace function public.offer_next_court_waitlist(
+  p_court_id text, p_starts_at timestamptz, p_ends_at timestamptz
+) returns void language plpgsql security definer set search_path = '' as $$
+begin return; end $$;
+
 create or replace function public.modify_booking(
   p_booking_id uuid, p_quote_id uuid, p_expected_revision bigint
 ) returns public.bookings language plpgsql security definer set search_path = '' as $$
 declare current_booking public.bookings; quote public.booking_quotes; before_value jsonb; updated public.bookings; line jsonb;
 begin
   select * into current_booking from public.bookings
-    where id = p_booking_id and user_id = auth.uid() and status in ('pending','confirmed') for update;
+    where id = p_booking_id and user_id = auth.uid() and status in ('pending','confirmed');
   if not found then raise exception 'Booking is no longer available'; end if;
   if current_booking.revision <> p_expected_revision then raise exception 'Booking changed on another device. Refresh and try again'; end if;
-  select * into quote from public.booking_quotes where id = p_quote_id and user_id = auth.uid() and expires_at > now() for update;
+  select * into quote from public.booking_quotes
+    where id = p_quote_id and user_id = auth.uid() and expires_at > now() and consumed_at is null for update;
   if not found or cardinality(quote.court_ids) <> 1 then raise exception 'A current single-court quote is required'; end if;
   if quote.venue_id <> current_booking.venue_id then raise exception 'Choose a court at the same venue'; end if;
+  perform pg_advisory_xact_lock(hashtextextended(least(current_booking.court_id, quote.court_ids[1]), 0));
+  perform pg_advisory_xact_lock(hashtextextended(greatest(current_booking.court_id, quote.court_ids[1]), 0));
+  select * into current_booking from public.bookings
+    where id = p_booking_id and user_id = auth.uid() and status in ('pending','confirmed') for update;
+  if not found or current_booking.revision <> p_expected_revision then raise exception 'Booking changed on another device. Refresh and try again'; end if;
   if not public.booking_court_is_available(quote.court_ids[1], quote.starts_at, quote.ends_at, current_booking.id) then raise exception 'That time was just reserved'; end if;
   before_value := to_jsonb(current_booking);
   select value into line from jsonb_array_elements(quote.breakdown->'lines') value;
@@ -372,9 +445,28 @@ begin
   update public.booking_quotes set consumed_at = now() where id = quote.id;
   insert into public.booking_audit_log(booking_id, actor_id, action, before_state, after_state)
     values(updated.id, auth.uid(), 'modified', before_value, to_jsonb(updated));
+  perform public.offer_next_court_waitlist(current_booking.court_id, current_booking.starts_at, current_booking.ends_at);
+  insert into public.user_notifications(user_id, booking_id, kind, title, body, data)
+    values(updated.user_id, updated.id, 'booking_changed', 'Booking updated',
+      'Your court reservation has been changed.', jsonb_build_object('bookingId', updated.id));
   return updated;
 exception when exclusion_violation then raise exception 'That time was just reserved';
 end $$;
+
+create or replace function public.offer_waitlist_after_blackout_delete()
+returns trigger language plpgsql security definer set search_path = '' as $$
+declare target_court text;
+begin
+  for target_court in select c.id from public.courts c
+    where c.venue_id = old.venue_id and (old.court_id is null or c.id = old.court_id)
+  loop
+    perform public.offer_next_court_waitlist(target_court, old.starts_at, old.ends_at);
+  end loop;
+  return old;
+end $$;
+drop trigger if exists offer_waitlist_after_blackout_delete on public.court_blackouts;
+create trigger offer_waitlist_after_blackout_delete after delete on public.court_blackouts
+for each row execute function public.offer_waitlist_after_blackout_delete();
 
 create or replace function public.join_court_waitlist(
   p_court_id text, p_starts_at timestamptz, p_ends_at timestamptz
@@ -398,6 +490,7 @@ create or replace function public.offer_next_court_waitlist(
 ) returns void language plpgsql security definer set search_path = '' as $$
 declare next_entry public.court_waitlist; venue_name text; court_name text;
 begin
+  perform pg_advisory_xact_lock(hashtextextended(p_court_id, 0));
   if not public.booking_court_is_available(p_court_id, p_starts_at, p_ends_at, null) then return; end if;
   select * into next_entry from public.court_waitlist
     where court_id = p_court_id and status = 'waiting'
@@ -416,8 +509,12 @@ end $$;
 create or replace function public.cancel_booking(
   p_booking_id uuid, p_expected_revision bigint, p_reason text default null
 ) returns public.bookings language plpgsql security definer set search_path = '' as $$
-declare current_booking public.bookings; selected_venue public.venues; before_value jsonb; updated public.bookings;
+declare current_booking public.bookings; selected_venue public.venues; before_value jsonb; updated public.bookings; target_court text;
 begin
+  select court_id into target_court from public.bookings
+    where id = p_booking_id and user_id = auth.uid() and status in ('pending','confirmed');
+  if not found then raise exception 'Booking is no longer cancellable'; end if;
+  perform pg_advisory_xact_lock(hashtextextended(target_court, 0));
   select * into current_booking from public.bookings
     where id = p_booking_id and user_id = auth.uid() and status in ('pending','confirmed') for update;
   if not found then raise exception 'Booking is no longer cancellable'; end if;
@@ -436,13 +533,6 @@ begin
   return updated;
 end $$;
 
--- Priority 3 created the notification type; extend it for booking operations.
-alter table public.user_notifications drop constraint if exists user_notifications_kind_check;
-alter table public.user_notifications add constraint user_notifications_kind_check check (kind in (
-  'approval','waitlist_promotion','check_in_reminder','court_assignment','match_point','result',
-  'cancellation','venue_announcement','booking_reminder','court_waitlist','booking_changed'
-));
-alter table public.user_notifications add column if not exists booking_id uuid references public.bookings(id) on delete cascade;
 create unique index if not exists booking_reminder_dedupe_idx
   on public.user_notifications(user_id, booking_id, kind, ((data->>'startsAt'))) where kind = 'booking_reminder';
 

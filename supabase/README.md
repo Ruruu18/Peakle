@@ -17,6 +17,25 @@ The first migration creates the normalized model, automatic user profiles, stora
 
 `migrations/202607170002_priority_3_realtime_operations.sql` completes Priority 3. It publishes all operational tables to Realtime, adds role-based venue staff access, a secure notification outbox, session announcements, connection-safe operation revisions, and an idempotent offline mutation log. Apply it after migration 001. Existing projects that applied the original Priority 2 migration should also re-apply the two updated Fair Play RPC definitions from migration 001 so staff authorization uses `owns_open_play` instead of comparing only the original organizer ID.
 
+`migrations/202607170003_priority_4_booking.sql` completes Priority 4. It adds venue-local calendars, pricing rules, court and venue blackouts, expiring server price quotes, atomic multi-court booking, request idempotency, revision-checked changes and cancellations, immutable booking audit records, FIFO court waitlists, richer receipt state, Realtime availability, and booking reminders. Apply it only after migrations 001 and 002; it extends the Priority 3 notification types.
+
+### Priority 4 booking operations
+
+1. Apply migration 003 and reload the PostgREST schema cache if your project does not do so automatically.
+2. In **Organizer → Venue**, add at least one peak/off-peak price rule and one future maintenance blackout. Long-press an existing rule to remove it.
+3. In Supabase **Integrations → Cron**, run `select public.queue_booking_reminders();` every five minutes. The existing push-dispatch Cron job sends the generated reminder and court-waitlist notifications.
+4. Keep venue `time_zone` values as valid IANA names. Philippine venues default to `Asia/Manila`; do not store a device offset as a time zone.
+
+### Priority 4 booking test
+
+1. On two player devices, open the same venue, date, and time. Confirm a reservation on one and verify the other updates without a manual refresh.
+2. Select two available courts and confirm once. Verify both rows share one reference and either both exist or neither exists.
+3. Retry the same request key after simulating a lost response and verify the RPC returns the original booking instead of creating another.
+4. Apply a peak, promotional, or member rule and confirm the price-locked summary matches the receipt after confirmation.
+5. Block a court and verify the time reads **FULL · WAITLIST**. Join the waitlist, release the court, and confirm the first player receives a 15-minute offer.
+6. Change a future booking, then cancel it before the venue cutoff. Confirm the revision, status, refund state, audit log, and receipt all update.
+7. Try a past time, overlapping booking, stale revision, expired quote, and one unavailable court in a multi-court request; each attempt must fail without a partial or duplicate reservation.
+
 ### Priority 3 push and scheduled jobs
 
 Push notifications require a development or production build on a physical iOS or Android device; Expo Go and simulators cannot provide a production device token. After applying migration 002:

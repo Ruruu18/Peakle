@@ -151,6 +151,8 @@ PEAKLE should differentiate through a transparent, configurable rotation system 
 
 ## Priority 4 — Best-in-class booking
 
+**Implemented July 17, 2026:** verified venues now expose Realtime-backed booking availability that includes confirmed/pending reservations and court- or venue-wide blackouts. Venue owners can publish peak, off-peak, holiday, membership, and promotional pricing rules and maintenance/private-event closures. Players receive a server-calculated ten-minute quote with an explicit court subtotal, discount, fees, and final total; one idempotent transaction reserves up to twenty courts without partial success. Receipts carry a stable reference, venue time zone, payment/refund state, pricing snapshot, and revision. Players can change or cancel an eligible reservation, join a full court's FIFO waitlist, share or add the event to Google Calendar, and receive scheduled reminders or 15-minute availability offers. Production deployment still requires migration `202607170003` and the booking reminder Cron job described in `supabase/README.md`.
+
 ### Deliverables
 
 - Accurate real-time court availability.
