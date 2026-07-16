@@ -15,6 +15,7 @@ import {
 } from '../services/nearbyPlayers';
 
 const REFRESH_MS = 20_000;
+const PRESENCE_AVAILABILITY = { free: 'available', away: 'offline', in_play: 'busy' };
 
 function friendlyError(error) {
   if (error?.code === '42P01' || error?.code === 'PGRST202' || error?.message?.includes('schema cache')) {
@@ -71,12 +72,12 @@ export default function useNearbyPlayers(radiusKm = 25) {
     if (!visibleRef.current || appStateRef.current !== 'active' || !user?.id) return;
     if (![location?.latitude, location?.longitude].every(Number.isFinite)) return;
     try {
-      await publishPresence(user.id, location, { visible: true, availability: 'available' });
+      await publishPresence(user.id, location, { visible: true, availability: PRESENCE_AVAILABILITY[user.presenceStatus] || 'available' });
       await refreshPlayers();
     } catch (nextError) {
       setError(friendlyError(nextError));
     }
-  }, [refreshPlayers, user?.id]);
+  }, [refreshPlayers, user?.id, user?.presenceStatus]);
 
   useEffect(() => {
     let active = true;

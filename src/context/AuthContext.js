@@ -8,7 +8,7 @@ const PENDING_VERIFICATION_EMAIL_KEY = '@peakle/pending-verification-email';
 const LAST_SIGN_IN_METHOD_KEY = '@peakle/last-sign-in-method';
 const REMEMBERED_EMAIL_KEY = '@peakle/remembered-email';
 
-function mapUser(authUser, profile) {
+function mapUser(authUser, profile, isAdmin = false) {
   if (!authUser) return null;
   const metadata = authUser.user_metadata || {};
   return {
@@ -19,11 +19,13 @@ function mapUser(authUser, profile) {
     location: profile?.home_area || 'Metro Manila',
     skill: profile?.skill_rating != null ? String(profile.skill_rating) : null,
     preference: profile?.play_preference || 'Doubles',
+    presenceStatus: profile?.presence_status || 'free',
     mode: profile?.app_mode || 'player',
     preferences: profile?.notification_preferences,
     onboardingCompleted: profile?.onboarding_completed ?? false,
     lastLogin: profile?.last_login_at || null,
     lastSignInMethod: profile?.last_sign_in_method || null,
+    isAdmin,
   };
 }
 
@@ -43,9 +45,15 @@ async function recordLogin(authUserId, method) {
 
 async function readCurrentUser(authUser) {
   if (!authUser) return null;
-  const { data, error } = await requireSupabase().from('profiles').select('*').eq('id', authUser.id).maybeSingle();
-  if (error) throw error;
-  return mapUser(authUser, data);
+  const client = requireSupabase();
+  const [{ data: profile, error: profileError }, { data: adminAccess, error: adminError }] = await Promise.all([
+    client.from('profiles').select('*').eq('id', authUser.id).maybeSingle(),
+    client.from('platform_admins').select('user_id').eq('user_id', authUser.id).maybeSingle(),
+  ]);
+  if (profileError) throw profileError;
+  // Keep sign-in compatible during a rolling deploy before the admin migration
+  // reaches the database; only a confirmed row grants admin behavior.
+  return mapUser(authUser, profile, !adminError && Boolean(adminAccess));
 }
 
 function readAuthParams(url) {
@@ -259,6 +267,7 @@ export function AuthProvider({ children }) {
     if (changes.location !== undefined) payload.home_area = changes.location;
     if (changes.avatar !== undefined) payload.avatar_url = changes.avatar;
     if (changes.preference !== undefined) payload.play_preference = changes.preference;
+    if (changes.presenceStatus !== undefined) payload.presence_status = changes.presenceStatus;
     if (changes.mode !== undefined) payload.app_mode = changes.mode;
     if (changes.preferences !== undefined) payload.notification_preferences = changes.preferences;
     const { error } = await requireSupabase().from('profiles').update(payload).eq('id', user.id);

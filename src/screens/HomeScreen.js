@@ -20,7 +20,7 @@ import LocationPicker from '../components/LocationPicker';
 import { useAuth } from '../context/AuthContext';
 import { distanceInKm, formatDistance, useUserLocation } from '../context/LocationContext';
 import { useTheme } from '../context/ThemeContext';
-import { calculatePerformanceRating, extendBooking, listMyBookings, listMyMatches } from '../services/database';
+import { calculatePerformanceRating, extendBooking, listMyBookings, listMyMatches, listVenues } from '../services/database';
 
 const C = {
   ink: '#0E2321', paper: '#F3F5EF', surface: '#FFFFFF', optic: '#D6E94A',
@@ -61,12 +61,6 @@ function MotionPressable({ children, onPress, onPressIn, onPressOut, style, ...p
     </AnimatedPressable>
   );
 }
-
-const courts = [
-  { id: 'yard', name: 'Pickle Yard BGC', location: 'Taguig · 8 courts', latitude: 14.5508, longitude: 121.0506, price: '₱450', rating: '4.8', color: '#3D6862', indoor: 'Indoor' },
-  { id: 'rockwell', name: 'Rockwell Club', location: 'Makati · 4 courts', latitude: 14.5651, longitude: 121.0370, price: '₱600', rating: '4.6', color: '#8A6658', indoor: 'Outdoor' },
-  { id: 'valley', name: 'Valley Court Club', location: 'Pasig · 6 courts', latitude: 14.5764, longitude: 121.0851, price: '₱500', rating: '4.7', color: '#536F6B', indoor: 'Indoor' },
-];
 
 function dashboardDate(date) {
   return date.toLocaleDateString('en-US', { weekday: 'long', month: 'short', day: 'numeric' }).toUpperCase();
@@ -116,13 +110,11 @@ function Icon({ name, size = 21, color }) {
 
 function KitchenLine({ dark = false, style }) {
   const { isDark } = useTheme();
-  const color = dark || isDark ? 'rgba(243,245,239,0.22)' : C.line;
+  const shouldBeDark = dark || isDark;
   return (
-    <View style={[styles.kitchenLine, style]}>
-      <View style={[styles.kitchenSolid, { backgroundColor: color }]} />
-      <View style={styles.dashRow}>
-        {Array.from({ length: 28 }).map((_, index) => <View key={index} style={[styles.dash, { backgroundColor: color }]} />)}
-      </View>
+    <View style={[styles.kitchen, style]}>
+      <View style={[styles.solid, shouldBeDark && darkStyles.solidLight]} />
+      <View style={[styles.dashed, shouldBeDark && darkStyles.dashedLight]} />
     </View>
   );
 }
@@ -269,9 +261,9 @@ function CourtCard({ court, onPress, wide }) {
       <View><CourtGraphic compact color={court.color} /><View style={styles.distance}><Text style={styles.distanceText}>{court.distance}</Text></View></View>
       <View style={styles.courtInfo}>
         <View style={styles.courtInfoMain}><Text numberOfLines={1} style={[styles.courtName, isDark && darkStyles.text]}>{court.name}</Text><View style={styles.locationRow}><Icon name="location-outline" size={13} color={isDark ? '#8FA39C' : C.ink40} /><Text style={[styles.courtLocation, isDark && darkStyles.mutedText]}>{court.location}</Text></View></View>
-        <Text style={styles.price}>{court.price}<Text style={[styles.perHour, isDark && darkStyles.mutedText]}>/hr</Text></Text>
+        <Text style={styles.price}>{court.price}{court.hourlyPrice ? <Text style={[styles.perHour, isDark && darkStyles.mutedText]}>/hr</Text> : null}</Text>
       </View>
-      <View style={styles.chips}><Text style={[styles.chip, isDark && darkStyles.chip, styles.ratingChip]}>{court.rating} ★</Text><Text style={[styles.chip, isDark && darkStyles.chip]}>{court.indoor}</Text><Text style={[styles.chip, isDark && darkStyles.chip]}>Lit</Text></View>
+      <View style={styles.chips}>{[...new Set([court.indoor, ...court.amenities].filter(Boolean))].slice(0, 3).map((label) => <Text key={label} style={[styles.chip, isDark && darkStyles.chip]}>{label}</Text>)}</View>
     </Pressable>
   );
 }
@@ -384,6 +376,7 @@ export default function HomeScreen() {
   const [locationOpen, setLocationOpen] = useState(false);
   const [bookings, setBookings] = useState([]);
   const [matches, setMatches] = useState([]);
+  const [venues, setVenues] = useState([]);
   const [dashboardError, setDashboardError] = useState('');
   const [now, setNow] = useState(() => new Date());
   const [toast, setToast] = useState('');
@@ -414,6 +407,33 @@ export default function HomeScreen() {
       });
     return () => { active = false; };
   }, [user?.id]));
+
+  useFocusEffect(useCallback(() => {
+    let active = true;
+    listVenues()
+      .then((rows) => {
+        if (!active) return;
+        setVenues(rows.map((venue) => {
+          const activeCourts = venue.courts || [];
+          const prices = activeCourts.map((court) => Number(court.hourly_price)).filter(Number.isFinite);
+          const lowestPrice = prices.length ? Math.min(...prices) : null;
+          return {
+            id: venue.id,
+            name: venue.name,
+            location: [venue.area, `${activeCourts.length} ${activeCourts.length === 1 ? 'court' : 'courts'}`].filter(Boolean).join(' · '),
+            latitude: venue.latitude,
+            longitude: venue.longitude,
+            price: lowestPrice === null ? 'Price unavailable' : `₱${lowestPrice.toLocaleString('en-PH')}`,
+            hourlyPrice: lowestPrice !== null,
+            color: venue.color || C.teal,
+            indoor: venue.venue_type,
+            amenities: venue.amenities || [],
+          };
+        }));
+      })
+      .catch(() => { if (active) setVenues([]); });
+    return () => { active = false; };
+  }, []));
 
   const showToast = (message) => {
     setToast(message);
@@ -452,10 +472,10 @@ export default function HomeScreen() {
       ],
     );
   };
-  const nearbyCourts = useMemo(() => courts.map((court) => {
+  const nearbyCourts = useMemo(() => venues.map((court) => {
     const distanceKm = distanceInKm(userLocation, court);
     return { ...court, distanceKm, distance: formatDistance(distanceKm).toUpperCase() };
-  }).sort((a, b) => a.distanceKm - b.distanceKm), [userLocation]);
+  }).sort((a, b) => a.distanceKm - b.distanceKm), [userLocation, venues]);
   const upcomingBooking = useMemo(() => bookings
     .filter((booking) => ['pending', 'confirmed'].includes(booking.status) && new Date(booking.ends_at) > now)
     .sort((a, b) => new Date(a.starts_at) - new Date(b.starts_at))[0] || null, [bookings, now]);
@@ -483,9 +503,9 @@ export default function HomeScreen() {
   const nearby = (
     <View style={styles.section}>
       <SectionTitle eyebrow={`AROUND ${userLocation.label.toUpperCase()}`} title="Nearby courts" right={<Pressable accessibilityLabel="Change search location" onPress={() => setLocationOpen(true)} style={styles.seeAll}><Icon name="location-outline" size={15} color={C.teal} /><Text numberOfLines={1} style={styles.seeAllText}>{userLocation.label}</Text><Icon name="chevron-down" size={14} color={C.teal} /></Pressable>} />
-      <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.courtScroll}>
+      {nearbyCourts.length ? <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.courtScroll}>
         {nearbyCourts.map((court) => <CourtCard key={court.id} court={court} wide={tablet} onPress={() => navigation.navigate('Book', { courtId: court.id, from: 'Home' })} />)}
-      </ScrollView>
+      </ScrollView> : <View style={[styles.emptyDataCard, isDark && darkStyles.card]}><Icon name="location-outline" size={25} color={C.teal} /><Text style={[styles.emptyDataTitle, isDark && darkStyles.text]}>No bookable courts yet</Text><Text style={[styles.emptyDataText, isDark && darkStyles.mutedText]}>Active venues will appear here when they are added.</Text></View>}
     </View>
   );
   const feed = <View style={styles.section}><SectionTitle eyebrow="THE SCOREBOARD" title="Activity" right={<Pressable accessibilityLabel="See all match activity" onPress={() => navigation.navigate('Profile', { openTab: 'Matches', openTabToken: Date.now() })} style={[styles.moreButton, isDark && darkStyles.card]}><Icon name="ellipsis-horizontal" size={20} /></Pressable>} /><ActivityList matches={matches} now={now} /></View>;
@@ -522,7 +542,7 @@ const styles = StyleSheet.create({
   header: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }, greeting: { flex: 1, minWidth: 0, paddingRight: 10 }, eyebrow: { color: C.ink40, fontSize: 10, lineHeight: 15, fontWeight: '700', letterSpacing: 1.05 }, eyebrowLight: { color: 'rgba(243,245,239,0.52)' },
   h1: { color: C.ink, fontSize: 29, lineHeight: 37, fontWeight: '700', letterSpacing: -0.8 }, greetingName: { color: C.teal }, h2: { color: C.ink, fontSize: 23, lineHeight: 29, fontWeight: '700', letterSpacing: -0.5 },
   headerActions: { height: 48, padding: 4, flexDirection: 'row', alignItems: 'center', flexShrink: 0, borderWidth: 1, borderColor: C.line, borderRadius: 18, backgroundColor: C.surface, ...shadow }, headerAction: { width: 38, height: 38, borderRadius: 13, alignItems: 'center', justifyContent: 'center' }, headerActionActive: { backgroundColor: C.optic }, headerActionActiveDark: { backgroundColor: C.optic }, headerActionDivider: { width: 1, height: 21, backgroundColor: C.line }, unreadDot: { position: 'absolute', top: 6, right: 6, width: 8, height: 8, borderRadius: 4, borderWidth: 2, borderColor: C.surface, backgroundColor: C.brick },
-  kitchenLine: { height: 6, justifyContent: 'space-between', overflow: 'hidden' }, kitchenSolid: { height: 2, width: '100%' }, dashRow: { flexDirection: 'row', justifyContent: 'space-between' }, dash: { width: 7, height: 1 }, headerLine: { marginTop: 22, marginBottom: 27 },
+  kitchen: { height: 7, marginVertical: 18 }, solid: { height: 2, backgroundColor: C.ink }, dashed: { marginTop: 4, borderTopWidth: 1, borderStyle: 'dashed', borderColor: C.ink40 }, headerLine: { marginTop: 22, marginBottom: 27 },
   tabletGrid: { flexDirection: 'row', gap: 30 }, primaryColumn: { flex: 1.55, minWidth: 0 }, secondaryColumn: { flex: 1, minWidth: 310 }, section: { marginBottom: 34 }, sectionTitle: { minHeight: 48, marginBottom: 13, flexDirection: 'row', alignItems: 'flex-end', justifyContent: 'space-between' }, sectionTitleMain: { flex: 1, minWidth: 0, paddingRight: 10 },
   todayChip: { flexDirection: 'row', alignItems: 'center', gap: 6, borderWidth: 1, borderColor: C.line, backgroundColor: C.surface, borderRadius: 8, paddingHorizontal: 9, paddingVertical: 6 }, liveDot: { width: 7, height: 7, borderRadius: 4, backgroundColor: C.optic }, todayText: { color: C.ink, fontSize: 9, fontWeight: '800', letterSpacing: 0.8 },
   emptyDataCard: { minHeight: 132, padding: 20, borderWidth: 1, borderColor: C.line, borderRadius: 24, borderBottomLeftRadius: 10, borderBottomRightRadius: 10, alignItems: 'center', justifyContent: 'center', backgroundColor: C.surface, ...shadow }, emptyDataTitle: { marginTop: 8, color: C.ink, textAlign: 'center', fontSize: 15, fontWeight: '800' }, emptyDataText: { maxWidth: 310, marginTop: 5, color: C.ink40, textAlign: 'center', fontSize: 11, lineHeight: 16 }, dataError: { marginTop: 8, color: C.brick, fontSize: 10, lineHeight: 15 },
@@ -558,6 +578,8 @@ const darkStyles = StyleSheet.create({
   ring: { borderRightColor: '#304743' },
   track: { backgroundColor: '#304743' },
   chip: { backgroundColor: '#203B37', color: '#D5DFDB' },
+  solidLight: { backgroundColor: 'rgba(255,255,255,.78)' },
+  dashedLight: { borderColor: 'rgba(255,255,255,.38)' },
   text: { color: C.paper },
   bodyText: { color: '#C1CECA' },
   mutedText: { color: '#8FA39C' },

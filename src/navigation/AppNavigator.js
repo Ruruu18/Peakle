@@ -8,13 +8,16 @@ import BookScreen from '../screens/BookScreen';
 import PlayScreen from '../screens/PlayScreen';
 import TeamScreen from '../screens/TeamScreen';
 import ProfileScreen from '../screens/ProfileScreen';
-import { OrganizerMonitorScreen, OrganizerOverviewScreen, OrganizerPlayersScreen, OrganizerSessionsScreen } from '../screens/OrganizerScreens';
+import VenueDashboardScreen from '../screens/VenueDashboardScreen';
+import OrganizerPassScreen from '../screens/OrganizerPassScreen';
+import { OrganizerMonitorScreen, OrganizerMoreScreen, OrganizerOverviewScreen, OrganizerPlayersScreen, OrganizerSessionsScreen, OrganizerStaffScreen } from '../screens/OrganizerScreens';
 import { useAppMode } from '../context/AppModeContext';
 import { useTheme } from '../context/ThemeContext';
 
 const Tab = createBottomTabNavigator();
 const colors = { ink: '#0E2321', surface: '#FFFFFF', optic: '#D6E94A', ink40: '#7C8983', line: '#DDE3DA' };
-const icons = { Home: 'home-outline', Book: 'calendar-outline', Play: 'tennisball-outline', Team: 'people-outline', Profile: 'person-outline', Overview: 'grid-outline', Sessions: 'calendar-outline', Monitor: 'pulse-outline', Players: 'people-outline' };
+const icons = { Home: 'home-outline', Book: 'calendar-outline', Play: 'tennisball-outline', Team: 'people-outline', Profile: 'person-outline', Overview: 'grid-outline', Sessions: 'calendar-outline', Monitor: 'pulse-outline', Players: 'people-outline', Venue: 'business-outline', More: 'ellipsis-horizontal-circle-outline' };
+const BALL_IMAGE = require('../../public/images/ball.png');
 const AnimatedPressable = Animated.createAnimatedComponent(Pressable);
 
 function TabBarItem({ focused, label, onPress, play, routeName, theme }) {
@@ -63,6 +66,8 @@ function TabBarItem({ focused, label, onPress, play, routeName, theme }) {
         />
       ) : null}
       <Animated.View
+        shouldRasterizeIOS={play}
+        renderToHardwareTextureAndroid={play}
         style={[
           styles.tabIcon,
           play && styles.playCircle,
@@ -77,12 +82,12 @@ function TabBarItem({ focused, label, onPress, play, routeName, theme }) {
         ]}
       >
         {play ? (
-          <Image source={require('../../public/images/ball.png')} style={styles.playIcon} resizeMode="contain" />
+          <Image source={BALL_IMAGE} defaultSource={BALL_IMAGE} fadeDuration={0} style={styles.playIcon} resizeMode="contain" />
         ) : (
-          <Ionicons name={icons[routeName]} size={20} color={focused ? theme.text : theme.muted} />
+          <Ionicons name={icons[routeName]} size={20} color={focused ? theme.activeText : theme.muted} />
         )}
       </Animated.View>
-      <Text style={[styles.tabLabel, { color: focused ? theme.text : theme.muted }, focused && styles.tabLabelActive]}>{label}</Text>
+      <Text style={[styles.tabLabel, { color: focused ? (play ? theme.centerActiveLabel : theme.activeLabel) : theme.muted }, focused && styles.tabLabelActive]}>{label}</Text>
       {!play ? (
         <Animated.View style={[styles.kitchenIndicator, { opacity: focusProgress }]}>
           <View style={[styles.kitchenSolid, { backgroundColor: colors.optic }]} />
@@ -96,19 +101,27 @@ function TabBarItem({ focused, label, onPress, play, routeName, theme }) {
 function PeakleTabBar({ state, descriptors, navigation }) {
   const insets = useSafeAreaInsets();
   const { isDark } = useTheme();
+  const organizerMoreRoutes = new Set(['Pass', 'Venue', 'Staff', 'Profile']);
+  const alwaysHiddenRoutes = new Set(['Pass']);
+  const currentRoute = state.routes[state.index];
+  const hasOrganizerMore = state.routes.some((route) => route.name === 'More');
   const theme = isDark
-    ? { background: '#0E2321', surface: '#17302D', line: '#304743', text: '#F3F5EF', muted: '#9FB3AC', active: '#24423D' }
-    : { background: '#F3F5EF', surface: colors.surface, line: colors.line, text: colors.ink, muted: colors.ink40, active: '#EEF2EC' };
+    ? { background: '#0E2321', surface: '#17302D', line: '#304743', activeText: colors.ink, activeLabel: colors.ink, centerActiveLabel: colors.surface, muted: '#9FB3AC', active: colors.optic }
+    : { background: '#F3F5EF', surface: colors.surface, line: colors.line, activeText: colors.ink, activeLabel: colors.ink, centerActiveLabel: colors.ink, muted: colors.ink40, active: colors.optic };
+  const visibleRoutes = state.routes.filter((route) => !alwaysHiddenRoutes.has(route.name) && (!hasOrganizerMore || !organizerMoreRoutes.has(route.name)));
   return (
     <View style={[styles.tabOuter, { paddingBottom: Math.max(insets.bottom, 9), backgroundColor: theme.background }]}>
       <View style={[styles.tabBar, { backgroundColor: theme.surface, borderColor: theme.line }]}>
-        {state.routes.map((route, index) => {
-          const focused = state.index === index;
+        {visibleRoutes.map((route) => {
+          const routeFocused = currentRoute.key === route.key;
+          const focused = routeFocused
+            || (route.name === 'More' && organizerMoreRoutes.has(currentRoute.name))
+            || (!hasOrganizerMore && route.name === 'Profile' && currentRoute.name === 'Pass');
           const play = route.name === 'Play' || route.name === 'Monitor';
           const label = descriptors[route.key].options.tabBarLabel ?? route.name;
           const onPress = () => {
             const event = navigation.emit({ type: 'tabPress', target: route.key, canPreventDefault: true });
-            if (!focused && !event.defaultPrevented) navigation.navigate(route.name, route.params);
+            if (!routeFocused && !event.defaultPrevented) navigation.navigate(route.name, route.params);
           };
           return <TabBarItem key={route.key} focused={focused} label={label} onPress={onPress} play={play} routeName={route.name} theme={theme} />;
         })}
@@ -135,11 +148,16 @@ export default function AppNavigator() {
         <Tab.Screen name="Play" component={PlayScreen} />
         <Tab.Screen name="Team" component={TeamScreen} />
         <Tab.Screen name="Profile" component={ProfileScreen} />
+        <Tab.Screen name="Pass" component={OrganizerPassScreen} />
       </> : <>
         <Tab.Screen name="Overview" component={OrganizerOverviewScreen} />
         <Tab.Screen name="Sessions" component={OrganizerSessionsScreen} />
         <Tab.Screen name="Monitor" component={OrganizerMonitorScreen} />
         <Tab.Screen name="Players" component={OrganizerPlayersScreen} />
+        <Tab.Screen name="More" component={OrganizerMoreScreen} />
+        <Tab.Screen name="Pass" component={OrganizerPassScreen} />
+        <Tab.Screen name="Venue" component={VenueDashboardScreen} />
+        <Tab.Screen name="Staff" component={OrganizerStaffScreen} />
         <Tab.Screen name="Profile" component={ProfileScreen} />
       </>}
     </Tab.Navigator>

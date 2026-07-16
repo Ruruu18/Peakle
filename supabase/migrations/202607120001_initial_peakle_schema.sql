@@ -296,6 +296,7 @@ declare selected_court public.courts; created public.bookings;
 begin
   if auth.uid() is null then raise exception 'Authentication required'; end if;
   if p_ends_at <= p_starts_at then raise exception 'Invalid booking duration'; end if;
+  if p_starts_at <= now() then raise exception 'Choose a future booking time'; end if;
   select * into selected_court from public.courts where id = p_court_id and active;
   if not found then raise exception 'Court is unavailable'; end if;
   insert into public.bookings(user_id, venue_id, court_id, starts_at, ends_at, amount, currency, payment_status, status, invite_team)
@@ -378,16 +379,3 @@ create policy "authenticated users upload team images" on storage.objects for in
 create policy "authenticated users update team images" on storage.objects for update to authenticated using (bucket_id = 'team-images');
 
 alter publication supabase_realtime add table public.team_messages;
-
-insert into public.venues (id, name, area, address, latitude, longitude, description, venue_type, opens_at, closes_at, amenities, color) values
-('yard','Pickle Yard BGC','Bonifacio Global City','32nd Street, Bonifacio Global City, Taguig',14.5508,121.0506,'A climate-controlled pickleball venue with tournament-grade courts and dedicated warm-up space.','Indoor','06:00','23:00',array['Air-conditioned','Showers','Parking'],'#376C66'),
-('rockwell','Rockwell Club','Makati','Rockwell Center, Makati City',14.5651,121.0370,'Outdoor courts in the heart of Makati with evening lighting and full club facilities.','Outdoor','06:00','22:00',array['Night lights','Lockers','Parking'],'#9A6754'),
-('valley','Valley Court Club','Pasig','Ortigas Center, Pasig City',14.5764,121.0851,'A friendly indoor club offering court rentals, equipment, coaching, and a post-match cafe.','Indoor','06:00','22:30',array['Showers','Equipment rental','Cafe'],'#4A7770')
-on conflict (id) do nothing;
-
-insert into public.courts (id, venue_id, name, environment, surface, hourly_price)
-select v.id || '-court-' || n, v.id, 'Court ' || n, v.venue_type, case when n % 3 = 0 then 'Premium acrylic' else 'Standard acrylic' end,
-  p + case when n % 3 = 0 then 100 else 0 end
-from (values ('yard',8,450::numeric),('rockwell',4,600::numeric),('valley',6,500::numeric)) x(id,count,p)
-join public.venues v on v.id = x.id cross join lateral generate_series(1,x.count) n
-on conflict (id) do nothing;

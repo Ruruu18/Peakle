@@ -6,11 +6,17 @@ import AppNavigator from './src/navigation/AppNavigator';
 import { LocationProvider } from './src/context/LocationContext';
 import { AppModeProvider } from './src/context/AppModeContext';
 import { OpenPlaySessionProvider } from './src/context/OpenPlaySessionContext';
+import { OrganizerPassProvider } from './src/context/OrganizerPassContext';
 import { AuthProvider, useAuth } from './src/context/AuthContext';
 import AuthFlowScreen from './src/screens/AuthFlowScreen';
 import { ThemeProvider, useTheme } from './src/context/ThemeContext';
+import { OperationsProvider } from './src/context/OperationsContext';
 
 const colors = { ink: '#0E2321', optic: '#D6E94A', surface: '#FFFFFF' };
+const linking = {
+  prefixes: ['peakle://'],
+  config: { screens: { Play: 'open-play/:openPlayCode' } },
+};
 
 function LaunchScreen() {
   return (
@@ -34,22 +40,26 @@ function Root() {
   if (passwordRecovery) return <AuthFlowScreen key="password-recovery" initialScreen="reset-password" />;
   if (!user) return <AuthFlowScreen key="login" initialScreen="login" />;
   if (!user.onboardingCompleted) return <AuthFlowScreen key={`new-user-setup-${user.id}`} initialScreen="new-user-overview" />;
-  return <NavigationContainer theme={navigationTheme}><AppNavigator /></NavigationContainer>;
+  return <NavigationContainer theme={navigationTheme} linking={linking}><AppNavigator /></NavigationContainer>;
 }
 
 export default function App() {
   return (
     <SafeAreaProvider>
       <AuthProvider>
-        <LocationProvider>
-          <ThemeProvider>
-            <AppModeProvider>
-              <OpenPlaySessionProvider>
-                <Root />
-              </OpenPlaySessionProvider>
-            </AppModeProvider>
-          </ThemeProvider>
-        </LocationProvider>
+        <OperationsProvider>
+          <LocationProvider>
+            <ThemeProvider>
+              <OrganizerPassProvider>
+                <AppModeProvider>
+                  <OpenPlaySessionProvider>
+                    <Root />
+                  </OpenPlaySessionProvider>
+                </AppModeProvider>
+              </OrganizerPassProvider>
+            </ThemeProvider>
+          </LocationProvider>
+        </OperationsProvider>
       </AuthProvider>
     </SafeAreaProvider>
   );

@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
   ActivityIndicator,
   Linking,
@@ -19,28 +19,18 @@ import LocationPicker from '../components/LocationPicker';
 import { distanceInKm, formatDistance, useUserLocation } from '../context/LocationContext';
 import { useAuth } from '../context/AuthContext';
 import { createDarkStyleSheet, DARK_CONTENT_COLORS, useTheme } from '../context/ThemeContext';
-import { createBooking, listCourtSchedule, listMyBookings, listTeams, listVenues } from '../services/database';
+import {
+  cancelBooking, createMultiCourtBooking, joinCourtWaitlist, listCourtAvailability, listMyBookings,
+  listTeams, listVenues, modifyBooking, quoteCourtBooking,
+} from '../services/database';
+import * as Crypto from 'expo-crypto';
+import { showExternalMapOptions } from '../services/externalMaps';
 
 const LIGHT_C = {
   ink: '#0E2321', paper: '#F3F5EF', surface: '#FFFFFF', optic: '#D6E94A',
   teal: '#1C6B66', brick: '#B6472E', ink70: '#3C4A45', ink40: '#7C8983', line: '#DDE3DA',
 };
 let C = LIGHT_C;
-
-function venueCourts(count, basePrice, environment, unavailable = []) {
-  return Array.from({ length: count }, (_, index) => {
-    const number = index + 1;
-    return {
-      id: `court-${number}`,
-      name: `Court ${number}`,
-      environment,
-      surface: index % 3 === 2 ? 'Premium acrylic' : 'Standard acrylic',
-      price: basePrice + (index % 3 === 2 ? 100 : 0),
-      available: !unavailable.includes(number),
-      next: unavailable.includes(number) ? (number % 2 ? 'Available 7:30 PM' : 'Available 8:00 PM') : 'Available now',
-    };
-  });
-}
 
 const DATES = Array.from({ length: 7 }, (_, offset) => {
   const value = new Date();
@@ -59,12 +49,21 @@ function bookingDates(dateIso, time, duration) {
 }
 
 function timeLabel(date) {
-  return date.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', timeZone: 'Asia/Manila' });
+  return date
+    .toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', timeZone: 'Asia/Manila' })
+    .replace(/\s*(AM|PM)$/i, ' $1');
 }
 
 function bookingWindow(dateIso, time, duration) {
   const { start, end } = bookingDates(dateIso, time, duration);
-  return `${timeLabel(start)}–${timeLabel(end)}`;
+  return `${timeLabel(start)} – ${timeLabel(end)}`;
+}
+
+function readableTextColor(backgroundColor) {
+  const value = String(backgroundColor || '').replace('#', '');
+  if (!/^[\da-f]{6}$/i.test(value)) return '#FFFFFF';
+  const [red, green, blue] = [value.slice(0, 2), value.slice(2, 4), value.slice(4, 6)].map((part) => parseInt(part, 16));
+  return (red * 299 + green * 587 + blue * 114) / 1000 > 155 ? LIGHT_C.ink : '#FFFFFF';
 }
 
 function Icon({ name, size = 20, color = C.ink }) {
@@ -174,23 +173,20 @@ function reservationStatus(status) {
   return values[status] || { label: status || 'Booked', backgroundColor: '#E9ECE7', color: LIGHT_C.ink70 };
 }
 
-function ReservationCard({ booking }) {
+function ReservationCard({ booking, onOpenMaps, onCancel, onModify }) {
   const start = new Date(booking.starts_at);
   const end = new Date(booking.ends_at);
   const venue = booking.venues || {};
   const court = booking.courts || {};
   const status = reservationStatus(booking.status);
   const venueName = venue.name || 'Court reservation';
+  const canManage = ['pending', 'confirmed'].includes(booking.status) && start.getTime() > Date.now();
+  const reference = booking.reference || String(booking.id || '').replace(/-/g, '').slice(0, 8).toUpperCase();
+  const calendarUrl = `https://calendar.google.com/calendar/render?action=TEMPLATE&text=${encodeURIComponent(`Pickleball at ${venueName}`)}&dates=${start.toISOString().replace(/[-:]/g, '').replace(/\.\d{3}Z$/, 'Z')}/${end.toISOString().replace(/[-:]/g, '').replace(/\.\d{3}Z$/, 'Z')}&location=${encodeURIComponent(venue.address || '')}`;
   const shareBooking = () => Share.share({
     title: `Pickleball at ${venueName}`,
     message: `Pickleball at ${venueName}${court.name ? ` (${court.name})` : ''} on ${reservationDate(start)}, ${timeLabel(start)}–${timeLabel(end)}.`,
   });
-  const openDirections = () => {
-    const query = Number.isFinite(venue.latitude) && Number.isFinite(venue.longitude)
-      ? `${venue.latitude},${venue.longitude}`
-      : venue.address || venueName;
-    Linking.openURL(`https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(query)}`);
-  };
   return (
     <View style={styles.reservationCard}>
       <View style={[styles.reservationTop, { backgroundColor: venue.color || C.teal }]}>
@@ -199,14 +195,15 @@ function ReservationCard({ booking }) {
         <View style={[styles.statusPill, { backgroundColor: status.backgroundColor }]}><Text style={[styles.statusText, { color: status.color }]}>{status.label.toUpperCase()}</Text></View>
       </View>
       <View style={styles.reservationBody}>
-        <View style={styles.reservationSchedule}><View style={styles.reservationDateBox}><Text style={styles.reservationMonth}>{start.toLocaleDateString('en-US', { month: 'short', timeZone: 'Asia/Manila' }).toUpperCase()}</Text><Text style={styles.reservationDay}>{start.toLocaleDateString('en-US', { day: 'numeric', timeZone: 'Asia/Manila' })}</Text></View><View style={styles.reservationWhen}><Text style={styles.reservationDateLabel}>{reservationDate(start)}</Text><Text style={styles.reservationTime}>{timeLabel(start)}–{timeLabel(end)}</Text><Text style={styles.reservationZone}>ASIA/MANILA</Text></View><View style={styles.reservationPrice}><Text style={styles.barLabel}>TOTAL</Text><Text style={styles.reservationAmount}>₱{Number(booking.amount || 0).toLocaleString('en-PH')}</Text><Text style={styles.paymentLabel}>Pay at venue</Text></View></View>
-        <View style={styles.reservationActions}><Pressable accessibilityRole="link" onPress={openDirections} style={({ pressed }) => [styles.reservationAction, pressed && styles.pressed]}><Icon name="navigate-outline" size={16} color={C.teal} /><Text style={styles.reservationActionText}>Directions</Text></Pressable><View style={styles.actionDivider} /><Pressable onPress={shareBooking} style={({ pressed }) => [styles.reservationAction, pressed && styles.pressed]}><Icon name="share-social-outline" size={16} color={C.teal} /><Text style={styles.reservationActionText}>Share</Text></Pressable></View>
+        <View style={styles.reservationSchedule}><View style={styles.reservationDateBox}><Text style={styles.reservationMonth}>{start.toLocaleDateString('en-US', { month: 'short', timeZone: 'Asia/Manila' }).toUpperCase()}</Text><Text style={styles.reservationDay}>{start.toLocaleDateString('en-US', { day: 'numeric', timeZone: 'Asia/Manila' })}</Text></View><View style={styles.reservationWhen}><Text style={styles.reservationDateLabel}>{reservationDate(start)}</Text><Text style={styles.reservationTime}>{timeLabel(start)}–{timeLabel(end)}</Text><Text style={styles.reservationZone}>{venue.time_zone || 'ASIA/MANILA'} · REF {reference}</Text></View><View style={styles.reservationPrice}><Text style={styles.barLabel}>TOTAL</Text><Text style={styles.reservationAmount}>₱{Number(booking.amount || 0).toLocaleString('en-PH')}</Text><Text style={styles.paymentLabel}>{booking.payment_status === 'pay_at_venue' ? 'Pay at venue' : booking.payment_status}</Text><Text style={styles.refundLabel}>{booking.refund_status && booking.refund_status !== 'not_applicable' ? `Refund: ${booking.refund_status.replace('_', ' ')}` : 'No refund due'}</Text></View></View>
+        <View style={styles.reservationActions}><Pressable accessibilityRole="button" onPress={() => onOpenMaps(venue)} style={({ pressed }) => [styles.reservationAction, pressed && styles.pressed]}><Icon name="navigate-outline" size={16} color={C.teal} /><Text style={styles.reservationActionText}>Maps</Text></Pressable><View style={styles.actionDivider} /><Pressable accessibilityRole="link" onPress={() => Linking.openURL(calendarUrl)} style={({ pressed }) => [styles.reservationAction, pressed && styles.pressed]}><Icon name="calendar-outline" size={16} color={C.teal} /><Text style={styles.reservationActionText}>Calendar</Text></Pressable><View style={styles.actionDivider} /><Pressable onPress={shareBooking} style={({ pressed }) => [styles.reservationAction, pressed && styles.pressed]}><Icon name="share-social-outline" size={16} color={C.teal} /><Text style={styles.reservationActionText}>Share</Text></Pressable></View>
+        {canManage && <View style={styles.manageActions}><Pressable onPress={() => onModify(booking)} style={styles.manageButton}><Icon name="calendar-number-outline" size={15} color={C.teal} /><Text style={styles.manageText}>Change time</Text></Pressable><Pressable onPress={() => onCancel(booking)} style={[styles.manageButton, styles.cancelButton]}><Icon name="close-circle-outline" size={15} color={C.brick} /><Text style={[styles.manageText, styles.cancelText]}>Cancel booking</Text></Pressable></View>}
       </View>
     </View>
   );
 }
 
-function MyBookings({ bookings, loading, error, onRetry, onFindCourts }) {
+function MyBookings({ bookings, loading, error, onRetry, onFindCourts, onOpenMaps, onCancel, onModify }) {
   const { upcoming, history } = useMemo(() => {
     const now = Date.now();
     const future = bookings.filter((item) => ['pending', 'confirmed'].includes(item.status) && new Date(item.ends_at).getTime() > now).sort((a, b) => new Date(a.starts_at) - new Date(b.starts_at));
@@ -222,19 +219,18 @@ function MyBookings({ bookings, loading, error, onRetry, onFindCourts }) {
       {!loading && error && !bookings.length && <View style={styles.empty}><Icon name="cloud-offline-outline" size={32} color={C.ink40} /><Text style={styles.emptyTitle}>Bookings could not load</Text><Text style={styles.emptyText}>{error}</Text><Pressable accessibilityRole="button" onPress={onRetry} style={styles.retryButton}><Text style={styles.retryText}>Try again</Text></Pressable></View>}
       {!loading && !error && !bookings.length && <View style={styles.empty}><Icon name="ticket-outline" size={34} color={C.ink40} /><Text style={styles.emptyTitle}>No bookings yet</Text><Text style={styles.emptyText}>Your confirmed court reservations will appear here.</Text><Pressable accessibilityRole="button" onPress={onFindCourts} style={styles.retryButton}><Text style={styles.retryText}>Find a court</Text></Pressable></View>}
       {error && bookings.length > 0 && <View style={styles.bookingWarning}><Icon name="cloud-offline-outline" size={17} color={C.brick} /><Text style={styles.bookingWarningText}>Could not refresh. Showing your last loaded bookings.</Text></View>}
-      {upcoming.length > 0 && <><View style={styles.bookingSectionHead}><View><Text style={styles.eyebrow}>UPCOMING</Text><Text style={styles.h2}>Ready to play</Text></View><Text style={styles.bookingCount}>{upcoming.length}</Text></View>{upcoming.map((item) => <ReservationCard key={item.id} booking={item} />)}</>}
-      {history.length > 0 && <><View style={styles.bookingSectionHead}><View><Text style={styles.eyebrow}>HISTORY</Text><Text style={styles.h2}>Past reservations</Text></View><Text style={styles.bookingCount}>{history.length}</Text></View>{history.map((item) => <ReservationCard key={item.id} booking={item} />)}</>}
+      {upcoming.length > 0 && <><View style={styles.bookingSectionHead}><View><Text style={styles.eyebrow}>UPCOMING</Text><Text style={styles.h2}>Ready to play</Text></View><Text style={styles.bookingCount}>{upcoming.length}</Text></View>{upcoming.map((item) => <ReservationCard key={item.id} booking={item} onOpenMaps={onOpenMaps} onCancel={onCancel} onModify={onModify} />)}</>}
+      {history.length > 0 && <><View style={styles.bookingSectionHead}><View><Text style={styles.eyebrow}>HISTORY</Text><Text style={styles.h2}>Past reservations</Text></View><Text style={styles.bookingCount}>{history.length}</Text></View>{history.map((item) => <ReservationCard key={item.id} booking={item} onOpenMaps={onOpenMaps} onCancel={onCancel} onModify={onModify} />)}</>}
     </ScrollView>
   );
 }
 
-function CourtDetail({ court, onBack, onBook }) {
+function CourtDetail({ court, onBack, onBook, onOpenMaps }) {
   const [saved, setSaved] = useState(false);
   const [selectedCourt, setSelectedCourt] = useState(() => court.courtOptions.find((item) => item.available));
   useEffect(() => {
     setSelectedCourt(court.courtOptions.find((item) => item.available));
   }, [court.id]);
-  const openDirections = () => Linking.openURL(`https://www.google.com/maps/search/?api=1&query=${court.latitude},${court.longitude}`);
   return (
     <ScrollView contentContainerStyle={styles.content} showsVerticalScrollIndicator={false}>
       <Header title="Court details" subtitle="PICK YOUR COURT" onBack={onBack} />
@@ -243,7 +239,7 @@ function CourtDetail({ court, onBack, onBook }) {
       <View style={styles.ratingRow}><View style={styles.ratingBadge}><Text style={styles.ratingBig}>{court.rating}</Text><Text style={styles.ratingCaption}>★ · {court.reviews} reviews</Text></View><View style={styles.detailStat}><Text style={styles.detailNumber}>{court.courts}</Text><Text style={styles.detailLabel}>COURTS</Text></View><View style={styles.detailStat}><Text style={styles.detailNumber}>{court.available}</Text><Text style={styles.detailLabel}>OPEN NOW</Text></View></View>
       <Text style={styles.courtDescription}>{court.description}</Text>
       <View style={styles.venueFacts}><View style={styles.venueFact}><Icon name="location-outline" size={18} color={C.teal} /><View style={styles.venueFactCopy}><Text style={styles.venueFactLabel}>ADDRESS</Text><Text style={styles.venueFactValue}>{court.address}</Text></View></View><View style={styles.venueFact}><Icon name="time-outline" size={18} color={C.teal} /><View style={styles.venueFactCopy}><Text style={styles.venueFactLabel}>TODAY'S HOURS</Text><Text style={styles.venueFactValue}>{court.hours}</Text></View></View></View>
-      <Pressable accessibilityRole="link" onPress={openDirections} style={({ pressed }) => [styles.directionsButton, pressed && styles.pressed]}><Icon name="navigate-outline" size={18} color={C.teal} /><Text style={styles.directionsText}>Get directions</Text><Icon name="open-outline" size={15} color={C.teal} /></Pressable>
+      <Pressable accessibilityRole="button" onPress={() => onOpenMaps(court)} style={({ pressed }) => [styles.directionsButton, pressed && styles.pressed]}><Icon name="navigate-outline" size={18} color={C.teal} /><Text style={styles.directionsText}>Open in Maps</Text><Icon name="open-outline" size={15} color={C.teal} /></Pressable>
       <View style={styles.sectionLine} />
       <View style={styles.courtChoiceHead}><View><Text style={styles.eyebrow}>SELECT A COURT</Text><Text style={styles.courtChoiceTitle}>{court.courts} courts at this venue</Text></View><Text style={styles.courtChoiceCount}>{court.available} available</Text></View>
       <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.courtOptions}>
@@ -260,14 +256,23 @@ function CourtDetail({ court, onBack, onBook }) {
   );
 }
 
-function Setup({ court, courtOption, teams, onBack, onConfirm }) {
-  const [dateIndex, setDateIndex] = useState(0);
-  const [time, setTime] = useState('6:30 PM');
-  const [duration, setDuration] = useState(60);
+function Setup({ court, courtOption, teams, onBack, onConfirm, onWaitlist, existingBooking, saving }) {
+  const existingStart = existingBooking ? new Date(existingBooking.starts_at) : null;
+  const existingEnd = existingBooking ? new Date(existingBooking.ends_at) : null;
+  const existingIso = existingStart ? `${existingStart.toLocaleDateString('en-CA', { timeZone: 'Asia/Manila' })}` : null;
+  const initialDateIndex = Math.max(0, DATES.findIndex((item) => item.iso === existingIso));
+  const [dateIndex, setDateIndex] = useState(initialDateIndex);
+  const [time, setTime] = useState(existingStart ? timeLabel(existingStart) : '6:30 PM');
+  const [duration, setDuration] = useState(existingStart ? Math.round((existingEnd - existingStart) / 60_000) : 60);
   const [inviteTeam, setInviteTeam] = useState(teams.length > 0);
   const [selectedTeamId, setSelectedTeamId] = useState(teams[0]?.id || null);
   const [schedule, setSchedule] = useState([]);
-  const total = courtOption.price * duration / 60;
+  const [selectedCourtIds, setSelectedCourtIds] = useState([courtOption.id]);
+  const [promoCode, setPromoCode] = useState('');
+  const [quote, setQuote] = useState(null);
+  const [quoteError, setQuoteError] = useState('');
+  const [quoteLoading, setQuoteLoading] = useState(false);
+  const total = quote?.total ?? court.courtOptions.filter((item) => selectedCourtIds.includes(item.id)).reduce((sum, item) => sum + item.price * duration / 60, 0);
   const reservedWindow = bookingWindow(DATES[dateIndex].iso, time, duration);
   const selectedTeam = teams.find((team) => team.id === selectedTeamId) || null;
   useEffect(() => {
@@ -278,51 +283,106 @@ function Setup({ court, courtOption, teams, onBack, onConfirm }) {
       setSelectedTeamId(teams[0].id);
     }
   }, [teams, selectedTeamId]);
-  useEffect(() => { listCourtSchedule(courtOption.id, DATES[dateIndex].iso).then(setSchedule).catch(() => setSchedule([])); }, [courtOption.id, dateIndex]);
-  const conflicts = (slot) => {
+  useEffect(() => {
+    let active = true;
+    listCourtAvailability(court.courtOptions.map((item) => item.id), DATES[dateIndex].iso)
+      .then((rows) => active && setSchedule(rows)).catch(() => active && setSchedule([]));
+    return () => { active = false; };
+  }, [court.courtOptions, dateIndex]);
+  const conflicts = (slot, courtId) => {
     const [clock, period] = slot.split(' ');
     const [rawHour, minute] = clock.split(':').map(Number);
     const hour = (rawHour % 12) + (period === 'PM' ? 12 : 0);
     const start = new Date(`${DATES[dateIndex].iso}T${String(hour).padStart(2, '0')}:${String(minute).padStart(2, '0')}:00+08:00`);
     const end = new Date(start.getTime() + duration * 60000);
-    return schedule.some((item) => start < new Date(item.ends_at) && end > new Date(item.starts_at));
+    return schedule.some((item) => item.court_id === courtId && item.id !== existingBooking?.id && start < new Date(item.ends_at) && end > new Date(item.starts_at));
   };
+  const hasStarted = (slot) => bookingDates(DATES[dateIndex].iso, slot, duration).start.getTime() <= Date.now();
+  const selectedTimeUnavailable = selectedCourtIds.some((id) => conflicts(time, id)) || hasStarted(time);
+  useEffect(() => {
+    setQuote(null); setQuoteError('');
+    if (selectedTimeUnavailable || !selectedCourtIds.length) return undefined;
+    let active = true;
+    const timer = setTimeout(() => {
+      setQuoteLoading(true);
+      quoteCourtBooking({ courtIds: selectedCourtIds, dateIso: DATES[dateIndex].iso, time, duration, promoCode })
+        .then((value) => { if (active) setQuote(value); })
+        .catch((reason) => { if (active) setQuoteError(reason.message || 'Price could not be confirmed.'); })
+        .finally(() => { if (active) setQuoteLoading(false); });
+    }, 300);
+    return () => { active = false; clearTimeout(timer); };
+  }, [dateIndex, duration, promoCode, selectedCourtIds, selectedTimeUnavailable, time]);
+  const toggleCourt = (id) => setSelectedCourtIds((current) => current.includes(id)
+    ? (current.length === 1 ? current : current.filter((value) => value !== id))
+    : [...current, id]);
+  const unavailableReason = schedule.find((item) => selectedCourtIds.includes(item.court_id) && conflicts(time, item.court_id))?.reason;
+  const confirm = () => onConfirm({
+    date: DATES[dateIndex].full, dateIso: DATES[dateIndex].iso, time, duration, total,
+    inviteTeam: inviteTeam && Boolean(selectedTeam), teamId: inviteTeam ? selectedTeam?.id : null,
+    teamName: inviteTeam ? selectedTeam?.name : null, courtOption,
+    courtOptions: court.courtOptions.filter((item) => selectedCourtIds.includes(item.id)), quote,
+  });
   return (
     <ScrollView contentContainerStyle={styles.content} showsVerticalScrollIndicator={false}>
       <Header title="Finish setup" subtitle="BOOKING DETAILS" onBack={onBack} />
-      <View style={styles.compactCourt}><View style={[styles.compactSwatch, { backgroundColor: court.color }]}><Icon name="tennisball-outline" color={C.surface} /></View><View style={styles.compactCopy}><Text style={styles.compactName}>{court.name} · {courtOption.name}</Text><Text style={styles.bodySmall}>{courtOption.environment} · {courtOption.surface}</Text></View><Text style={styles.compactPrice}>₱{courtOption.price}/hr</Text></View>
+      <View style={styles.compactCourt}><View style={[styles.compactSwatch, { backgroundColor: court.color }]}><Icon name="tennisball-outline" color={C.surface} /></View><View style={styles.compactCopy}><Text style={styles.compactName}>{existingBooking ? 'Change reservation' : court.name}</Text><Text style={styles.bodySmall}>{selectedCourtIds.length} court{selectedCourtIds.length === 1 ? '' : 's'} selected · {court.timeZone || 'Asia/Manila'}</Text></View><Text style={styles.compactPrice}>₱{total.toLocaleString()}</Text></View>
+      {!existingBooking && <><Text style={styles.sectionLabel}>COURTS · SELECT MORE THAN ONE</Text><View style={styles.multiCourtGrid}>{court.courtOptions.map((option) => { const selected = selectedCourtIds.includes(option.id); return <Pressable key={option.id} accessibilityState={{ selected }} onPress={() => toggleCourt(option.id)} style={[styles.multiCourt, selected && styles.multiCourtActive]}><Icon name={selected ? 'checkmark-circle' : 'ellipse-outline'} size={17} color={selected ? C.teal : C.ink40} /><View style={styles.flex}><Text style={styles.multiCourtName}>{option.name}</Text><Text style={styles.multiCourtPrice}>₱{option.price}/hr</Text></View></Pressable>; })}</View></>}
       <Text style={styles.sectionLabel}>CHOOSE A DATE</Text>
       <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.dateRow}>{DATES.map((item, index) => <Pressable key={item.date} onPress={() => setDateIndex(index)} style={[styles.date, dateIndex === index && styles.dateActive]}><Text style={[styles.dateDay, dateIndex === index && styles.dateTextActive]}>{item.day}</Text><Text style={[styles.dateNumber, dateIndex === index && styles.dateTextActive]}>{item.date}</Text></Pressable>)}</ScrollView>
       <View style={styles.sectionHead}><Text style={styles.sectionLabel}>AVAILABLE TIMES</Text><Text style={styles.timeZone}>Asia/Manila</Text></View>
-      <View style={styles.timeGrid}>{TIMES.map((item) => { const booked = conflicts(item); return <Pressable key={item} disabled={booked} onPress={() => setTime(item)} style={[styles.time, time === item && styles.timeActive, booked && styles.timeBooked]}><Text style={[styles.timeText, time === item && styles.timeTextActive, booked && styles.timeTextBooked]}>{item}</Text>{booked && <Text style={styles.bookedText}>BOOKED</Text>}</Pressable>; })}</View>
+      <View style={styles.timeGrid}>{TIMES.map((item) => { const past = hasStarted(item); const booked = selectedCourtIds.some((id) => conflicts(item, id)); const unavailable = past || booked; return <Pressable key={item} disabled={past} accessibilityState={{ disabled: past, selected: time === item }} onPress={() => setTime(item)} style={[styles.time, time === item && styles.timeActive, unavailable && styles.timeBooked]}><Text style={[styles.timeText, time === item && styles.timeTextActive, unavailable && styles.timeTextBooked]}>{item}</Text>{unavailable && <Text style={styles.bookedText}>{past ? 'PAST' : 'FULL · WAITLIST'}</Text>}</Pressable>; })}</View>
       <Text style={styles.sectionLabel}>DURATION</Text><View style={styles.segment}>{[60, 90, 120].map((value) => <Pressable key={value} onPress={() => setDuration(value)} style={[styles.segmentItem, duration === value && styles.segmentActive]}><Text style={[styles.segmentText, duration === value && styles.segmentTextActive]}>{value === 60 ? '1 hour' : value === 90 ? '1.5 hours' : '2 hours'}</Text></Pressable>)}</View>
       <View style={styles.infoCard}><Icon name="time-outline" color={C.teal} /><View style={styles.infoCopy}><Text style={styles.infoTitle}>Reserved {reservedWindow}</Text><Text style={styles.bodySmall}>Your court time ends at {timeLabel(bookingDates(DATES[dateIndex].iso, time, duration).end)}. If your game is unfinished, you may add 30 minutes only when the next slot is free. Additional venue charges apply.</Text></View></View>
       <Pressable disabled={!teams.length} accessibilityRole="switch" accessibilityState={{ checked: inviteTeam }} onPress={() => setInviteTeam(!inviteTeam)} style={[styles.inviteRow, !teams.length && styles.inviteRowDisabled]}><View style={styles.inviteIcon}><Icon name="people-outline" color={C.teal} /></View><View style={styles.inviteCopy}><Text style={styles.inviteTitle}>{teams.length ? 'Invite your team' : 'No joined team yet'}</Text><Text style={styles.bodySmall}>{teams.length ? `Share this booking with ${selectedTeam?.name || 'your team'}.` : 'Join or create a team to share bookings with teammates.'}</Text></View>{teams.length > 0 && <View style={[styles.toggle, inviteTeam && styles.toggleOn]}><View style={[styles.toggleKnob, inviteTeam && styles.toggleKnobOn]} /></View>}</Pressable>
       {inviteTeam && teams.length > 1 && <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.teamChoices}>{teams.map((team) => { const active = team.id === selectedTeamId; return <Pressable key={team.id} accessibilityState={{ selected: active }} onPress={() => setSelectedTeamId(team.id)} style={[styles.teamChoice, active && styles.teamChoiceActive]}><Icon name={active ? 'checkmark-circle' : 'people-outline'} size={15} color={active ? C.surface : C.teal} /><Text numberOfLines={1} style={[styles.teamChoiceText, active && styles.teamChoiceTextActive]}>{team.name}</Text></Pressable>; })}</ScrollView>}
-      <View style={styles.summary}><Text style={styles.summaryTitle}>Booking summary</Text><View style={styles.summaryRow}><Text style={styles.body}>Court</Text><Text style={styles.summaryValue}>{court.name} · {courtOption.name}</Text></View><View style={styles.summaryRow}><Text style={styles.body}>Date</Text><Text style={styles.summaryValue}>{DATES[dateIndex].full}</Text></View><View style={styles.summaryRow}><Text style={styles.body}>Time</Text><Text style={styles.summaryValue}>{reservedWindow} · {duration} min</Text></View><View style={styles.summaryRow}><Text style={styles.body}>Payment</Text><Text style={styles.summaryValue}>Pay at venue</Text></View><View style={styles.sectionLine} /><View style={styles.summaryRow}><Text style={styles.totalLabel}>Total</Text><Text style={styles.total}>₱{total.toLocaleString()}</Text></View></View>
-      <PrimaryButton icon="checkmark" onPress={() => onConfirm({ date: DATES[dateIndex].full, dateIso: DATES[dateIndex].iso, time, duration, total, inviteTeam: inviteTeam && Boolean(selectedTeam), teamId: inviteTeam ? selectedTeam?.id : null, teamName: inviteTeam ? selectedTeam?.name : null, courtOption })}>Confirm booking · ₱{total.toLocaleString()}</PrimaryButton>
+      <Text style={styles.sectionLabel}>PROMO CODE</Text><TextInput autoCapitalize="characters" value={promoCode} onChangeText={setPromoCode} placeholder="Optional" placeholderTextColor={C.ink40} style={styles.promoInput} />
+      <View style={styles.summary}><Text style={styles.summaryTitle}>Price-locked summary</Text><View style={styles.summaryRow}><Text style={styles.body}>Courts</Text><Text style={styles.summaryValue}>{court.courtOptions.filter((item) => selectedCourtIds.includes(item.id)).map((item) => item.name).join(', ')}</Text></View><View style={styles.summaryRow}><Text style={styles.body}>Date</Text><Text style={styles.summaryValue}>{DATES[dateIndex].full}</Text></View><View style={styles.summaryRow}><Text style={styles.body}>Time</Text><Text style={styles.summaryValue}>{reservedWindow} · {duration} min</Text></View><View style={styles.summaryRow}><Text style={styles.body}>Court subtotal</Text><Text style={styles.summaryValue}>₱{Number(quote?.subtotal ?? total).toLocaleString()}</Text></View><View style={styles.summaryRow}><Text style={styles.body}>Discounts</Text><Text style={styles.summaryValue}>− ₱{Number(quote?.discount_amount || 0).toLocaleString()}</Text></View><View style={styles.summaryRow}><Text style={styles.body}>Fees</Text><Text style={styles.summaryValue}>₱{Number(quote?.fee_amount || 0).toLocaleString()}</Text></View><View style={styles.summaryRow}><Text style={styles.body}>Payment</Text><Text style={styles.summaryValue}>Pay at venue</Text></View><View style={styles.sectionLine} /><View style={styles.summaryRow}><Text style={styles.totalLabel}>Total</Text><Text style={styles.total}>₱{total.toLocaleString()}</Text></View>{quote && <Text style={styles.quoteExpiry}>Price locked until {timeLabel(new Date(quote.expires_at))}</Text>}{quoteLoading && <ActivityIndicator size="small" color={C.teal} />}{quoteError ? <Text style={styles.quoteError}>{quoteError}</Text> : null}</View>
+      {selectedTimeUnavailable && selectedCourtIds.length === 1 ? <PrimaryButton disabled={saving} icon="notifications-outline" onPress={() => onWaitlist({ courtId: selectedCourtIds[0], dateIso: DATES[dateIndex].iso, time, duration })}>Join waitlist · {unavailableReason || 'Fully booked'}</PrimaryButton> : <PrimaryButton disabled={selectedTimeUnavailable || !quote || quoteLoading || saving} icon="checkmark" onPress={confirm}>{saving ? 'Securing every court…' : `${existingBooking ? 'Save change' : 'Confirm booking'} · ₱${total.toLocaleString()}`}</PrimaryButton>}
       <Text style={styles.terms}>No charge today. Payment is collected at the venue.</Text>
     </ScrollView>
   );
 }
 
 function Success({ court, booking, onDone }) {
+  const ticketColor = court.color || LIGHT_C.teal;
+  const ticketTextColor = readableTextColor(ticketColor);
+  const bookingReference = booking.reference || String(booking.id || '').replace(/-/g, '').slice(0, 8).toUpperCase() || 'CONFIRMED';
+  const bookedCourts = booking.courtOptions?.length ? booking.courtOptions : [booking.courtOption];
+  const courtNames = bookedCourts.filter(Boolean).map((item) => item.name).join(', ');
+  const { start, end } = bookingDates(booking.dateIso, booking.time, booking.duration);
   const calendarUrl = () => {
     const { start, end } = bookingDates(booking.dateIso, booking.time, booking.duration);
     const stamp = (date) => `${date.getFullYear()}${String(date.getMonth() + 1).padStart(2, '0')}${String(date.getDate()).padStart(2, '0')}T${String(date.getHours()).padStart(2, '0')}${String(date.getMinutes()).padStart(2, '0')}00`;
-    return `https://calendar.google.com/calendar/render?action=TEMPLATE&text=${encodeURIComponent(`Pickleball at ${court.name}`)}&dates=${stamp(start)}/${stamp(end)}&details=${encodeURIComponent(`${booking.courtOption.name} · ${booking.duration} minutes · ₱${booking.total.toLocaleString()}`)}&location=${encodeURIComponent(court.address)}`;
+    return `https://calendar.google.com/calendar/render?action=TEMPLATE&text=${encodeURIComponent(`Pickleball at ${court.name}`)}&dates=${stamp(start)}/${stamp(end)}&details=${encodeURIComponent(`${courtNames} · ${booking.duration} minutes · ₱${booking.total.toLocaleString()}`)}&location=${encodeURIComponent(court.address)}`;
   };
   const shareBooking = () => Share.share({
     title: `Pickleball at ${court.name}`,
-    message: `Join me for pickleball at ${court.name} (${booking.courtOption.name}) on ${booking.date}, ${bookingWindow(booking.dateIso, booking.time, booking.duration)}.`,
+    message: `Join me for pickleball at ${court.name} (${courtNames}) on ${booking.date}, ${bookingWindow(booking.dateIso, booking.time, booking.duration)}.`,
   });
   return (
     <ScrollView contentContainerStyle={[styles.content, styles.successContent]} showsVerticalScrollIndicator={false}>
-      <View style={styles.successIcon}><Icon name="checkmark" size={38} /></View><Text style={styles.eyebrow}>YOU'RE ON THE BOOKS</Text><Text style={styles.successTitle}>Court booked.</Text><Text style={styles.successLead}>Your game at {court.name} is ready.</Text>
-      <View style={styles.ticket}><View style={[styles.ticketTop, { backgroundColor: court.color }]}><Text style={styles.ticketEyebrow}>{court.name.toUpperCase()} RESERVATION</Text><Text style={styles.ticketCourt}>{booking.courtOption.name}</Text><Text style={styles.ticketCourtMeta}>{booking.courtOption.environment} · {booking.courtOption.surface}</Text></View><View style={styles.ticketBody}><View style={styles.ticketRow}><View><Text style={styles.barLabel}>DATE</Text><Text style={styles.ticketValue}>{booking.date}</Text></View><View><Text style={styles.barLabel}>TIME</Text><Text style={styles.ticketValue}>{bookingWindow(booking.dateIso, booking.time, booking.duration)}</Text></View></View><View style={styles.sectionLine} /><View style={styles.ticketRow}><View><Text style={styles.barLabel}>DURATION</Text><Text style={styles.ticketValue}>{booking.duration} minutes</Text></View><View><Text style={styles.barLabel}>TOTAL</Text><Text style={styles.ticketValue}>₱{booking.total.toLocaleString()}</Text></View></View></View></View>
+      <View style={styles.successHero}><View style={styles.successIcon}><Icon name="checkmark" size={32} /></View><Text style={styles.eyebrow}>BOOKING CONFIRMED</Text><Text style={styles.successTitle}>Court booked.</Text><Text style={styles.successLead}>Your reservation at {court.name} is ready.</Text></View>
+      <View style={styles.ticket}>
+        <View style={[styles.ticketTop, { backgroundColor: ticketColor }]}>
+          <View style={styles.ticketTopRow}><View style={[styles.ticketStatus, { backgroundColor: ticketTextColor === LIGHT_C.ink ? 'rgba(14,35,33,0.12)' : 'rgba(255,255,255,0.18)' }]}><Icon name="checkmark-circle" size={14} color={ticketTextColor} /><Text style={[styles.ticketStatusText, { color: ticketTextColor }]}>CONFIRMED</Text></View><Text style={[styles.ticketReference, { color: ticketTextColor }]}>REF {bookingReference}</Text></View>
+          <Text numberOfLines={1} style={[styles.ticketVenue, { color: ticketTextColor }]}>{court.name}</Text>
+          <Text style={[styles.ticketCourt, { color: ticketTextColor }]}>{courtNames}</Text>
+          <Text style={[styles.ticketCourtMeta, { color: ticketTextColor }]}>{bookedCourts.length} court{bookedCourts.length === 1 ? '' : 's'} · {booking.status || 'confirmed'}</Text>
+        </View>
+        <View style={styles.ticketBody}>
+          <View style={styles.ticketWhen}><View style={styles.ticketWhenIcon}><Icon name="calendar-outline" size={20} color={C.teal} /></View><View style={styles.ticketWhenCopy}><Text style={styles.barLabel}>DATE &amp; TIME</Text><Text style={styles.ticketDate}>{booking.date}</Text><Text style={styles.ticketTime}>{timeLabel(start)} – {timeLabel(end)}</Text><Text style={styles.ticketTimezone}>ASIA/MANILA</Text></View></View>
+          <View style={styles.ticketDivider} />
+          <View style={styles.ticketDetails}>
+            <View style={styles.ticketDetail}><Text style={styles.barLabel}>DURATION</Text><Text style={styles.ticketValue}>{booking.duration} min</Text></View>
+            <View style={[styles.ticketDetail, styles.ticketDetailMiddle]}><Text style={styles.barLabel}>PAYMENT</Text><Text style={styles.ticketValue}>At venue</Text></View>
+            <View style={[styles.ticketDetail, styles.ticketDetailRight]}><Text style={styles.barLabel}>TOTAL</Text><Text style={styles.ticketTotal}>₱{booking.total.toLocaleString()}</Text></View>
+          </View>
+        </View>
+      </View>
       <View style={styles.infoCard}><Icon name="information-circle-outline" color={C.teal} /><View style={styles.infoCopy}><Text style={styles.infoTitle}>Court-time policy</Text><Text style={styles.bodySmall}>Please finish by {timeLabel(bookingDates(booking.dateIso, booking.time, booking.duration).end)}. Near the end, Peakle will offer a 30-minute extension if the court remains available.</Text></View></View>
       {booking.inviteTeam && <View style={styles.shared}><Icon name="people" color={C.teal} /><Text style={styles.sharedText}>{booking.teamName} has been invited.</Text></View>}
-      <PrimaryButton icon="home-outline" onPress={onDone}>Done</PrimaryButton><View style={styles.successActions}><Pressable accessibilityRole="link" onPress={() => Linking.openURL(calendarUrl())} style={styles.calendarButton}><Icon name="calendar-outline" size={18} color={C.teal} /><Text style={styles.calendarText}>Add to calendar</Text></Pressable><Pressable onPress={shareBooking} style={styles.calendarButton}><Icon name="share-social-outline" size={18} color={C.teal} /><Text style={styles.calendarText}>Share booking</Text></Pressable></View>
+      <View style={styles.successActions}><Pressable accessibilityRole="link" onPress={() => Linking.openURL(calendarUrl())} style={({ pressed }) => [styles.calendarButton, pressed && styles.pressed]}><Icon name="calendar-outline" size={18} color={C.teal} /><Text style={styles.calendarText}>Add to calendar</Text></Pressable><Pressable accessibilityRole="button" onPress={shareBooking} style={({ pressed }) => [styles.calendarButton, pressed && styles.pressed]}><Icon name="share-social-outline" size={18} color={C.teal} /><Text style={styles.calendarText}>Share</Text></Pressable></View>
+      <View style={styles.successDone}><PrimaryButton icon="home-outline" onPress={onDone}>Done</PrimaryButton></View>
     </ScrollView>
   );
 }
@@ -348,6 +408,9 @@ export default function BookScreen({ route, navigation }) {
   const [court, setCourt] = useState(null);
   const [courtOption, setCourtOption] = useState(null);
   const [booking, setBooking] = useState(null);
+  const [editingBooking, setEditingBooking] = useState(null);
+  const [savingBooking, setSavingBooking] = useState(false);
+  const bookingRequestKey = useRef(null);
   const [openedFromHome, setOpenedFromHome] = useState(false);
   useEffect(() => {
     let active = true;
@@ -400,6 +463,14 @@ export default function BookScreen({ route, navigation }) {
     return () => { active = false; };
   }, [bookingsRequest]);
   useEffect(() => navigation.addListener('focus', () => setBookingsRequest((request) => request + 1)), [navigation]);
+  useEffect(() => {
+    const client = require('../lib/supabase').requireSupabase();
+    const channel = client.channel('booking-availability')
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'bookings' }, () => setBookingsRequest((value) => value + 1))
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'court_blackouts' }, () => setVenuesRequest((value) => value + 1))
+      .subscribe();
+    return () => { client.removeChannel(channel); };
+  }, []);
   const selectCourt = (selected) => { setCourt(selected); setCourtOption(null); setStep('detail'); };
   const activeCourt = useMemo(() => court ? { ...court, distanceKm: distanceInKm(userLocation, court), distance: formatDistance(distanceInKm(userLocation, court)) } : null, [court, userLocation]);
   useEffect(() => {
@@ -415,16 +486,55 @@ export default function BookScreen({ route, navigation }) {
     if (openedFromHome) { setOpenedFromHome(false); navigation.navigate('Home'); }
   };
   const confirmBooking = async (value) => {
+    if (savingBooking || !value.quote) return;
+    setSavingBooking(true);
     try {
-      const saved = await createBooking({ userId: user.id, venue: activeCourt, court: value.courtOption, booking: value });
-      setBooking({ ...value, id: saved.id });
+      if (editingBooking) {
+        const saved = await modifyBooking({ bookingId: editingBooking.id, quoteId: value.quote.id, expectedRevision: editingBooking.revision || 1 });
+        setBooking({ ...value, ...saved, courtOptions: value.courtOptions, status: saved.status || 'confirmed' });
+        setEditingBooking(null);
+      } else {
+        bookingRequestKey.current ||= Crypto.randomUUID();
+        const result = await createMultiCourtBooking({
+          quoteId: value.quote.id, inviteTeam: value.inviteTeam, teamId: value.teamId,
+          idempotencyKey: bookingRequestKey.current,
+        });
+        const saved = result.bookings[0] || {};
+        setBooking({ ...value, ...saved, courtOptions: value.courtOptions, status: saved.status || 'confirmed' });
+        bookingRequestKey.current = null;
+      }
       setBookingsRequest((request) => request + 1);
       setStep('success');
     } catch (error) {
       Alert.alert('Booking not saved', error.message || 'Please check your connection and try again.');
+    } finally {
+      setSavingBooking(false);
     }
   };
-  return <SafeAreaView style={styles.safe}><StatusBar style={isDark ? 'light' : 'dark'} backgroundColor={C.paper} />{step === 'discover' && rootView === 'find' && <Discovery courts={venues} loading={venuesLoading} error={venuesError} onRetry={() => setVenuesRequest((value) => value + 1)} onShowBookings={() => setRootView('bookings')} onSelect={(selected) => { setOpenedFromHome(false); selectCourt(selected); }} />}{step === 'discover' && rootView === 'bookings' && <MyBookings bookings={bookings} loading={bookingsLoading} error={bookingsError} onRetry={() => setBookingsRequest((value) => value + 1)} onFindCourts={() => setRootView('find')} />}{step === 'detail' && activeCourt && <CourtDetail court={activeCourt} onBack={backFromDetail} onBook={(option) => { setCourtOption(option); setStep('setup'); }} />}{step === 'setup' && activeCourt && courtOption && <Setup court={activeCourt} courtOption={courtOption} teams={joinedTeams} onBack={() => setStep('detail')} onConfirm={confirmBooking} />}{step === 'success' && activeCourt && <Success court={activeCourt} booking={booking} onDone={() => { setRootView('bookings'); setStep('discover'); setCourt(null); setCourtOption(null); setBooking(null); setOpenedFromHome(false); }} />}</SafeAreaView>;
+  const waitlist = async (details) => {
+    setSavingBooking(true);
+    try {
+      await joinCourtWaitlist(details);
+      Alert.alert('Waitlist joined', 'Peakle will notify you when this court opens. The offer is held for 15 minutes.');
+    } catch (error) {
+      Alert.alert('Waitlist not saved', error.message || 'Please try again.');
+    } finally { setSavingBooking(false); }
+  };
+  const cancelReservation = (reservation) => Alert.alert('Cancel this booking?', 'The court will be released and the next waitlisted player may be notified.', [
+    { text: 'Keep booking', style: 'cancel' },
+    { text: 'Cancel booking', style: 'destructive', onPress: async () => {
+      try { await cancelBooking(reservation.id, reservation.revision || 1, 'Cancelled by player'); setBookingsRequest((value) => value + 1); }
+      catch (error) { Alert.alert('Could not cancel', error.message || 'Please try again.'); }
+    } },
+  ]);
+  const changeReservation = (reservation) => {
+    const selectedVenue = venues.find((item) => item.id === reservation.venue_id);
+    const selectedOption = selectedVenue?.courtOptions.find((item) => item.id === reservation.court_id);
+    if (!selectedVenue || !selectedOption) { Alert.alert('Court unavailable', 'Refresh venues and try again.'); return; }
+    setCourt(selectedVenue); setCourtOption(selectedOption); setEditingBooking(reservation); setStep('setup');
+  };
+  const openMaps = (destination) => showExternalMapOptions(destination);
+  return <SafeAreaView style={styles.safe}><StatusBar style={isDark ? 'light' : 'dark'} backgroundColor={C.paper} />{step === 'discover' && rootView === 'find' && <Discovery courts={venues} loading={venuesLoading} error={venuesError} onRetry={() => setVenuesRequest((value) => value + 1)} onShowBookings={() => setRootView('bookings')} onSelect={(selected) => { setOpenedFromHome(false); setEditingBooking(null); selectCourt(selected); }} />}{step === 'discover' && rootView === 'bookings' && <MyBookings bookings={bookings} loading={bookingsLoading} error={bookingsError} onRetry={() => setBookingsRequest((value) => value + 1)} onFindCourts={() => setRootView('find')} onOpenMaps={openMaps} onCancel={cancelReservation} onModify={changeReservation} />}{step === 'detail' && activeCourt && <CourtDetail court={activeCourt} onBack={backFromDetail} onBook={(option) => { setCourtOption(option); setEditingBooking(null); setStep('setup'); }} onOpenMaps={openMaps} />}{step === 'setup' && activeCourt && courtOption && <Setup court={activeCourt} courtOption={courtOption} teams={joinedTeams} existingBooking={editingBooking} saving={savingBooking} onBack={() => { setEditingBooking(null); setStep(editingBooking ? 'discover' : 'detail'); }} onConfirm={confirmBooking} onWaitlist={waitlist} />}{step === 'success' && activeCourt && booking && <Success court={activeCourt} booking={booking} onDone={() => { setRootView('bookings'); setStep('discover'); setCourt(null); setCourtOption(null); setBooking(null); setEditingBooking(null); setOpenedFromHome(false); }} />}</SafeAreaView>;
 }
 
 const shadow = Platform.select({ ios: { shadowColor: C.ink, shadowOpacity: 0.08, shadowRadius: 12, shadowOffset: { width: 0, height: 4 } }, android: { elevation: 3 } });
@@ -442,7 +552,7 @@ const lightStyles = StyleSheet.create({
   cardBody: { padding: 14 }, cardTitleRow: { flexDirection: 'row', justifyContent: 'space-between', gap: 10 }, cardTitle: { flex: 1, color: C.ink, fontSize: 17, fontWeight: '800' }, price: { color: C.teal, fontSize: 16, fontWeight: '800' }, perHour: { color: C.ink40, fontSize: 9, fontWeight: '500' }, meta: { marginTop: 4, flexDirection: 'row', alignItems: 'center', gap: 4 }, metaText: { color: C.ink40, fontSize: 11 }, tags: { marginTop: 11, flexDirection: 'row', gap: 6 }, tag: { paddingHorizontal: 8, paddingVertical: 5, overflow: 'hidden', borderRadius: 7, color: C.ink70, backgroundColor: C.paper, fontSize: 9, fontWeight: '800' }, rating: { color: C.teal }, pressed: { opacity: .78, transform: [{ scale: .985 }] }, empty: { paddingVertical: 70, alignItems: 'center' }, emptyTitle: { marginTop: 12, color: C.ink, fontSize: 18, fontWeight: '800' }, emptyText: { marginTop: 5, color: C.ink40, fontSize: 12 },
   detailTop: { marginTop: 18, flexDirection: 'row', gap: 10, alignItems: 'flex-start' }, detailName: { flex: 1 }, savedButton: { borderColor: '#BFD8D2', backgroundColor: '#E5F0ED' }, body: { color: C.ink70, fontSize: 13, lineHeight: 19 }, bodySmall: { color: C.ink40, fontSize: 11, lineHeight: 16 }, ratingRow: { marginTop: 18, padding: 14, flexDirection: 'row', alignItems: 'center', borderWidth: 1, borderColor: C.line, borderRadius: 14, backgroundColor: C.surface }, ratingBadge: { flex: 1.5 }, ratingBig: { color: C.ink, fontSize: 25, lineHeight: 27, fontWeight: '800' }, ratingCaption: { marginTop: 2, color: C.teal, fontSize: 9, fontWeight: '800' }, detailStat: { flex: 1, alignItems: 'center', borderLeftWidth: 1, borderColor: C.line }, detailNumber: { color: C.ink, fontSize: 17, fontWeight: '800' }, detailLabel: { marginTop: 2, color: C.ink40, fontSize: 8, fontWeight: '800', letterSpacing: .7 }, courtDescription: { marginTop: 16, color: C.ink70, fontSize: 12, lineHeight: 18 }, venueFacts: { marginTop: 14, paddingHorizontal: 13, borderRadius: 14, borderWidth: 1, borderColor: C.line, backgroundColor: C.surface }, venueFact: { minHeight: 62, flexDirection: 'row', alignItems: 'center', gap: 9, borderBottomWidth: 1, borderColor: C.line }, venueFactCopy: { flex: 1 }, venueFactLabel: { color: C.ink40, fontSize: 7, fontWeight: '900', letterSpacing: .7 }, venueFactValue: { marginTop: 3, color: C.ink, fontSize: 10, fontWeight: '700' }, directionsButton: { minHeight: 45, marginTop: 9, paddingHorizontal: 12, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6, borderRadius: 12, borderWidth: 1, borderColor: C.line, backgroundColor: C.surface }, directionsText: { color: C.teal, fontSize: 10, fontWeight: '800' }, courtChoiceHead: { flexDirection: 'row', alignItems: 'flex-end', justifyContent: 'space-between', gap: 8 }, courtChoiceTitle: { marginTop: 2, color: C.ink, fontSize: 17, fontWeight: '800' }, courtChoiceCount: { color: C.teal, fontSize: 9, fontWeight: '800' }, courtOptions: { gap: 9, paddingTop: 11, paddingRight: 20 }, courtOption: { width: 164, minHeight: 128, padding: 12, borderRadius: 15, borderWidth: 1, borderColor: C.line, backgroundColor: C.surface }, courtOptionActive: { borderWidth: 2, borderColor: C.teal, backgroundColor: '#F6FAF8' }, courtOptionUnavailable: { opacity: .52, backgroundColor: '#E9ECE7' }, courtOptionHead: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }, courtOptionName: { color: C.ink, fontSize: 12, fontWeight: '800' }, courtOptionNameActive: { color: C.teal }, courtOptionMeta: { minHeight: 27, marginTop: 5, color: C.ink40, fontSize: 8, lineHeight: 12 }, courtOptionStatus: { marginTop: 5, color: C.teal, fontSize: 8, fontWeight: '800' }, courtOptionStatusBusy: { color: C.brick }, courtOptionPrice: { marginTop: 'auto', color: C.ink, fontSize: 15, fontWeight: '900' }, sectionLine: { marginVertical: 20, height: 1, backgroundColor: C.line }, amenities: { marginTop: 11, flexDirection: 'row', flexWrap: 'wrap', gap: 8 }, amenity: { width: '48%', minHeight: 48, paddingHorizontal: 11, flexDirection: 'row', alignItems: 'center', gap: 8, borderRadius: 11, borderWidth: 1, borderColor: C.line, backgroundColor: C.surface }, amenityText: { flex: 1, color: C.ink70, fontSize: 11, fontWeight: '700' }, infoCard: { marginTop: 18, padding: 14, flexDirection: 'row', gap: 10, borderRadius: 14, backgroundColor: '#E5F0ED' }, infoCopy: { flex: 1 }, infoTitle: { color: C.ink, fontSize: 12, fontWeight: '800' }, bookBar: { marginTop: 22, padding: 14, flexDirection: 'row', alignItems: 'center', gap: 12, borderRadius: 16, borderWidth: 1, borderColor: C.line, backgroundColor: C.surface, ...shadow }, barLabel: { color: C.ink40, fontSize: 8, fontWeight: '800', letterSpacing: .8 }, barPrice: { color: C.ink, fontSize: 19, fontWeight: '800' },
   primary: { minHeight: 52, paddingHorizontal: 18, flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8, borderRadius: 14, backgroundColor: C.optic }, primaryText: { color: C.ink, fontSize: 13, fontWeight: '800' }, disabled: { opacity: .4 }, compactCourt: { padding: 12, flexDirection: 'row', alignItems: 'center', gap: 10, borderWidth: 1, borderColor: C.line, borderRadius: 14, backgroundColor: C.surface }, compactSwatch: { width: 46, height: 46, borderRadius: 12, alignItems: 'center', justifyContent: 'center' }, compactCopy: { flex: 1 }, compactName: { color: C.ink, fontSize: 13, fontWeight: '800' }, compactPrice: { color: C.teal, fontSize: 11, fontWeight: '800' }, sectionLabel: { marginTop: 24, marginBottom: 10, color: C.ink, fontSize: 10, fontWeight: '800', letterSpacing: .9 }, dateRow: { gap: 8 }, date: { width: 58, height: 70, alignItems: 'center', justifyContent: 'center', borderRadius: 13, borderWidth: 1, borderColor: C.line, backgroundColor: C.surface }, dateActive: { backgroundColor: C.ink, borderColor: C.ink }, dateDay: { color: C.ink40, fontSize: 8, fontWeight: '800' }, dateNumber: { marginTop: 4, color: C.ink, fontSize: 20, fontWeight: '800' }, dateTextActive: { color: C.paper }, sectionHead: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }, timeZone: { marginTop: 14, color: C.ink40, fontSize: 9 }, timeGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 }, time: { width: '48.7%', height: 48, alignItems: 'center', justifyContent: 'center', borderRadius: 11, borderWidth: 1, borderColor: C.line, backgroundColor: C.surface }, timeActive: { borderColor: C.optic, backgroundColor: C.optic }, timeBooked: { backgroundColor: '#E9ECE7' }, timeText: { color: C.ink, fontSize: 11, fontWeight: '800' }, timeTextActive: { color: C.ink }, timeTextBooked: { color: C.ink40, textDecorationLine: 'line-through' }, bookedText: { color: C.ink40, fontSize: 6, fontWeight: '800', letterSpacing: .6 }, segment: { padding: 4, flexDirection: 'row', borderRadius: 12, backgroundColor: '#E7EBE6' }, segmentItem: { flex: 1, minHeight: 40, alignItems: 'center', justifyContent: 'center', borderRadius: 9 }, segmentActive: { backgroundColor: C.optic, ...shadow }, segmentText: { color: C.ink40, fontSize: 11, fontWeight: '700' }, segmentTextActive: { color: C.ink }, inviteRow: { marginTop: 18, padding: 13, flexDirection: 'row', alignItems: 'center', gap: 10, borderRadius: 14, borderWidth: 1, borderColor: C.line, backgroundColor: C.surface }, inviteRowDisabled: { opacity: .65 }, inviteIcon: { width: 40, height: 40, alignItems: 'center', justifyContent: 'center', borderRadius: 11, backgroundColor: '#E5F0ED' }, inviteCopy: { flex: 1 }, inviteTitle: { color: C.ink, fontSize: 12, fontWeight: '800' }, toggle: { width: 43, height: 25, padding: 3, borderRadius: 13, backgroundColor: C.line }, toggleOn: { backgroundColor: C.optic }, toggleKnob: { width: 19, height: 19, borderRadius: 10, backgroundColor: C.surface }, toggleKnobOn: { alignSelf: 'flex-end' }, teamChoices: { gap: 8, paddingTop: 9, paddingRight: 20 }, teamChoice: { maxWidth: 180, minHeight: 36, paddingHorizontal: 11, flexDirection: 'row', alignItems: 'center', gap: 6, borderRadius: 18, borderWidth: 1, borderColor: C.line, backgroundColor: C.surface }, teamChoiceActive: { borderColor: C.teal, backgroundColor: C.teal }, teamChoiceText: { flexShrink: 1, color: C.teal, fontSize: 10, fontWeight: '800' }, teamChoiceTextActive: { color: C.surface }, summary: { marginVertical: 18, padding: 16, borderRadius: 18, borderBottomLeftRadius: 8, borderBottomRightRadius: 8, borderWidth: 1, borderColor: C.line, backgroundColor: C.surface }, summaryTitle: { marginBottom: 13, color: C.ink, fontSize: 16, fontWeight: '800' }, summaryRow: { marginVertical: 5, flexDirection: 'row', justifyContent: 'space-between', gap: 15 }, summaryValue: { flex: 1, color: C.ink, fontSize: 12, fontWeight: '700', textAlign: 'right' }, totalLabel: { color: C.ink, fontSize: 15, fontWeight: '800' }, total: { color: C.ink, fontSize: 20, fontWeight: '800' }, terms: { marginTop: 9, color: C.ink40, textAlign: 'center', fontSize: 9 },
-  successContent: { minHeight: '100%', justifyContent: 'center', alignItems: 'center' }, successIcon: { width: 80, height: 80, marginBottom: 18, borderRadius: 40, alignItems: 'center', justifyContent: 'center', backgroundColor: C.optic }, successTitle: { color: C.ink, fontSize: 31, fontWeight: '800', letterSpacing: -.8 }, successLead: { marginTop: 5, color: C.ink40, fontSize: 13, textAlign: 'center' }, ticket: { width: '100%', marginVertical: 23, overflow: 'hidden', borderRadius: 24, borderBottomLeftRadius: 10, borderBottomRightRadius: 10, backgroundColor: C.surface, ...shadow }, ticketTop: { padding: 18 }, ticketEyebrow: { color: 'rgba(255,255,255,.65)', fontSize: 8, fontWeight: '800', letterSpacing: .8 }, ticketCourt: { marginTop: 4, color: C.surface, fontSize: 20, fontWeight: '800' }, ticketCourtMeta: { marginTop: 3, color: 'rgba(255,255,255,.7)', fontSize: 9 }, ticketBody: { padding: 17 }, ticketRow: { flexDirection: 'row', justifyContent: 'space-between' }, ticketValue: { marginTop: 4, color: C.ink, fontSize: 12, fontWeight: '800' }, shared: { marginBottom: 18, flexDirection: 'row', alignItems: 'center', gap: 7 }, sharedText: { color: C.teal, fontSize: 11, fontWeight: '700' }, successActions: { width: '100%', marginTop: 8, flexDirection: 'row', justifyContent: 'center' }, calendarButton: { minHeight: 48, paddingHorizontal: 12, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6 }, calendarText: { color: C.teal, fontSize: 11, fontWeight: '800' },
+  successContent: { alignItems: 'stretch', paddingTop: 28, paddingBottom: 38 }, successHero: { alignItems: 'center' }, successIcon: { width: 66, height: 66, marginBottom: 14, borderRadius: 33, alignItems: 'center', justifyContent: 'center', backgroundColor: C.optic }, successTitle: { marginTop: 3, color: C.ink, fontSize: 30, lineHeight: 36, fontWeight: '800', letterSpacing: -.8, textAlign: 'center' }, successLead: { maxWidth: 310, marginTop: 5, color: C.ink40, fontSize: 12, lineHeight: 18, textAlign: 'center' }, ticket: { width: '100%', marginTop: 22, overflow: 'hidden', borderRadius: 22, borderWidth: 1, borderColor: C.line, backgroundColor: C.surface, ...shadow }, ticketTop: { padding: 17 }, ticketTopRow: { marginBottom: 16, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 10 }, ticketStatus: { minHeight: 28, paddingHorizontal: 9, flexDirection: 'row', alignItems: 'center', gap: 5, borderRadius: 14 }, ticketStatusText: { fontSize: 8, fontWeight: '900', letterSpacing: .7 }, ticketReference: { flexShrink: 1, fontSize: 8, fontWeight: '900', letterSpacing: .8, opacity: .76 }, ticketVenue: { fontSize: 10, lineHeight: 14, fontWeight: '900', letterSpacing: .8, opacity: .72, textTransform: 'uppercase' }, ticketCourt: { marginTop: 3, fontSize: 21, lineHeight: 27, fontWeight: '900' }, ticketCourtMeta: { marginTop: 2, fontSize: 10, lineHeight: 15, fontWeight: '600', opacity: .72 }, ticketBody: { padding: 17, backgroundColor: C.surface }, ticketWhen: { flexDirection: 'row', alignItems: 'center', gap: 12 }, ticketWhenIcon: { width: 42, height: 42, alignItems: 'center', justifyContent: 'center', borderRadius: 12, backgroundColor: C.paper }, ticketWhenCopy: { flex: 1 }, ticketDate: { marginTop: 3, color: C.ink, fontSize: 15, lineHeight: 20, fontWeight: '900' }, ticketTime: { marginTop: 1, color: C.ink70, fontSize: 13, lineHeight: 18, fontWeight: '800' }, ticketTimezone: { marginTop: 3, color: C.ink40, fontSize: 7, fontWeight: '900', letterSpacing: .7 }, ticketDivider: { marginVertical: 16, borderTopWidth: 1, borderStyle: 'dashed', borderColor: C.line }, ticketDetails: { flexDirection: 'row', alignItems: 'flex-start' }, ticketDetail: { flex: 1 }, ticketDetailMiddle: { paddingLeft: 12, borderLeftWidth: 1, borderColor: C.line }, ticketDetailRight: { paddingLeft: 12, alignItems: 'flex-end', borderLeftWidth: 1, borderColor: C.line }, ticketValue: { marginTop: 4, color: C.ink, fontSize: 12, lineHeight: 17, fontWeight: '800' }, ticketTotal: { marginTop: 2, color: C.ink, fontSize: 18, lineHeight: 22, fontWeight: '900' }, shared: { marginTop: 14, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 7 }, sharedText: { color: C.teal, fontSize: 11, fontWeight: '700' }, successActions: { width: '100%', marginTop: 14, flexDirection: 'row', gap: 10 }, calendarButton: { minHeight: 50, flex: 1, paddingHorizontal: 10, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6, borderRadius: 14, borderWidth: 1, borderColor: C.line, backgroundColor: C.surface }, calendarText: { color: C.teal, fontSize: 10, fontWeight: '800' }, successDone: { width: '100%', marginTop: 10, flexDirection: 'row' },
 });
 const darkStyles = createDarkStyleSheet(lightStyles);
 let styles = lightStyles;

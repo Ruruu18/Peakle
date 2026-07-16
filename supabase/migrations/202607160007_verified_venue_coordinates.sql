@@ -1,0 +1,69 @@
+-- Navigation requires real venue coordinates. Resolve them from the organizer's
+-- map link/address in the app, validate them at the database boundary, and keep
+-- the venue private until a platform admin reviews the submission.
+
+drop function if exists public.create_venue_application(text, text, text, text, text, text, time, time);
+
+create function public.create_venue_application(
+  p_name text,
+  p_area text,
+  p_address text,
+  p_venue_type text,
+  p_google_maps_url text,
+  p_description text default null,
+  p_opens_at time default '06:00',
+  p_closes_at time default '22:00',
+  p_latitude double precision default null,
+  p_longitude double precision default null
+)
+returns public.venues
+language plpgsql
+security definer
+set search_path = ''
+as $$
+declare
+  created public.venues;
+  generated_id text;
+  maps_url text := trim(coalesce(p_google_maps_url, ''));
+begin
+  if auth.uid() is null then raise exception 'Authentication required'; end if;
+  if char_length(trim(coalesce(p_name, ''))) < 2 then raise exception 'Venue name is required'; end if;
+  if char_length(trim(coalesce(p_area, ''))) < 2 then raise exception 'City or area is required'; end if;
+  if char_length(trim(coalesce(p_address, ''))) < 5 then raise exception 'Venue address is required'; end if;
+  if p_venue_type not in ('Indoor', 'Outdoor', 'Mixed') then raise exception 'Choose a valid venue type'; end if;
+  if p_opens_at is null or p_closes_at is null or p_opens_at = p_closes_at then raise exception 'Choose valid operating hours'; end if;
+  if p_latitude is null or p_longitude is null
+    or p_latitude < -90 or p_latitude > 90
+    or p_longitude < -180 or p_longitude > 180
+    or (p_latitude = 0 and p_longitude = 0)
+  then raise exception 'Precise venue coordinates are required'; end if;
+  if not (
+    lower(maps_url) ~ '^https://(www\.)?google\.[a-z.]+/maps'
+    or lower(maps_url) ~ '^https://maps\.google\.[a-z.]+'
+    or lower(maps_url) ~ '^https://maps\.app\.goo\.gl/'
+    or lower(maps_url) ~ '^https://goo\.gl/maps/'
+  ) then raise exception 'Paste a valid Google Maps share link'; end if;
+
+  generated_id := trim(both '-' from lower(regexp_replace(trim(p_name), '[^a-zA-Z0-9]+', '-', 'g')))
+    || '-' || substr(gen_random_uuid()::text, 1, 8);
+
+  insert into public.venues(
+    id, name, area, address, latitude, longitude, description, venue_type,
+    opens_at, closes_at, google_maps_url, verification_status, submitted_by, active
+  ) values (
+    generated_id, trim(p_name), trim(p_area), trim(p_address), p_latitude, p_longitude,
+    nullif(trim(coalesce(p_description, '')), ''), p_venue_type,
+    p_opens_at, p_closes_at, maps_url, 'pending', auth.uid(), false
+  )
+  returning * into created;
+
+  insert into public.venue_members(venue_id, user_id, role)
+  values (created.id, auth.uid(), 'owner')
+  on conflict (venue_id, user_id) do update set role = 'owner';
+
+  return created;
+end;
+$$;
+
+revoke all on function public.create_venue_application(text, text, text, text, text, text, time, time, double precision, double precision) from public;
+grant execute on function public.create_venue_application(text, text, text, text, text, text, time, time, double precision, double precision) to authenticated;

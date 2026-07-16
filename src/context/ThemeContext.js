@@ -71,6 +71,8 @@ const ACCENT_INK_STYLES = new Set([
   'coachMeta', 'timeTextActive', 'appModeOptionTextActive', 'editChoiceTextActive',
   'tabTextActive', 'hubTabTextActive', 'segmentTextActive', 'matchMonth', 'matchDay',
   'avatarBadgeText', 'surpriseText',
+  'saveText', 'addText', 'createVenueText', 'approveVenueText', 'modalConfirmText',
+  'choiceTextActive', 'approveText', 'spotsText',
 ]);
 
 // Active switches keep the brighter yellow-green brand accent in dark mode.

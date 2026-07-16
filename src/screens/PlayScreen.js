@@ -19,7 +19,9 @@ import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context'
 import { StatusBar } from 'expo-status-bar';
 import Ionicons from '@expo/vector-icons/Ionicons';
 import OpenPlayScreen from './OpenPlayScreen';
+import PlayerOpenPlayScreen from './PlayerOpenPlayScreen';
 import { useAuth } from '../context/AuthContext';
+import { useOrganizerPass } from '../context/OrganizerPassContext';
 import { createDarkStyleSheet, DARK_CONTENT_COLORS, useTheme } from '../context/ThemeContext';
 import { listVenues, loadUnfinishedMatch, saveCompletedMatch, saveUnfinishedMatch } from '../services/database';
 import useNearbyPlayers from '../hooks/useNearbyPlayers';
@@ -111,8 +113,8 @@ function SegmentedControl({ label, options, value, onChange }) {
               onPress={() => onChange(option.value)}
               style={styles.segmentItem}
             >
-              {option.icon && <Icon name={option.icon} size={16} color={isActive ? '#0E2321' : C.ink40} />}
-              <Text style={[styles.segmentText, isActive && styles.segmentTextActive, isActive && { color: '#0E2321' }]}>{option.label}</Text>
+              {option.icon && <Icon name={option.icon} size={16} color={isActive ? '#000000' : C.ink40} />}
+              <Text style={[styles.segmentText, isActive && styles.segmentTextActive, isActive && { color: '#000000' }]}>{option.label}</Text>
             </Pressable>
           );
         })}
@@ -297,7 +299,7 @@ function NearbyLobby({ players, invited, outgoingInvites, onToggle, full, visibl
   );
 }
 
-function SetupScreen({ courts, nearbyPlayers, nearbyPresence, currentUserName, currentUserId, currentUserAvatar, onStart, focusChallenge, onOpenPlay, unfinishedMatch, onResume }) {
+function SetupScreen({ courts, nearbyPlayers, nearbyPresence, currentUserName, currentUserId, currentUserAvatar, onStart, focusChallenge, onJoinOpenPlay, onHostOpenPlay, unfinishedMatch, onResume }) {
   const [matchType, setMatchType] = useState('doubles');
   const [mode, setMode] = useState('casual');
   const [access, setAccess] = useState('private');
@@ -389,9 +391,14 @@ function SetupScreen({ courts, nearbyPlayers, nearbyPresence, currentUserName, c
 
       {unfinishedMatch && <View style={styles.resumeCard}><View style={styles.resumeIcon}><Icon name="bookmark" size={20} color={C.ink} /></View><View style={styles.flex}><Text style={styles.resumeEyebrow}>UNFINISHED MATCH SAVED</Text><Text style={styles.resumeTitle}>{teamName(unfinishedMatch.players[0])} · {unfinishedMatch.scores[0]}–{unfinishedMatch.scores[1]} · {teamName(unfinishedMatch.players[1])}</Text><Text style={styles.resumeMeta}>Continue from the saved score when you have court time again.</Text></View><Pressable accessibilityRole="button" onPress={onResume} style={({ pressed }) => [styles.resumeButton, pressed && styles.pressed]}><Text style={styles.resumeButtonText}>Resume</Text><Icon name="play" size={13} color={C.surface} /></Pressable></View>}
 
-      <Pressable onPress={onOpenPlay} style={({ pressed }) => [styles.openPlayEntry, pressed && styles.pressed]}>
+      <Pressable onPress={onJoinOpenPlay} style={({ pressed }) => [styles.openPlayEntry, pressed && styles.pressed]}>
         <View style={styles.openPlayEntryIcon}><Icon name="people" size={23} /></View>
-        <View style={styles.flex}><Text style={styles.openPlayEntryEyebrow}>ORGANIZER MODE</Text><Text style={styles.openPlayEntryTitle}>Run an open play session</Text><Text style={styles.openPlayEntryMeta}>Manage courts, the player queue, scorers, and live matches.</Text></View>
+        <View style={styles.flex}><Text style={styles.openPlayEntryEyebrow}>PLAYER OPEN PLAY</Text><Text style={styles.openPlayEntryTitle}>Join an organizer session</Text><Text style={styles.openPlayEntryMeta}>Discover public sessions or enter a six-character invitation code.</Text></View>
+        <Icon name="chevron-forward" color={C.teal} />
+      </Pressable>
+      <Pressable onPress={onHostOpenPlay} style={({ pressed }) => [styles.hostOpenPlayEntry, pressed && styles.pressed]}>
+        <View style={styles.hostOpenPlayIcon}><Icon name="key-outline" size={20} color={C.teal} /></View>
+        <View style={styles.flex}><Text style={styles.openPlayEntryEyebrow}>ORGANIZER MODE</Text><Text style={styles.openPlayEntryTitle}>Host open play</Text><Text style={styles.openPlayEntryMeta}>Publish registration, approve players, and run every court.</Text></View>
         <Icon name="chevron-forward" color={C.teal} />
       </Pressable>
 
@@ -984,18 +991,19 @@ function ResultScreen({ result, onRematch, onNewMatch }) {
   );
 }
 
-export default function PlayScreen({ route }) {
+export default function PlayScreen({ route, navigation }) {
   const { isDark } = useTheme();
   C = isDark ? { ...LIGHT_C, ...DARK_CONTENT_COLORS } : LIGHT_C;
   styles = isDark ? darkStyles : lightStyles;
   const { user } = useAuth();
+  const { hasOrganizerAccess } = useOrganizerPass();
   const nearbyPresence = useNearbyPlayers(25);
   const [courts, setCourts] = useState([]);
   const [screen, setScreen] = useState('setup');
   const [match, setMatch] = useState(null);
   const [result, setResult] = useState(null);
   const [focusChallenge, setFocusChallenge] = useState(null);
-  const [openPlay, setOpenPlay] = useState(false);
+  const [openPlayMode, setOpenPlayMode] = useState(null);
   const [unfinishedMatch, setUnfinishedMatch] = useState(null);
   const handledStartToken = useRef(null);
   const handledFocusToken = useRef(null);
@@ -1053,7 +1061,7 @@ export default function PlayScreen({ route }) {
     setResult(null);
     setFocusChallenge(null);
     setScreen('setup');
-    setOpenPlay(false);
+    setOpenPlayMode(null);
   };
 
   useEffect(() => {
@@ -1064,7 +1072,7 @@ export default function PlayScreen({ route }) {
     setMatch(null);
     setResult(null);
     setScreen('setup');
-    setOpenPlay(false);
+    setOpenPlayMode(null);
   }, [route?.params?.focusChallengeToken, route?.params?.focusChallenge]);
 
   useEffect(() => {
@@ -1074,14 +1082,20 @@ export default function PlayScreen({ route }) {
     setMatch(null);
     setResult(null);
     setScreen('setup');
-    setOpenPlay(false);
+    setOpenPlayMode(null);
   }, [route?.params?.startLiveToken]);
+
+  useEffect(() => {
+    const openPlayCode = route?.params?.openPlayCode;
+    if (!openPlayCode) return;
+    setOpenPlayMode('join');
+  }, [route?.params?.openPlayCode]);
 
   return (
     <SafeAreaView style={styles.safe}>
       <StatusBar style={screen === 'live' || isDark ? 'light' : 'dark'} backgroundColor={screen === 'live' ? '#0E2321' : C.paper} />
-      {openPlay ? <OpenPlayScreen onExit={() => setOpenPlay(false)} /> : <>
-      {screen === 'setup' && <SetupScreen courts={courts} nearbyPlayers={nearbyPresence.players} nearbyPresence={nearbyPresence} currentUserName={user?.name} currentUserId={user?.id} currentUserAvatar={user?.picture} onStart={startMatch} focusChallenge={focusChallenge} onOpenPlay={() => setOpenPlay(true)} unfinishedMatch={unfinishedMatch} onResume={resumeMatch} />}
+      {openPlayMode === 'host' ? <OpenPlayScreen onExit={() => setOpenPlayMode(null)} /> : openPlayMode === 'join' ? <PlayerOpenPlayScreen initialCode={route?.params?.openPlayCode || ''} onBack={() => setOpenPlayMode(null)} /> : <>
+      {screen === 'setup' && <SetupScreen courts={courts} nearbyPlayers={nearbyPresence.players} nearbyPresence={nearbyPresence} currentUserName={user?.name} currentUserId={user?.id} currentUserAvatar={user?.picture} onStart={startMatch} focusChallenge={focusChallenge} onJoinOpenPlay={() => setOpenPlayMode('join')} onHostOpenPlay={() => { if (hasOrganizerAccess) setOpenPlayMode('host'); else navigation.navigate('Pass'); }} unfinishedMatch={unfinishedMatch} onResume={resumeMatch} />}
       {screen === 'pregame' && match && <PreGameScreen match={match} onBack={() => setScreen('setup')} onStart={startLiveMatch} />}
       {screen === 'live' && match && <LiveMatch match={match} onFinish={finishMatch} />}
       {screen === 'result' && result && <ResultScreen result={result} onRematch={() => startMatch(match)} onNewMatch={reset} />}
@@ -1103,7 +1117,8 @@ const lightStyles = StyleSheet.create({
   liveChip: { minHeight: 34, paddingHorizontal: 10, flexDirection: 'row', alignItems: 'center', gap: 6, borderRadius: 18, backgroundColor: '#E5F0ED' }, liveDot: { width: 7, height: 7, borderRadius: 4, backgroundColor: C.teal }, liveChipText: { color: C.teal, fontSize: 8, fontWeight: '900', letterSpacing: .7 },
   invitesCard: { marginBottom: 12, padding: 13, borderRadius: 17, borderWidth: 1, borderColor: '#B9D22C', backgroundColor: '#FAFCEB' }, invitesTitleRow: { flexDirection: 'row', alignItems: 'center', gap: 9 }, inviteBell: { width: 36, height: 36, borderRadius: 11, alignItems: 'center', justifyContent: 'center', backgroundColor: C.optic }, invitesEyebrow: { color: C.teal, fontSize: 7, fontWeight: '900', letterSpacing: .7 }, invitesTitle: { marginTop: 2, color: C.ink, fontSize: 11, fontWeight: '900' }, inviteRequest: { minHeight: 52, marginTop: 9, paddingTop: 9, flexDirection: 'row', alignItems: 'center', gap: 7, borderTopWidth: 1, borderColor: '#DFE8AD' }, inviteRequestCopy: { flex: 1, minWidth: 0 }, inviteSender: { color: C.ink, fontSize: 10, fontWeight: '900' }, inviteDetail: { marginTop: 2, color: C.ink40, fontSize: 7, lineHeight: 10 }, declineInvite: { width: 34, height: 34, borderRadius: 10, alignItems: 'center', justifyContent: 'center', borderWidth: 1, borderColor: '#E8C7BF', backgroundColor: C.surface }, acceptInvite: { minWidth: 62, height: 34, paddingHorizontal: 9, borderRadius: 10, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 3, backgroundColor: C.optic }, acceptInviteText: { color: C.ink, fontSize: 8, fontWeight: '900' },
   introCard: { padding: 14, flexDirection: 'row', alignItems: 'center', gap: 12, borderRadius: 18, borderBottomLeftRadius: 8, borderBottomRightRadius: 8, backgroundColor: C.optic }, introIcon: { width: 48, height: 48, alignItems: 'center', justifyContent: 'center', borderRadius: 14, backgroundColor: 'rgba(255,255,255,.48)' }, introCopy: { flex: 1 }, introTitle: { color: C.ink, fontSize: 14, fontWeight: '800' }, bodySmall: { marginTop: 3, color: C.ink40, fontSize: 10, lineHeight: 15 },
-  openPlayEntry: { minHeight: 78, marginBottom: 12, padding: 12, flexDirection: 'row', alignItems: 'center', gap: 10, borderRadius: 18, borderBottomLeftRadius: 8, borderBottomRightRadius: 8, borderWidth: 1, borderColor: C.teal, backgroundColor: C.surface }, openPlayEntryIcon: { width: 44, height: 44, borderRadius: 13, alignItems: 'center', justifyContent: 'center', backgroundColor: C.optic }, openPlayEntryEyebrow: { color: C.teal, fontSize: 7, fontWeight: '900', letterSpacing: .7 }, openPlayEntryTitle: { marginTop: 2, color: C.ink, fontSize: 11, fontWeight: '900' }, openPlayEntryMeta: { marginTop: 3, color: C.ink40, fontSize: 7, lineHeight: 11 },
+  openPlayEntry: { minHeight: 78, marginBottom: 8, padding: 12, flexDirection: 'row', alignItems: 'center', gap: 10, borderRadius: 18, borderBottomLeftRadius: 8, borderBottomRightRadius: 8, borderWidth: 1, borderColor: C.teal, backgroundColor: C.surface }, openPlayEntryIcon: { width: 44, height: 44, borderRadius: 13, alignItems: 'center', justifyContent: 'center', backgroundColor: C.optic }, openPlayEntryEyebrow: { color: C.teal, fontSize: 7, fontWeight: '900', letterSpacing: .7 }, openPlayEntryTitle: { marginTop: 2, color: C.ink, fontSize: 11, fontWeight: '900' }, openPlayEntryMeta: { marginTop: 3, color: C.ink40, fontSize: 7, lineHeight: 11 },
+  hostOpenPlayEntry: { minHeight: 70, marginBottom: 12, padding: 11, flexDirection: 'row', alignItems: 'center', gap: 10, borderRadius: 16, borderWidth: 1, borderColor: C.line, backgroundColor: C.surface }, hostOpenPlayIcon: { width: 40, height: 40, borderRadius: 12, alignItems: 'center', justifyContent: 'center', backgroundColor: '#E5F0ED' },
   focusSetupCard: { minHeight: 82, marginTop: 10, padding: 12, flexDirection: 'row', alignItems: 'center', gap: 10, borderRadius: 16, borderWidth: 1, borderColor: '#B9D22C', backgroundColor: '#F9FCEB' }, focusSetupIcon: { width: 40, height: 40, borderRadius: 12, alignItems: 'center', justifyContent: 'center', backgroundColor: C.optic }, focusSetupCopy: { flex: 1 }, focusSetupEyebrow: { color: C.teal, fontSize: 7, fontWeight: '900', letterSpacing: .7 }, focusSetupTitle: { marginTop: 3, color: C.ink, fontSize: 10, lineHeight: 14, fontWeight: '800' }, focusSetupMeta: { marginTop: 3, color: C.ink40, fontSize: 7 },
   preGameContent: { flexGrow: 1 }, drawHero: { padding: 22, alignItems: 'center', borderRadius: 24, borderBottomLeftRadius: 10, borderBottomRightRadius: 10, backgroundColor: C.ink }, drawHeroIcon: { width: 66, height: 66, marginBottom: 13, alignItems: 'center', justifyContent: 'center', borderRadius: 33, borderWidth: 6, borderColor: 'rgba(255,255,255,.16)', backgroundColor: C.optic }, drawEyebrow: { color: '#9FB3AC', fontSize: 8, fontWeight: '900', letterSpacing: 1 }, drawTitle: { marginTop: 4, color: C.surface, fontSize: 24, lineHeight: 30, fontWeight: '900', textAlign: 'center' }, drawLead: { maxWidth: 300, marginTop: 6, color: '#CBD7D2', fontSize: 10, lineHeight: 15, textAlign: 'center' }, drawTeams: { marginTop: 13, flexDirection: 'row', alignItems: 'stretch', gap: 10 }, drawTeam: { flex: 1, minHeight: 218, padding: 13, alignItems: 'center', borderRadius: 20, borderBottomLeftRadius: 9, borderBottomRightRadius: 9, borderWidth: 1, borderColor: C.line, backgroundColor: C.surface }, drawTeamAway: { backgroundColor: '#FFFDFC' }, drawTeamWinner: { borderWidth: 2, borderColor: C.optic, backgroundColor: '#FAFCEB' }, drawTeamBadge: { width: 36, height: 36, alignItems: 'center', justifyContent: 'center', borderRadius: 11, backgroundColor: C.teal }, drawTeamBadgeAway: { backgroundColor: C.brick }, drawTeamBadgeText: { color: C.surface, fontSize: 9, fontWeight: '900' }, drawTeamName: { minHeight: 38, marginTop: 9, color: C.ink, fontSize: 11, lineHeight: 15, fontWeight: '900', textAlign: 'center' }, serverChoices: { width: '100%', marginTop: 5, marginBottom: 12, gap: 6 }, serverChoice: { minHeight: 34, paddingHorizontal: 7, flexDirection: 'row', alignItems: 'center', gap: 5, borderRadius: 10, borderWidth: 1, borderColor: C.line, backgroundColor: C.paper }, serverChoiceSelected: { borderColor: '#B9D22C', backgroundColor: C.optic }, serverChoiceText: { flex: 1, color: C.ink70, fontSize: 7, fontWeight: '800' }, serverChoiceTextSelected: { color: C.ink, fontWeight: '900' }, drawServeStatus: { minHeight: 29, marginTop: 'auto', paddingHorizontal: 8, flexDirection: 'row', alignItems: 'center', gap: 4, borderRadius: 15, backgroundColor: C.paper }, drawServeStatusActive: { backgroundColor: C.optic }, drawServeStatusText: { color: C.ink40, fontSize: 6, fontWeight: '900', letterSpacing: .5 }, drawServeStatusTextActive: { color: C.ink }, preGameSummary: { marginTop: 13, paddingHorizontal: 13, borderRadius: 17, borderWidth: 1, borderColor: C.line, backgroundColor: C.surface }, preGameSummaryRow: { minHeight: 65, flexDirection: 'row', alignItems: 'center', gap: 10, borderBottomWidth: 1, borderColor: C.line }, preGameSummaryLabel: { color: C.ink40, fontSize: 7, fontWeight: '900', letterSpacing: .7 }, preGameSummaryValue: { marginTop: 2, color: C.ink, fontSize: 11, fontWeight: '900' }, preGameBack: { alignSelf: 'center', minHeight: 44, marginTop: 8, paddingHorizontal: 10, flexDirection: 'row', alignItems: 'center', gap: 5 }, preGameBackText: { color: C.ink40, fontSize: 9, fontWeight: '700' },
   quickStartButton: { minHeight: 60, marginTop: 10, paddingHorizontal: 12, flexDirection: 'row', alignItems: 'center', gap: 10, borderRadius: 15, backgroundColor: C.ink }, quickStartIcon: { width: 36, height: 36, alignItems: 'center', justifyContent: 'center', borderRadius: 18, backgroundColor: C.optic }, quickStartCopy: { flex: 1, minWidth: 0 }, quickStartTitle: { color: C.surface, fontSize: 11, fontWeight: '900' }, quickStartMeta: { marginTop: 3, color: 'rgba(255,255,255,.58)', fontSize: 7 },

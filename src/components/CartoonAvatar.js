@@ -1,5 +1,6 @@
 import React from 'react';
-import { Image, StyleSheet, Text, View } from 'react-native';
+import { StyleSheet, Text, View } from 'react-native';
+import { Image } from 'expo-image';
 
 function initials(name = '') {
   return name.trim().split(/\s+/).map((part) => part[0]).join('').slice(0, 2).toUpperCase() || 'P';
@@ -7,7 +8,7 @@ function initials(name = '') {
 
 export default function CartoonAvatar({ avatar, name, size = 64, style }) {
   if (avatar?.startsWith('http')) {
-    return <Image source={{ uri: avatar }} resizeMode="cover" style={[styles.frame, { width: size, height: size, borderRadius: size / 2 }, style]} />;
+    return <Image source={{ uri: avatar }} contentFit="cover" transition={200} cachePolicy="memory-disk" style={[styles.frame, { width: size, height: size, borderRadius: size / 2 }, style]} />;
   }
   return <View style={[styles.frame, styles.fallback, { width: size, height: size, borderRadius: size / 2 }, style]}><Text style={[styles.initials, { fontSize: size * .25 }]}>{initials(name)}</Text></View>;
 }

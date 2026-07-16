@@ -19,7 +19,7 @@
       "supportsTablet": true,
       "bundleIdentifier": "com.peakle.app",
       "infoPlist": {
-        "NSLocationWhenInUseUsageDescription": "Peakle uses your location to sort courts and teams by distance."
+        "NSLocationWhenInUseUsageDescription": "Peakle uses your location to find nearby courts, teams, and players."
       }
     },
     "android": {
@@ -52,7 +52,15 @@
       [
         "expo-location",
         {
-          "locationWhenInUsePermission": "Allow Peakle to use your location to find nearby courts and teams."
+          "locationWhenInUsePermission": "Allow Peakle to use your location for nearby courts, teams, and players."
+        }
+      ],
+      [
+        "expo-notifications",
+        {
+          "icon": "./public/images/ball.png",
+          "color": "#D6E94A",
+          "defaultChannel": "open-play"
         }
       ],
       "expo-web-browser"

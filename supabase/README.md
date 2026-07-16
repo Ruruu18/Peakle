@@ -7,7 +7,63 @@
 3. Never put a `service_role` key in this app. Expo public variables are bundled into the client.
 4. Apply every file in `migrations/` in filename order, or run `supabase db push`. If an earlier migration was already applied, do not paste and run it again manually.
 
-The first migration creates the normalized model, automatic user profiles, seed venues/courts, storage policies, and row-level security.
+The first migration creates the normalized model, automatic user profiles, storage policies, and row-level security. Venues and courts are added by platform administrators rather than seeded with demo records.
+
+`migrations/202607160009_server_organizer_entitlements.sql` makes Organizer Pass access server-authoritative. Apply it before testing Organizer mode: the demo checkout writes an account-scoped entitlement through protected RPCs, and the database rejects new open-play sessions when that entitlement is missing or expired. Existing owned sessions remain accessible so organizers can recover or finish live operations. The demo lifecycle RPCs must be removed when verified App Store or Play Billing webhooks replace the sandbox.
+
+`migrations/202607160010_player_open_play_registration.sql` completes the player-to-organizer open-play registration loop. It adds public, private, and invite-only sessions; six-character codes; schedules, skill ranges, capacity, fees, approval mode, rules, invitations, registration status, waitlisting, and check-in. Capacity decisions lock the session row and are enforced by a trigger as well as protected RPCs. Apply migrations 009 and 010 together before testing this flow.
+
+`migrations/202607170001_fair_play_engine.sql` adds Priority 2 rotation controls, player fairness state, immutable assignment audit records, transaction-safe assignment/completion RPCs, and the registration-gated live player view. Apply it after migration 010 before publishing a new session from this app version.
+
+`migrations/202607170002_priority_3_realtime_operations.sql` completes Priority 3. It publishes all operational tables to Realtime, adds role-based venue staff access, a secure notification outbox, session announcements, connection-safe operation revisions, and an idempotent offline mutation log. Apply it after migration 001. Existing projects that applied the original Priority 2 migration should also re-apply the two updated Fair Play RPC definitions from migration 001 so staff authorization uses `owns_open_play` instead of comparing only the original organizer ID.
+
+### Priority 3 push and scheduled jobs
+
+Push notifications require a development or production build on a physical iOS or Android device; Expo Go and simulators cannot provide a production device token. After applying migration 002:
+
+1. Set a strong function secret: `supabase secrets set PUSH_DISPATCH_SECRET=...`.
+2. Deploy the dispatcher: `supabase functions deploy send-push-notifications --no-verify-jwt`.
+3. In Supabase **Integrations → Cron**, run `select public.queue_open_play_check_in_reminders();` every five minutes.
+4. Add another Cron job every minute that invokes `send-push-notifications` with the `x-push-dispatch-secret` header. Keep the secret in Vault or the Cron job's protected HTTP headers, never in the mobile app.
+5. In a physical build, open **Profile → Settings** and enable court alerts or match reminders. Confirm a row appears in `device_push_tokens`.
+
+The dispatcher claims at most 100 pending notifications per run, batches them through Expo Push Service, records delivery tickets, skips users without an enabled device, and retries transient failures up to five times. Database triggers populate the outbox for approval, waitlist promotion, court assignment, match point, result, cancellation, and venue announcements; the first Cron job creates check-in reminders.
+
+### Priority 3 operations test
+
+1. Open the same organizer session on two staff devices and one registered player device.
+2. Disable networking on one staff device. Mark a waiting player done or change their priority and confirm the amber offline banner shows a saved operation.
+3. Make another change online, reconnect the offline device, and confirm both changes survive and the pending count clears.
+4. Score a live game and verify the player view updates without manual refresh.
+5. Publish an announcement and verify it appears in the player's in-app inbox and, when enabled, as a push notification.
+6. Open TV mode from the court monitor and confirm court scores, waiting count, and next-player recommendation update live.
+7. Under **More → Staff access**, assign each venue role and confirm read-only viewers cannot mutate operational data.
+
+### Open-play registration test
+
+1. Activate the payment-free Organizer Pass and switch to Organizer mode.
+2. Open **Sessions**, publish open play at a verified venue, and copy its six-character code.
+3. Sign in on another device as a player and open **Play → Join an organizer session**.
+4. Discover the public session or enter its code, then join or request approval.
+5. On the organizer device, open **Players** to approve and check in the player.
+6. Confirm the player changes to **Checked in** and appears in the organizer rotation queue.
+7. Fill the session to capacity and verify that the next player is waitlisted.
+
+### Venue-owner court management
+
+Apply `migrations/202607160001_venue_court_management.sql` to enable the organizer profile's **Venue** tab. Venue access is deliberately assigned by an admin; users cannot claim a venue themselves. After verifying an owner, assign their account in the Supabase SQL editor:
+
+```sql
+insert into public.venue_members (venue_id, user_id, role)
+select 'your-venue-id', id, 'owner'
+from auth.users
+where email = 'owner@example.com'
+on conflict (venue_id, user_id) do update set role = excluded.role;
+```
+
+Replace the venue ID, email, and role (`owner` or `manager`) as needed. The assigned user can then add and edit courts or hide them from player-facing booking and match selection. Venue creation and staff assignment remain admin-only.
+
+`migrations/202607160002_platform_admins.sql` creates the separate Peakle platform-admin role and promotes `jadeannexx@gmail.com` as the initial administrator. The account must already exist and have signed in at least once. Platform admins can manage every venue, court, and venue-owner assignment; normal users cannot grant this role to themselves.
 
 ### Nearby-player Expo test
 
