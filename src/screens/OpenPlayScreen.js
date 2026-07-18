@@ -1,11 +1,12 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
   ActivityIndicator,
   Alert,
+  FlatList,
+  KeyboardAvoidingView,
   Modal,
   Platform,
   Pressable,
-  ScrollView,
   Share,
   StyleSheet,
   Text,
@@ -13,6 +14,7 @@ import {
   View,
 } from 'react-native';
 import Ionicons from '@expo/vector-icons/Ionicons';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useAuth } from '../context/AuthContext';
 import { useOpenPlaySession } from '../context/OpenPlaySessionContext';
 import { createDarkStyleSheet, DARK_CONTENT_COLORS, useTheme } from '../context/ThemeContext';
@@ -22,6 +24,7 @@ import { buildFairPlayAssignment, estimateWaitMinutes, playersPerMatch, rankFair
 import { useOperations } from '../context/OperationsContext';
 import { publishOpenPlayAnnouncement } from '../services/realtimeOperations';
 import ConnectionStatus from '../components/ConnectionStatus';
+import ScrollView from '../components/FocusResetScrollView';
 
 const LIGHT_C = {
   ink: '#0E2321', paper: '#F3F5EF', surface: '#FFFFFF', optic: '#D6E94A',
@@ -73,30 +76,99 @@ function ChoiceGroup({ label, value, options, onChange }) {
 }
 
 function defaultSchedule() {
-  const start = new Date(Date.now() + 60 * 60 * 1000);
-  start.setMinutes(0, 0, 0);
+  // Work with Manila wall-clock parts directly so defaults stay correct even
+  // when the organizer's device is temporarily set to another time zone.
+  const start = new Date(Date.now() + 8 * 60 * 60 * 1000);
+  start.setUTCMinutes(0, 0, 0);
+  start.setUTCHours(start.getUTCHours() + 1);
+  if (start.getUTCHours() > 20) { start.setUTCDate(start.getUTCDate() + 1); start.setUTCHours(9); }
+  else if (start.getUTCHours() < 6) start.setUTCHours(9);
   const end = new Date(start.getTime() + 3 * 60 * 60 * 1000);
-  const date = start.toLocaleDateString('en-CA', { timeZone: 'Asia/Manila' });
-  const clock = (value) => value.toLocaleTimeString('en-GB', { timeZone: 'Asia/Manila', hour: '2-digit', minute: '2-digit', hour12: false });
+  const two = (value) => String(value).padStart(2, '0');
+  const date = `${start.getUTCFullYear()}-${two(start.getUTCMonth() + 1)}-${two(start.getUTCDate())}`;
+  const clock = (value) => `${two(value.getUTCHours())}:${two(value.getUTCMinutes())}`;
   return { date, startTime: clock(start), endTime: clock(end) };
 }
 
+const ROTATION_PRESETS = {
+  balanced: { averageMatchMinutes: '15', maxConsecutiveGames: '2', restMinutes: '0' },
+  equal_turns: { averageMatchMinutes: '15', maxConsecutiveGames: '1', restMinutes: '3' },
+};
+
+function parseManualSchedule(date, time) {
+  const dateMatch = /^(\d{4})-(\d{2})-(\d{2})$/.exec(date.trim());
+  const timeMatch = /^(\d{2}):(\d{2})$/.exec(time.trim());
+  if (!dateMatch || !timeMatch) return null;
+  const [, yearText, monthText, dayText] = dateMatch;
+  const [, hourText, minuteText] = timeMatch;
+  const year = Number(yearText); const month = Number(monthText); const day = Number(dayText);
+  const hour = Number(hourText); const minute = Number(minuteText);
+  const calendarCheck = new Date(Date.UTC(year, month - 1, day));
+  if (calendarCheck.getUTCFullYear() !== year || calendarCheck.getUTCMonth() !== month - 1 || calendarCheck.getUTCDate() !== day || hour > 23 || minute > 59) return null;
+  return new Date(`${date.trim()}T${time.trim()}:00+08:00`);
+}
+
+function manilaInputParts(value) {
+  const parts = Object.fromEntries(new Intl.DateTimeFormat('en-US', {
+    timeZone: 'Asia/Manila', year: 'numeric', month: '2-digit', day: '2-digit',
+    hour: '2-digit', minute: '2-digit', hourCycle: 'h23',
+  }).formatToParts(value).filter((part) => part.type !== 'literal').map((part) => [part.type, part.value]));
+  return { date: `${parts.year}-${parts.month}-${parts.day}`, time: `${parts.hour}:${parts.minute}` };
+}
+
+const scheduleDateLabel = (value) => value?.toLocaleDateString('en-PH', { timeZone: 'Asia/Manila', weekday: 'short', month: 'short', day: 'numeric', year: 'numeric' }) || 'Choose date';
+const scheduleTimeLabel = (value) => value?.toLocaleTimeString('en-PH', { timeZone: 'Asia/Manila', hour: 'numeric', minute: '2-digit', hour12: true }) || 'Choose time';
+const TIME_OPTIONS = Array.from({ length: 96 }, (_, index) => {
+  const hour = Math.floor(index / 4);
+  const minute = (index % 4) * 15;
+  const value = `${String(hour).padStart(2, '0')}:${String(minute).padStart(2, '0')}`;
+  return { value, label: scheduleTimeLabel(new Date(`2026-01-01T${value}:00+08:00`)) };
+});
+
+function monthFromDateInput(value) {
+  const [year, month] = value.split('-').map(Number);
+  return new Date(Date.UTC(year, month - 1, 1));
+}
+
+function calendarDays(monthCursor) {
+  const year = monthCursor.getUTCFullYear();
+  const month = monthCursor.getUTCMonth();
+  const first = new Date(Date.UTC(year, month, 1));
+  const gridStart = new Date(first);
+  gridStart.setUTCDate(1 - first.getUTCDay());
+  return Array.from({ length: 42 }, (_, index) => {
+    const item = new Date(gridStart);
+    item.setUTCDate(gridStart.getUTCDate() + index);
+    const date = `${item.getUTCFullYear()}-${String(item.getUTCMonth() + 1).padStart(2, '0')}-${String(item.getUTCDate()).padStart(2, '0')}`;
+    return { date, day: item.getUTCDate(), inMonth: item.getUTCMonth() === month };
+  });
+}
+
 function Setup({ organizerName, onBack, onStart }) {
+  const insets = useSafeAreaInsets();
+  const scrollRef = useRef(null);
   const defaults = useMemo(defaultSchedule, []);
+  const [step, setStep] = useState(1);
   const [venues, setVenues] = useState([]);
+  const [venuesLoading, setVenuesLoading] = useState(true);
   const [venueId, setVenueId] = useState('');
+  const [venuePickerVisible, setVenuePickerVisible] = useState(false);
+  const [venueSearch, setVenueSearch] = useState('');
   const [sessionName, setSessionName] = useState('Community open play');
   const [courtCount, setCourtCount] = useState(2);
   const [capacity, setCapacity] = useState('24');
   const [visibility, setVisibility] = useState('public');
   const [approvalMode, setApprovalMode] = useState('automatic');
   const [matchFormat, setMatchFormat] = useState('doubles');
+  const [rotationPreset, setRotationPreset] = useState('balanced');
   const [averageMatchMinutes, setAverageMatchMinutes] = useState('15');
   const [maxConsecutiveGames, setMaxConsecutiveGames] = useState('2');
   const [restMinutes, setRestMinutes] = useState('0');
   const [date, setDate] = useState(defaults.date);
   const [startTime, setStartTime] = useState(defaults.startTime);
   const [endTime, setEndTime] = useState(defaults.endTime);
+  const [pickerField, setPickerField] = useState(null);
+  const [pickerMonth, setPickerMonth] = useState(() => monthFromDateInput(defaults.date));
   const [skillMin, setSkillMin] = useState('');
   const [skillMax, setSkillMax] = useState('');
   const [fee, setFee] = useState('0');
@@ -104,8 +176,17 @@ function Setup({ organizerName, onBack, onStart }) {
   const [cancellationPolicy, setCancellationPolicy] = useState('Cancel before the session starts so a waitlisted player can take your place.');
   const [names, setNames] = useState('');
   const [includeOrganizer, setIncludeOrganizer] = useState(true);
+  const [showOptional, setShowOptional] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
+  const selectedVenue = useMemo(() => venues.find((venue) => venue.id === venueId) || null, [venueId, venues]);
+  const filteredVenues = useMemo(() => {
+    const query = venueSearch.trim().toLowerCase();
+    if (!query) return venues;
+    return venues.filter((venue) => `${venue.name} ${venue.area || ''} ${venue.address || ''}`.toLowerCase().includes(query));
+  }, [venueSearch, venues]);
+  const pickerCalendarDays = useMemo(() => calendarDays(pickerMonth), [pickerMonth]);
+  const todayInput = manilaInputParts(new Date()).date;
   const parsedNames = useMemo(() => [...new Set(names.split(/[\n,]+/).map((name) => name.trim()).filter(Boolean))], [names]);
   const registeredNames = useMemo(() => includeOrganizer && !parsedNames.some((name) => name.toLowerCase() === organizerName.toLowerCase()) ? [organizerName, ...parsedNames] : parsedNames, [includeOrganizer, organizerName, parsedNames]);
   const capacityNumber = Number(capacity);
@@ -115,17 +196,73 @@ function Setup({ organizerName, onBack, onStart }) {
   const restMinutesNumber = Number(restMinutes);
   const skillMinNumber = skillMin.trim() ? Number(skillMin) : null;
   const skillMaxNumber = skillMax.trim() ? Number(skillMax) : null;
-  const scheduledStart = new Date(`${date}T${startTime}:00+08:00`);
-  const scheduledEnd = new Date(`${date}T${endTime}:00+08:00`);
+  const scheduledStart = parseManualSchedule(date, startTime);
+  const scheduledEndSameDay = parseManualSchedule(date, endTime);
+  const scheduledEnd = scheduledStart && scheduledEndSameDay && scheduledEndSameDay <= scheduledStart ? new Date(scheduledEndSameDay.getTime() + 24 * 60 * 60 * 1000) : scheduledEndSameDay;
+  const spansNextDay = Boolean(scheduledStart && scheduledEnd && manilaInputParts(scheduledStart).date !== manilaInputParts(scheduledEnd).date);
+  const scheduleValid = Boolean(scheduledStart && scheduledEnd && scheduledEnd > scheduledStart && scheduledEnd > new Date());
   const validSkill = (skillMinNumber == null || Number.isFinite(skillMinNumber) && skillMinNumber >= 1 && skillMinNumber <= 5.5) && (skillMaxNumber == null || Number.isFinite(skillMaxNumber) && skillMaxNumber >= 1 && skillMaxNumber <= 5.5) && (skillMinNumber == null || skillMaxNumber == null || skillMinNumber <= skillMaxNumber);
-  const canStart = venueId && sessionName.trim().length >= 3 && rules.trim() && cancellationPolicy.trim() && validSkill && Number.isInteger(capacityNumber) && capacityNumber >= 4 && capacityNumber <= 200 && registeredNames.length <= capacityNumber && Number.isFinite(feeNumber) && feeNumber >= 0 && Number.isInteger(averageMatchMinutesNumber) && averageMatchMinutesNumber >= 5 && averageMatchMinutesNumber <= 90 && Number.isInteger(maxConsecutiveGamesNumber) && maxConsecutiveGamesNumber >= 0 && maxConsecutiveGamesNumber <= 10 && Number.isInteger(restMinutesNumber) && restMinutesNumber >= 0 && restMinutesNumber <= 120 && !Number.isNaN(scheduledStart.getTime()) && scheduledEnd > scheduledStart && scheduledEnd > new Date();
+  const basicsValid = Boolean(venueId && sessionName.trim().length >= 3 && Number.isInteger(capacityNumber) && capacityNumber >= 4 && capacityNumber <= 200 && scheduleValid);
+  const rotationValid = Number.isInteger(averageMatchMinutesNumber) && averageMatchMinutesNumber >= 5 && averageMatchMinutesNumber <= 90 && Number.isInteger(maxConsecutiveGamesNumber) && maxConsecutiveGamesNumber >= 0 && maxConsecutiveGamesNumber <= 10 && Number.isInteger(restMinutesNumber) && restMinutesNumber >= 0 && restMinutesNumber <= 120;
+  const joiningValid = rules.trim() && cancellationPolicy.trim() && validSkill && registeredNames.length <= capacityNumber && Number.isFinite(feeNumber) && feeNumber >= 0;
+  const canStart = basicsValid && rotationValid && joiningValid;
+
+  const scheduleMessage = !scheduledStart || !scheduledEnd
+    ? 'Choose the date, start time, and end time.'
+    : scheduledEnd <= new Date()
+      ? 'Choose a schedule that ends in the future.'
+      : '';
 
   useEffect(() => {
     listVenues().then((rows) => {
       setVenues(rows);
       if (rows[0]) setVenueId((current) => current || rows[0].id);
-    }).catch((loadError) => setError(loadError.message || 'Verified venues could not be loaded.'));
+    }).catch((loadError) => setError(loadError.message || 'Verified venues could not be loaded.')).finally(() => setVenuesLoading(false));
   }, []);
+
+  const chooseRotationPreset = (value) => {
+    setRotationPreset(value);
+    const preset = ROTATION_PRESETS[value];
+    if (!preset) return;
+    setAverageMatchMinutes(preset.averageMatchMinutes);
+    setMaxConsecutiveGames(preset.maxConsecutiveGames);
+    setRestMinutes(preset.restMinutes);
+  };
+
+  const openSchedulePicker = (field) => {
+    if (field === 'date') setPickerMonth(monthFromDateInput(date));
+    setPickerField(field);
+  };
+
+  const chooseScheduleDate = (value) => {
+    setDate(value);
+    setPickerField(null);
+  };
+
+  const chooseScheduleTime = (value) => {
+    if (pickerField === 'start') setStartTime(value);
+    else setEndTime(value);
+    setPickerField(null);
+  };
+
+  const changePickerMonth = (amount) => setPickerMonth((current) => new Date(Date.UTC(current.getUTCFullYear(), current.getUTCMonth() + amount, 1)));
+
+  const selectVenue = (venue) => {
+    setVenueId(venue.id);
+    setVenuePickerVisible(false);
+    setVenueSearch('');
+  };
+
+  const closeVenuePicker = () => {
+    setVenuePickerVisible(false);
+    setVenueSearch('');
+  };
+
+  const moveToStep = (nextStep) => {
+    setError('');
+    setStep(nextStep);
+    requestAnimationFrame(() => scrollRef.current?.scrollTo({ y: 0, animated: true }));
+  };
 
   const submit = async () => {
     if (!canStart || busy) return;
@@ -149,64 +286,120 @@ function Setup({ organizerName, onBack, onStart }) {
   };
 
   return (
-    <ScrollView contentContainerStyle={styles.content} keyboardShouldPersistTaps="handled" showsVerticalScrollIndicator={false}>
-      <TopBar eyebrow="ORGANIZER MODE" title="Run open play" onBack={onBack} right={<View style={styles.rolePill}><Icon name="key-outline" size={14} color={C.teal} /><Text style={styles.roleText}>ORGANIZER</Text></View>} />
+    <>
+    <ScrollView ref={scrollRef} contentContainerStyle={styles.content} keyboardShouldPersistTaps="handled" showsVerticalScrollIndicator={false}>
+      <TopBar eyebrow="ORGANIZER MODE" title="Set up open play" onBack={step === 1 ? onBack : () => moveToStep(step - 1)} right={<View style={styles.rolePill}><Text style={styles.roleText}>{step} OF 3</Text></View>} />
 
-      <View style={styles.heroCard}>
-        <View style={styles.heroIcon}><Icon name="people" size={25} /></View>
-        <View style={styles.flex}><Text style={styles.heroTitle}>One queue. Every court.</Text><Text style={styles.heroBody}>Set up the courts and check in everyone playing today.</Text></View>
-      </View>
-
-      <Text style={styles.sectionLabel}>SESSION NAME</Text>
-      <TextInput value={sessionName} onChangeText={setSessionName} maxLength={80} placeholder="Community open play" placeholderTextColor={C.ink40} style={styles.singleInput} />
-
-      <Text style={styles.sectionLabel}>VERIFIED VENUE</Text>
-      <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.venueChoices}>{venues.map((venue) => <Pressable key={venue.id} onPress={() => setVenueId(venue.id)} style={[styles.venueChoice, venueId === venue.id && styles.venueChoiceActive]}><Icon name={venueId === venue.id ? 'checkmark-circle' : 'location-outline'} color={venueId === venue.id ? C.teal : C.ink40} /><Text numberOfLines={1} style={styles.venueChoiceName}>{venue.name}</Text><Text numberOfLines={1} style={styles.venueChoiceArea}>{venue.area}</Text></Pressable>)}</ScrollView>
-
-      <Text style={styles.sectionLabel}>DATE & SCHEDULE</Text>
-      <View style={styles.scheduleRow}><TextInput value={date} onChangeText={setDate} placeholder="YYYY-MM-DD" placeholderTextColor={C.ink40} style={[styles.singleInput, styles.dateInput]} /><TextInput value={startTime} onChangeText={setStartTime} placeholder="09:00" placeholderTextColor={C.ink40} style={[styles.singleInput, styles.timeInput]} /><Text style={styles.timeDash}>–</Text><TextInput value={endTime} onChangeText={setEndTime} placeholder="12:00" placeholderTextColor={C.ink40} style={[styles.singleInput, styles.timeInput]} /></View>
-
-      <ChoiceGroup label="WHO CAN JOIN" value={visibility} onChange={setVisibility} options={[{ value: 'public', label: 'Public', icon: 'earth-outline' }, { value: 'private', label: 'Private', icon: 'key-outline' }, { value: 'invite_only', label: 'Invite only', icon: 'mail-outline' }]} />
-      <ChoiceGroup label="APPROVAL" value={approvalMode} onChange={setApprovalMode} options={[{ value: 'automatic', label: 'Automatic', icon: 'flash-outline' }, { value: 'manual', label: 'Review requests', icon: 'person-add-outline' }]} />
-
-      <ChoiceGroup label="FAIR PLAY FORMAT" value={matchFormat} onChange={setMatchFormat} options={[{ value: 'doubles', label: 'Doubles', icon: 'people-outline' }, { value: 'singles', label: 'Singles', icon: 'person-outline' }]} />
-      <Text style={styles.helper}>Lineups balance wait time, game counts, rest, ratings, and repeat matchups.</Text>
-
-      <Text style={styles.sectionLabel}>ROTATION CONTROLS</Text>
-      <View style={styles.numericRow}><View style={styles.numericField}><Text style={styles.numericLabel}>AVG MATCH MIN</Text><TextInput keyboardType="number-pad" value={averageMatchMinutes} onChangeText={setAverageMatchMinutes} style={styles.numericInput} /></View><View style={styles.numericField}><Text style={styles.numericLabel}>MAX IN A ROW</Text><TextInput keyboardType="number-pad" value={maxConsecutiveGames} onChangeText={setMaxConsecutiveGames} style={styles.numericInput} /></View><View style={styles.numericField}><Text style={styles.numericLabel}>REST MIN</Text><TextInput keyboardType="number-pad" value={restMinutes} onChangeText={setRestMinutes} style={styles.numericInput} /></View></View>
-
-      <Text style={styles.sectionLabel}>BOOKED COURTS</Text>
-      <Stepper value={courtCount} onChange={setCourtCount} />
-
-      <Text style={styles.sectionLabel}>CAPACITY, SKILL & FEE</Text>
-      <View style={styles.numericRow}><View style={styles.numericField}><Text style={styles.numericLabel}>PLAYERS</Text><TextInput keyboardType="number-pad" value={capacity} onChangeText={setCapacity} style={styles.numericInput} /></View><View style={styles.numericField}><Text style={styles.numericLabel}>MIN RATING</Text><TextInput keyboardType="decimal-pad" value={skillMin} onChangeText={setSkillMin} placeholder="Any" placeholderTextColor={C.ink40} style={styles.numericInput} /></View><View style={styles.numericField}><Text style={styles.numericLabel}>MAX RATING</Text><TextInput keyboardType="decimal-pad" value={skillMax} onChangeText={setSkillMax} placeholder="Any" placeholderTextColor={C.ink40} style={styles.numericInput} /></View><View style={styles.numericField}><Text style={styles.numericLabel}>FEE ₱</Text><TextInput keyboardType="decimal-pad" value={fee} onChangeText={setFee} style={styles.numericInput} /></View></View>
-
-      <View style={styles.fieldHead}><Text style={styles.sectionLabel}>REGISTRATION LIST</Text><Text style={styles.countText}>{registeredNames.length} ADDED</Text></View>
-      <TextInput
-        accessibilityLabel="Player registration list"
-        multiline
-        value={names}
-        onChangeText={setNames}
-        placeholder={'Paste or type player names\nOne name per line'}
-        placeholderTextColor={C.ink40}
-        style={styles.nameInput}
-      />
-      <Text style={styles.helper}>Optional walk-ins are checked in immediately. Registered Peakle players can join after publication.</Text>
-
-      <Pressable accessibilityRole="checkbox" accessibilityState={{ checked: includeOrganizer }} onPress={() => setIncludeOrganizer((value) => !value)} style={[styles.joinCard, includeOrganizer && styles.joinCardActive]}>
-        <View style={[styles.joinCheck, includeOrganizer && styles.joinCheckActive]}><Icon name={includeOrganizer ? 'checkmark' : 'person-outline'} size={17} color={includeOrganizer ? '#0E2321' : C.teal} /></View>
-        <View style={styles.flex}><Text style={styles.joinTitle}>I’m playing too</Text><Text style={styles.joinMeta}>Add {organizerName} to the queue while keeping organizer access.</Text></View>
-      </Pressable>
-
-      <Text style={styles.sectionLabel}>RULES & CANCELLATION</Text>
-      <TextInput value={rules} onChangeText={setRules} maxLength={180} placeholder="Session rules" placeholderTextColor={C.ink40} style={styles.singleInput} />
-      <TextInput multiline value={cancellationPolicy} onChangeText={setCancellationPolicy} maxLength={300} placeholder="Cancellation policy" placeholderTextColor={C.ink40} style={[styles.nameInput, styles.policyInput]} />
-
+      <View style={styles.setupProgress}>{[1, 2, 3].map((item) => <View key={item} style={[styles.progressBar, item <= step && styles.progressBarActive]} />)}</View>
       {error ? <View style={styles.setupError}><Icon name="alert-circle" color={C.brick} /><Text style={styles.setupErrorText}>{error}</Text></View> : null}
-      <Pressable disabled={!canStart || busy} onPress={submit} style={({ pressed }) => [styles.primaryButton, (!canStart || busy) && styles.disabledButton, pressed && canStart && styles.pressed]}>
-        {busy ? <ActivityIndicator color="#0E2321" /> : <><Text style={styles.primaryText}>{canStart ? 'Publish open play' : 'Complete the session details'}</Text><Icon name="arrow-forward" color="#0E2321" /></>}
-      </Pressable>
+
+      {step === 1 ? <>
+        <View style={styles.stepIntro}><View style={styles.stepIntroIcon}><Icon name="calendar-outline" size={21} color={C.teal} /></View><View style={styles.flex}><Text style={styles.stepIntroTitle}>When and where?</Text><Text style={styles.stepIntroBody}>Start with only the details players need to find the session.</Text></View></View>
+
+        <Text style={styles.sectionLabel}>SESSION NAME</Text>
+        <TextInput accessibilityLabel="Session name" value={sessionName} onChangeText={setSessionName} maxLength={80} placeholder="Community open play" placeholderTextColor={C.ink40} style={styles.singleInput} />
+
+        <Text style={styles.sectionLabel}>VERIFIED VENUE</Text>
+        {venuesLoading ? <View style={styles.venueLoading}><ActivityIndicator color={C.teal} /><Text style={styles.venueLoadingText}>Loading verified venues…</Text></View> : selectedVenue ? <Pressable accessibilityRole="button" accessibilityLabel={`Change venue, currently ${selectedVenue.name}`} onPress={() => setVenuePickerVisible(true)} style={styles.selectedVenueCard}><View style={styles.selectedVenueIcon}><Icon name="location" color={C.teal} /></View><View style={styles.flex}><Text numberOfLines={1} style={styles.selectedVenueName}>{selectedVenue.name}</Text><Text numberOfLines={1} style={styles.selectedVenueMeta}>{selectedVenue.area || selectedVenue.address || 'Verified Peakle venue'}</Text></View><View style={styles.changeVenuePill}><Text style={styles.changeVenueText}>CHANGE</Text><Icon name="chevron-forward" size={14} color={C.teal} /></View></Pressable> : venues.length ? <Pressable onPress={() => setVenuePickerVisible(true)} style={styles.venueLoading}><Icon name="search-outline" color={C.teal} /><Text style={styles.venueLoadingText}>Choose a verified venue</Text></Pressable> : <View style={styles.venueLoading}><Icon name="location-outline" color={C.ink40} /><Text style={styles.venueLoadingText}>No verified venue is available yet.</Text></View>}
+
+        <Text style={styles.sectionLabel}>DATE & TIME</Text>
+        <View style={styles.scheduleCard}>
+          <Text style={styles.inputLabel}>SESSION DATE</Text>
+          <Pressable accessibilityRole="button" accessibilityLabel={`Choose session date, currently ${scheduleDateLabel(scheduledStart)}`} onPress={() => openSchedulePicker('date')} style={styles.schedulePickerField}><View style={styles.schedulePickerIcon}><Icon name="calendar-outline" size={19} color={C.teal} /></View><Text style={styles.schedulePickerValue}>{scheduleDateLabel(scheduledStart)}</Text><Icon name="chevron-down" size={17} color={C.ink40} /></Pressable>
+          <View style={styles.timeFields}>
+            <View style={styles.timeField}><Text style={styles.inputLabel}>START TIME</Text><Pressable accessibilityRole="button" accessibilityLabel={`Choose start time, currently ${scheduleTimeLabel(scheduledStart)}`} onPress={() => openSchedulePicker('start')} style={styles.timePickerField}><Icon name="time-outline" size={17} color={C.teal} /><Text style={styles.timePickerValue}>{scheduleTimeLabel(scheduledStart)}</Text></Pressable></View>
+            <View style={styles.timeField}><Text style={styles.inputLabel}>END TIME</Text><Pressable accessibilityRole="button" accessibilityLabel={`Choose end time, currently ${scheduleTimeLabel(scheduledEnd)}`} onPress={() => openSchedulePicker('end')} style={styles.timePickerField}><Icon name="flag-outline" size={17} color={C.teal} /><Text style={styles.timePickerValue}>{scheduleTimeLabel(scheduledEnd)}</Text></Pressable></View>
+          </View>
+          <View style={styles.timezoneRow}><Icon name="globe-outline" size={13} color={C.ink40} /><Text style={styles.timezoneText}>Asia/Manila (UTC+8){spansNextDay ? ' · Ends the next day' : ''}</Text></View>
+        </View>
+        {scheduleMessage ? <Text style={styles.inputError}>{scheduleMessage}</Text> : null}
+
+        <Text style={styles.sectionLabel}>BOOKED COURTS</Text>
+        <Stepper value={courtCount} onChange={setCourtCount} />
+
+        <Text style={styles.sectionLabel}>PLAYER CAPACITY</Text>
+        <View style={styles.capacityCard}><View style={styles.capacityIcon}><Icon name="people-outline" color={C.teal} /></View><View style={styles.flex}><Text style={styles.capacityTitle}>Maximum players</Text><Text style={styles.capacityMeta}>You can still close registration early.</Text></View><TextInput accessibilityLabel="Maximum player capacity" keyboardType="number-pad" value={capacity} onChangeText={setCapacity} maxLength={3} style={styles.capacityInput} /></View>
+
+        <Pressable disabled={!basicsValid} onPress={() => moveToStep(2)} style={({ pressed }) => [styles.primaryButton, !basicsValid && styles.disabledButton, pressed && basicsValid && styles.pressed]}><Text style={styles.primaryText}>Continue to rotation</Text><Icon name="arrow-forward" color="#0E2321" /></Pressable>
+      </> : null}
+
+      {step === 2 ? <>
+        <View style={styles.stepIntro}><View style={styles.stepIntroIcon}><Icon name="sync-outline" size={21} color={C.teal} /></View><View style={styles.flex}><Text style={styles.stepIntroTitle}>How should rotation work?</Text><Text style={styles.stepIntroBody}>Pick a ready-made setup or tune every control yourself.</Text></View></View>
+
+        <ChoiceGroup label="MATCH FORMAT" value={matchFormat} onChange={setMatchFormat} options={[{ value: 'doubles', label: 'Doubles', icon: 'people-outline' }, { value: 'singles', label: 'Singles', icon: 'person-outline' }]} />
+
+        <Text style={styles.sectionLabel}>ROTATION STYLE</Text>
+        <View style={styles.rotationPresetList}>
+          {[
+            ['balanced', 'Balanced', 'Up to 2 games in a row · no forced rest', 'sparkles-outline'],
+            ['equal_turns', 'Equal turns', '1 game at a time · 3-minute rest', 'repeat-outline'],
+            ['custom', 'Custom controls', 'Set match length, consecutive games, and rest', 'options-outline'],
+          ].map(([value, title, meta, icon]) => { const active = rotationPreset === value; return <Pressable accessibilityRole="radio" accessibilityState={{ checked: active }} key={value} onPress={() => chooseRotationPreset(value)} style={[styles.rotationPreset, active && styles.rotationPresetActive]}><View style={[styles.rotationPresetIcon, active && styles.rotationPresetIconActive]}><Icon name={icon} size={18} color={active ? '#0E2321' : C.teal} /></View><View style={styles.flex}><Text style={styles.rotationPresetTitle}>{title}</Text><Text style={styles.rotationPresetMeta}>{meta}</Text></View><Icon name={active ? 'checkmark-circle' : 'ellipse-outline'} color={active ? C.teal : C.ink40} /></Pressable>; })}
+        </View>
+
+        {rotationPreset === 'custom' ? <><Text style={styles.sectionLabel}>CUSTOM ROTATION CONTROLS</Text><View style={styles.rotationControlList}>
+          <View style={styles.rotationControl}><View style={styles.flex}><Text style={styles.rotationControlTitle}>Average match length</Text><Text style={styles.rotationControlMeta}>Used only for player wait estimates.</Text></View><TextInput accessibilityLabel="Average match length in minutes" keyboardType="number-pad" value={averageMatchMinutes} onChangeText={setAverageMatchMinutes} maxLength={2} style={styles.rotationControlInput} /><Text style={styles.rotationControlUnit}>MIN</Text></View>
+          <View style={styles.rotationControl}><View style={styles.flex}><Text style={styles.rotationControlTitle}>Maximum games in a row</Text><Text style={styles.rotationControlMeta}>Use 0 when there is no limit.</Text></View><TextInput accessibilityLabel="Maximum consecutive games" keyboardType="number-pad" value={maxConsecutiveGames} onChangeText={setMaxConsecutiveGames} maxLength={2} style={styles.rotationControlInput} /></View>
+          <View style={styles.rotationControl}><View style={styles.flex}><Text style={styles.rotationControlTitle}>Rest after a match</Text><Text style={styles.rotationControlMeta}>Use 0 when rest is optional.</Text></View><TextInput accessibilityLabel="Rest minutes after a match" keyboardType="number-pad" value={restMinutes} onChangeText={setRestMinutes} maxLength={3} style={styles.rotationControlInput} /><Text style={styles.rotationControlUnit}>MIN</Text></View>
+        </View></> : null}
+        {!rotationValid ? <Text style={styles.inputError}>Match length must be 5–90 minutes, consecutive games 0–10, and rest 0–120 minutes.</Text> : null}
+
+        <View style={styles.manualInfo}><View style={styles.manualInfoIcon}><Icon name="hand-left-outline" color={C.teal} /></View><View style={styles.flex}><Text style={styles.manualInfoTitle}>You stay in control</Text><Text style={styles.manualInfoMeta}>For every open court, use Peakle’s fair recommendation or tap “Choose manually” to build the lineup yourself.</Text></View></View>
+
+        <View style={styles.stepActions}><Pressable onPress={() => moveToStep(1)} style={styles.secondaryButton}><Icon name="arrow-back" color={C.teal} /><Text style={styles.secondaryText}>Back</Text></Pressable><Pressable disabled={!rotationValid} onPress={() => moveToStep(3)} style={[styles.primaryButton, styles.stepPrimaryButton, !rotationValid && styles.disabledButton]}><Text style={styles.primaryText}>Continue</Text><Icon name="arrow-forward" color="#0E2321" /></Pressable></View>
+      </> : null}
+
+      {step === 3 ? <>
+        <View style={styles.stepIntro}><View style={styles.stepIntroIcon}><Icon name="people-outline" size={21} color={C.teal} /></View><View style={styles.flex}><Text style={styles.stepIntroTitle}>Who can join?</Text><Text style={styles.stepIntroBody}>The recommended defaults are already selected. Change only what you need.</Text></View></View>
+
+        <ChoiceGroup label="SESSION ACCESS" value={visibility} onChange={setVisibility} options={[{ value: 'public', label: 'Public', icon: 'earth-outline' }, { value: 'private', label: 'Code only', icon: 'key-outline' }, { value: 'invite_only', label: 'Invite only', icon: 'mail-outline' }]} />
+        <ChoiceGroup label="JOIN APPROVAL" value={approvalMode} onChange={setApprovalMode} options={[{ value: 'automatic', label: 'Automatic', icon: 'flash-outline' }, { value: 'manual', label: 'Review first', icon: 'person-add-outline' }]} />
+
+        <View style={styles.fieldHead}><Text style={styles.sectionLabel}>ADD PLAYERS NOW · OPTIONAL</Text><Text style={styles.countText}>{registeredNames.length} ADDED</Text></View>
+        <TextInput accessibilityLabel="Player registration list" multiline value={names} onChangeText={setNames} placeholder={'Paste or type player names\nOne name per line'} placeholderTextColor={C.ink40} style={styles.nameInput} />
+        <Text style={styles.helper}>You can also check in walk-ins after publishing.</Text>
+
+        <Pressable accessibilityRole="checkbox" accessibilityState={{ checked: includeOrganizer }} onPress={() => setIncludeOrganizer((value) => !value)} style={[styles.joinCard, includeOrganizer && styles.joinCardActive]}><View style={[styles.joinCheck, includeOrganizer && styles.joinCheckActive]}><Icon name={includeOrganizer ? 'checkmark' : 'person-outline'} size={17} color={includeOrganizer ? '#0E2321' : C.teal} /></View><View style={styles.flex}><Text style={styles.joinTitle}>I’m playing too</Text><Text style={styles.joinMeta}>Add {organizerName} to the first waiting pool.</Text></View></Pressable>
+
+        <Pressable accessibilityRole="button" accessibilityState={{ expanded: showOptional }} onPress={() => setShowOptional((value) => !value)} style={styles.optionalToggle}><View style={styles.optionalIcon}><Icon name="options-outline" color={C.teal} /></View><View style={styles.flex}><Text style={styles.optionalTitle}>Optional session settings</Text><Text style={styles.optionalMeta}>Skill range, fee, rules, and cancellation</Text></View><Icon name={showOptional ? 'chevron-up' : 'chevron-down'} color={C.teal} /></Pressable>
+
+        {showOptional ? <View style={styles.optionalPanel}>
+          <Text style={styles.sectionLabel}>SKILL RANGE & FEE</Text>
+          <View style={styles.numericRow}><View style={styles.numericField}><Text style={styles.numericLabel}>MIN RATING</Text><TextInput accessibilityLabel="Minimum player rating" keyboardType="decimal-pad" value={skillMin} onChangeText={setSkillMin} placeholder="Any" placeholderTextColor={C.ink40} style={styles.numericInput} /></View><View style={styles.numericField}><Text style={styles.numericLabel}>MAX RATING</Text><TextInput accessibilityLabel="Maximum player rating" keyboardType="decimal-pad" value={skillMax} onChangeText={setSkillMax} placeholder="Any" placeholderTextColor={C.ink40} style={styles.numericInput} /></View><View style={styles.numericField}><Text style={styles.numericLabel}>FEE ₱</Text><TextInput accessibilityLabel="Player fee in pesos" keyboardType="decimal-pad" value={fee} onChangeText={setFee} style={styles.numericInput} /></View></View>
+          <Text style={styles.sectionLabel}>SESSION RULES</Text>
+          <TextInput value={rules} onChangeText={setRules} maxLength={180} placeholder="Session rules" placeholderTextColor={C.ink40} style={styles.singleInput} />
+          <TextInput multiline value={cancellationPolicy} onChangeText={setCancellationPolicy} maxLength={300} placeholder="Cancellation policy" placeholderTextColor={C.ink40} style={[styles.nameInput, styles.policyInput]} />
+        </View> : null}
+
+        {!joiningValid ? <Text style={styles.inputError}>Check capacity, player count, skill range, fee, rules, and cancellation details.</Text> : null}
+        <View style={styles.reviewCard}><Text style={styles.reviewEyebrow}>READY TO PUBLISH</Text><Text style={styles.reviewTitle}>{sessionName.trim() || 'Open play'}</Text><Text style={styles.reviewMeta}>{scheduleDateLabel(scheduledStart)} · {scheduleTimeLabel(scheduledStart)}–{scheduleTimeLabel(scheduledEnd)}{spansNextDay ? ' next day' : ''} · {courtCount} {courtCount === 1 ? 'court' : 'courts'} · {capacity} players</Text></View>
+        <Pressable disabled={!canStart || busy} onPress={submit} style={({ pressed }) => [styles.primaryButton, (!canStart || busy) && styles.disabledButton, pressed && canStart && styles.pressed]}>{busy ? <ActivityIndicator color="#0E2321" /> : <><Text style={styles.primaryText}>{canStart ? 'Publish open play' : 'Review missing details'}</Text><Icon name="checkmark" color="#0E2321" /></>}</Pressable>
+      </> : null}
     </ScrollView>
+    <Modal visible={venuePickerVisible} transparent animationType="slide" onRequestClose={closeVenuePicker} statusBarTranslucent>
+      <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : 'height'} style={styles.modalBackdrop}>
+        <View style={[styles.sheet, styles.venuePickerSheet, { paddingBottom: Math.max(insets.bottom, 18) }]}>
+          <View style={styles.sheetHandle} />
+          <View style={styles.venuePickerHead}><View style={styles.flex}><Text style={styles.eyebrow}>VERIFIED VENUES</Text><Text style={styles.sheetTitle}>Choose a venue</Text></View><Pressable accessibilityLabel="Close venue picker" onPress={closeVenuePicker} style={styles.iconButton}><Icon name="close" /></Pressable></View>
+          <View style={styles.venueSearchBox}><Icon name="search-outline" size={18} color={C.ink40} /><TextInput value={venueSearch} onChangeText={setVenueSearch} placeholder="Search venue or area" placeholderTextColor={C.ink40} style={styles.venueSearchInput} /></View>
+          <FlatList style={styles.venueFlatList} data={filteredVenues} keyExtractor={(venue) => venue.id} keyboardShouldPersistTaps="handled" showsVerticalScrollIndicator={false} contentContainerStyle={styles.venueList} renderItem={({ item }) => { const active = item.id === venueId; return <Pressable accessibilityRole="radio" accessibilityState={{ checked: active }} onPress={() => selectVenue(item)} style={[styles.venueListItem, active && styles.venueListItemActive]}><View style={[styles.venueListIcon, active && styles.venueListIconActive]}><Icon name={active ? 'checkmark' : 'location-outline'} size={18} color={active ? '#0E2321' : C.teal} /></View><View style={styles.flex}><Text numberOfLines={1} style={styles.venueListName}>{item.name}</Text><Text numberOfLines={1} style={styles.venueListMeta}>{item.area || item.address || 'Verified Peakle venue'}</Text></View><Icon name="chevron-forward" size={16} color={C.ink40} /></Pressable>; }} ListEmptyComponent={<View style={styles.venueEmpty}><Icon name="search-outline" size={26} color={C.ink40} /><Text style={styles.venueEmptyTitle}>No venue found</Text><Text style={styles.venueEmptyMeta}>Try a venue name, city, or area.</Text></View>} />
+        </View>
+      </KeyboardAvoidingView>
+    </Modal>
+    <Modal visible={Boolean(pickerField)} transparent animationType="slide" onRequestClose={() => setPickerField(null)} statusBarTranslucent>
+      <View style={styles.modalBackdrop}>
+        <View style={[styles.sheet, styles.schedulePickerSheet, { paddingBottom: Math.max(insets.bottom, 18) }]}>
+          <View style={styles.sheetHandle} />
+          <View style={styles.schedulePickerHead}><View style={styles.flex}><Text style={styles.eyebrow}>{pickerField === 'date' ? 'SESSION DATE' : pickerField === 'start' ? 'START TIME' : 'END TIME'}</Text><Text style={styles.schedulePickerTitle}>{pickerField === 'date' ? 'Choose a date' : 'Choose a time'}</Text></View><Pressable accessibilityLabel="Close schedule picker" onPress={() => setPickerField(null)} style={styles.iconButton}><Icon name="close" /></Pressable></View>
+          {pickerField === 'date' ? <View style={styles.calendarPicker}>
+            <View style={styles.calendarPickerNav}><Pressable accessibilityLabel="Previous month" disabled={pickerMonth <= monthFromDateInput(todayInput)} onPress={() => changePickerMonth(-1)} style={[styles.calendarPickerNavButton, pickerMonth <= monthFromDateInput(todayInput) && styles.disabled]}><Icon name="chevron-back" color={C.teal} /></Pressable><Text style={styles.calendarPickerMonth}>{pickerMonth.toLocaleDateString('en-PH', { timeZone: 'UTC', month: 'long', year: 'numeric' })}</Text><Pressable accessibilityLabel="Next month" onPress={() => changePickerMonth(1)} style={styles.calendarPickerNavButton}><Icon name="chevron-forward" color={C.teal} /></Pressable></View>
+            <View style={styles.calendarWeekdays}>{['S', 'M', 'T', 'W', 'T', 'F', 'S'].map((label, index) => <Text key={`${label}-${index}`} style={styles.calendarWeekday}>{label}</Text>)}</View>
+            <View style={styles.calendarGrid}>{pickerCalendarDays.map((item) => { const active = item.date === date; const disabled = item.date < todayInput; return <Pressable key={item.date} accessibilityRole="button" accessibilityLabel={scheduleDateLabel(parseManualSchedule(item.date, '12:00'))} accessibilityState={{ selected: active, disabled }} disabled={disabled} onPress={() => chooseScheduleDate(item.date)} style={[styles.calendarDay, active && styles.calendarDayActive, !item.inMonth && styles.calendarDayOutside, disabled && styles.calendarDayDisabled]}><Text style={[styles.calendarDayText, active && styles.calendarDayTextActive]}>{item.day}</Text>{item.date === todayInput ? <View style={[styles.calendarTodayDot, active && styles.calendarTodayDotActive]} /> : null}</Pressable>; })}</View>
+          </View> : <FlatList style={styles.timeOptionList} data={TIME_OPTIONS} numColumns={3} keyExtractor={(item) => item.value} showsVerticalScrollIndicator={false} contentContainerStyle={styles.timeOptionContent} columnWrapperStyle={styles.timeOptionRow} renderItem={({ item }) => { const active = item.value === (pickerField === 'start' ? startTime : endTime); return <Pressable accessibilityRole="radio" accessibilityState={{ checked: active }} onPress={() => chooseScheduleTime(item.value)} style={[styles.timeOption, active && styles.timeOptionActive]}><Text style={[styles.timeOptionText, active && styles.timeOptionTextActive]}>{item.label}</Text>{active ? <Icon name="checkmark" size={14} color="#0E2321" /> : null}</Pressable>; }} />}
+        </View>
+      </View>
+    </Modal>
+    </>
   );
 }
 
@@ -330,11 +523,15 @@ function Assignment({ session, courtId, onBack, onStart }) {
   const decision = useMemo(() => buildFairPlayAssignment(session), [session]);
   const suggested = decision.playerIds;
   const required = playersPerMatch(session);
+  const [selectionMode, setSelectionMode] = useState('recommended');
   const [selected, setSelected] = useState(suggested);
   const [scorerId, setScorerId] = useState(suggested[0] || null);
   const [overrideReason, setOverrideReason] = useState('');
   const overridden = selected.join('|') !== suggested.join('|');
+  const useRecommendation = () => { setSelectionMode('recommended'); setSelected(suggested); setScorerId(suggested[0] || null); setOverrideReason(''); };
+  const chooseManually = () => { setSelectionMode('manual'); setSelected([]); setScorerId(null); setOverrideReason(''); };
   const toggle = (id) => {
+    setSelectionMode('manual');
     setSelected((current) => {
       if (current.includes(id)) {
         const next = current.filter((item) => item !== id);
@@ -349,7 +546,12 @@ function Assignment({ session, courtId, onBack, onStart }) {
   return (
     <ScrollView contentContainerStyle={styles.content} showsVerticalScrollIndicator={false}>
       <TopBar eyebrow={`COURT ${court.number} · OPEN`} title="Build the lineup" onBack={onBack} />
-      <Text style={styles.lead}>Fair Play selects the next {required} from transparent rotation inputs. Tap names to make an audited override.</Text>
+      <Text style={styles.lead}>Use the fair recommendation or choose all {required} players manually. You approve every lineup before it starts.</Text>
+
+      <View style={styles.lineupMode}>
+        <Pressable accessibilityRole="radio" accessibilityState={{ checked: selectionMode === 'recommended' }} onPress={useRecommendation} style={[styles.lineupModeChoice, selectionMode === 'recommended' && styles.lineupModeChoiceActive]}><Icon name="sparkles-outline" size={16} color={selectionMode === 'recommended' ? '#0E2321' : C.ink40} /><Text style={[styles.lineupModeText, selectionMode === 'recommended' && styles.lineupModeTextActive]}>Use recommendation</Text></Pressable>
+        <Pressable accessibilityRole="radio" accessibilityState={{ checked: selectionMode === 'manual' }} onPress={chooseManually} style={[styles.lineupModeChoice, selectionMode === 'manual' && styles.lineupModeChoiceActive]}><Icon name="hand-left-outline" size={16} color={selectionMode === 'manual' ? '#0E2321' : C.ink40} /><Text style={[styles.lineupModeText, selectionMode === 'manual' && styles.lineupModeTextActive]}>Choose manually</Text></Pressable>
+      </View>
 
       <View style={styles.explainCard}><View style={styles.fairIcon}><Icon name="sparkles" color={C.teal} /></View><View style={styles.flex}><Text style={styles.fairTitle}>{decision.ready ? 'Why this lineup?' : 'Lineup not ready'}</Text><Text style={styles.fairMeta}>{decision.reason}</Text></View></View>
 
@@ -365,7 +567,7 @@ function Assignment({ session, courtId, onBack, onStart }) {
         ))}
       </View>
 
-      <Text style={styles.sectionLabel}>CHOOSE {required} PLAYERS · {selected.length}/{required}</Text>
+      <Text style={styles.sectionLabel}>{selectionMode === 'manual' ? 'CHOOSE PLAYERS MANUALLY' : 'REVIEW PLAYERS'} · {selected.length}/{required}</Text>
       <View style={styles.pickerCard}>
         {session.queue.map((id, index) => {
           const chosen = selected.includes(id);
@@ -572,9 +774,11 @@ const shadow = Platform.select({ ios: { shadowColor: C.ink, shadowOpacity: .08, 
 const lightStyles = StyleSheet.create({
   flex: { flex: 1 }, content: { paddingHorizontal: 20, paddingTop: 21, paddingBottom: 44 }, pressed: { opacity: .78, transform: [{ scale: .99 }] }, disabled: { opacity: .38 },
   topBar: { minHeight: 52, flexDirection: 'row', alignItems: 'center', gap: 11 }, topCopy: { flex: 1 }, iconButton: { width: 42, height: 42, borderRadius: 13, borderWidth: 1, borderColor: C.line, backgroundColor: C.surface, alignItems: 'center', justifyContent: 'center' }, eyebrow: { color: C.ink40, fontSize: 9, fontWeight: '900', letterSpacing: 1 }, h1: { color: C.ink, fontSize: 28, lineHeight: 34, fontWeight: '900', letterSpacing: -.7 }, h2: { marginTop: 2, color: C.ink, fontSize: 21, fontWeight: '900' }, kitchen: { height: 7, marginTop: 16, marginBottom: 20 }, solid: { height: 2, backgroundColor: C.ink }, dashed: { marginTop: 4, borderTopWidth: 1, borderStyle: 'dashed', borderColor: C.ink40 },
-  rolePill: { minHeight: 32, paddingHorizontal: 9, flexDirection: 'row', alignItems: 'center', gap: 5, borderRadius: 16, backgroundColor: '#E5F0ED' }, roleText: { color: C.teal, fontSize: 7, fontWeight: '900', letterSpacing: .6 }, heroCard: { padding: 15, flexDirection: 'row', alignItems: 'center', gap: 12, borderRadius: 20, borderBottomLeftRadius: 8, borderBottomRightRadius: 8, backgroundColor: C.optic }, heroIcon: { width: 48, height: 48, borderRadius: 15, alignItems: 'center', justifyContent: 'center', backgroundColor: 'rgba(255,255,255,.45)' }, heroTitle: { color: C.ink, fontSize: 14, fontWeight: '900' }, heroBody: { marginTop: 4, color: C.ink70, fontSize: 10, lineHeight: 15 },
+  rolePill: { minHeight: 32, paddingHorizontal: 10, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 5, borderRadius: 16, backgroundColor: '#E5F0ED' }, roleText: { color: C.teal, fontSize: 7, fontWeight: '900', letterSpacing: .6 }, heroCard: { padding: 15, flexDirection: 'row', alignItems: 'center', gap: 12, borderRadius: 20, borderBottomLeftRadius: 8, borderBottomRightRadius: 8, backgroundColor: C.optic }, heroIcon: { width: 48, height: 48, borderRadius: 15, alignItems: 'center', justifyContent: 'center', backgroundColor: 'rgba(255,255,255,.45)' }, heroTitle: { color: C.ink, fontSize: 14, fontWeight: '900' }, heroBody: { marginTop: 4, color: C.ink70, fontSize: 10, lineHeight: 15 },
+  setupProgress: { marginTop: -8, marginBottom: 18, flexDirection: 'row', gap: 6 }, progressBar: { height: 4, flex: 1, borderRadius: 2, backgroundColor: C.line }, progressBarActive: { backgroundColor: C.teal }, stepIntro: { padding: 14, flexDirection: 'row', alignItems: 'center', gap: 11, borderRadius: 18, borderBottomLeftRadius: 8, borderBottomRightRadius: 8, backgroundColor: C.optic }, stepIntroIcon: { width: 43, height: 43, alignItems: 'center', justifyContent: 'center', borderRadius: 13, backgroundColor: 'rgba(255,255,255,.52)' }, stepIntroTitle: { color: C.ink, fontSize: 15, fontWeight: '900' }, stepIntroBody: { marginTop: 3, color: C.ink70, fontSize: 9, lineHeight: 14 },
   sectionLabel: { marginTop: 22, marginBottom: 9, color: C.ink, fontSize: 10, fontWeight: '900', letterSpacing: .9 }, stepper: { height: 80, padding: 9, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', borderRadius: 18, borderWidth: 1, borderColor: C.line, backgroundColor: C.surface }, stepButton: { width: 52, height: 52, borderRadius: 14, alignItems: 'center', justifyContent: 'center', backgroundColor: C.paper }, stepButtonAdd: { backgroundColor: C.optic }, stepValue: { alignItems: 'center' }, stepNumber: { color: C.ink, fontSize: 30, lineHeight: 33, fontWeight: '900', fontVariant: ['tabular-nums'] }, stepLabel: { color: C.ink40, fontSize: 7, fontWeight: '900', letterSpacing: .8 },
-  venueChoices: { gap: 8, paddingRight: 8 }, venueChoice: { width: 145, minHeight: 77, padding: 11, borderRadius: 15, borderWidth: 1, borderColor: C.line, backgroundColor: C.surface }, venueChoiceActive: { borderColor: C.teal, backgroundColor: '#F4F9F7' }, venueChoiceName: { marginTop: 6, color: C.ink, fontSize: 10, fontWeight: '900' }, venueChoiceArea: { marginTop: 3, color: C.ink40, fontSize: 7 }, scheduleRow: { flexDirection: 'row', alignItems: 'center', gap: 6 }, dateInput: { flex: 1.4 }, timeInput: { flex: .75, textAlign: 'center' }, timeDash: { color: C.ink40, fontSize: 12 }, choiceGroup: { flexDirection: 'row', gap: 7 }, choice: { minHeight: 45, flex: 1, paddingHorizontal: 6, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 5, borderRadius: 12, borderWidth: 1, borderColor: C.line, backgroundColor: C.surface }, choiceActive: { borderColor: C.teal, backgroundColor: C.optic }, choiceText: { color: C.ink40, fontSize: 8, fontWeight: '800' }, choiceTextActive: { color: '#0E2321', fontWeight: '900' }, numericRow: { flexDirection: 'row', gap: 6 }, numericField: { flex: 1, minHeight: 67, padding: 8, borderRadius: 13, borderWidth: 1, borderColor: C.line, backgroundColor: C.surface }, numericLabel: { color: C.ink40, fontSize: 5.5, fontWeight: '900', letterSpacing: .35 }, numericInput: { flex: 1, padding: 0, color: C.ink, fontSize: 12, fontWeight: '900' }, setupError: { marginTop: 14, padding: 11, flexDirection: 'row', alignItems: 'center', gap: 7, borderRadius: 12, backgroundColor: '#F7EAE6' }, setupErrorText: { flex: 1, color: C.brick, fontSize: 8, lineHeight: 12, fontWeight: '800' },
+  venueChoices: { gap: 8, paddingRight: 8 }, venueChoice: { width: 145, minHeight: 77, padding: 11, borderRadius: 15, borderWidth: 1, borderColor: C.line, backgroundColor: C.surface }, venueChoiceActive: { borderColor: C.teal, backgroundColor: '#F4F9F7' }, venueChoiceName: { marginTop: 6, color: C.ink, fontSize: 10, fontWeight: '900' }, venueChoiceArea: { marginTop: 3, color: C.ink40, fontSize: 7 }, venueLoading: { minHeight: 70, paddingHorizontal: 12, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8, borderRadius: 15, borderWidth: 1, borderColor: C.line, backgroundColor: C.surface }, venueLoadingText: { color: C.ink40, fontSize: 9, fontWeight: '700' }, selectedVenueCard: { minHeight: 76, padding: 11, flexDirection: 'row', alignItems: 'center', gap: 10, borderRadius: 17, borderWidth: 1, borderColor: C.teal, backgroundColor: C.surface }, selectedVenueIcon: { width: 45, height: 45, alignItems: 'center', justifyContent: 'center', borderRadius: 14, backgroundColor: '#E5F0ED' }, selectedVenueName: { color: C.ink, fontSize: 12, fontWeight: '900' }, selectedVenueMeta: { marginTop: 4, color: C.ink40, fontSize: 8 }, changeVenuePill: { minHeight: 30, paddingHorizontal: 8, flexDirection: 'row', alignItems: 'center', gap: 2, borderRadius: 15, backgroundColor: C.paper }, changeVenueText: { color: C.teal, fontSize: 6, fontWeight: '900', letterSpacing: .4 }, scheduleCard: { padding: 13, borderRadius: 17, borderWidth: 1, borderColor: C.line, backgroundColor: C.surface }, inputLabel: { marginBottom: 6, color: C.ink40, fontSize: 7, fontWeight: '900', letterSpacing: .55 }, scheduleInput: { minHeight: 48, paddingHorizontal: 12, borderRadius: 12, backgroundColor: C.paper, color: C.ink, fontSize: 13, fontWeight: '900', fontVariant: ['tabular-nums'] }, schedulePickerField: { minHeight: 56, paddingHorizontal: 11, flexDirection: 'row', alignItems: 'center', gap: 9, borderRadius: 13, backgroundColor: C.paper }, schedulePickerIcon: { width: 36, height: 36, alignItems: 'center', justifyContent: 'center', borderRadius: 11, backgroundColor: C.surface }, schedulePickerValue: { flex: 1, color: C.ink, fontSize: 12, fontWeight: '900' }, timeFields: { marginTop: 12, flexDirection: 'row', gap: 9 }, timeField: { minWidth: 0, flex: 1 }, timePickerField: { minHeight: 50, paddingHorizontal: 9, flexDirection: 'row', alignItems: 'center', gap: 6, borderRadius: 12, backgroundColor: C.paper }, timePickerValue: { minWidth: 0, flex: 1, color: C.ink, fontSize: 10, fontWeight: '900' }, timezoneRow: { marginTop: 11, flexDirection: 'row', alignItems: 'center', gap: 5 }, timezoneText: { color: C.ink40, fontSize: 8, fontWeight: '700' }, schedulePickerSheet: { height: '78%', paddingTop: 12 }, schedulePickerHead: { flexDirection: 'row', alignItems: 'center', gap: 10 }, schedulePickerTitle: { marginTop: 3, color: C.ink, fontSize: 21, fontWeight: '900' }, calendarPicker: { marginTop: 18 }, calendarPickerNav: { minHeight: 46, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }, calendarPickerNavButton: { width: 42, height: 42, alignItems: 'center', justifyContent: 'center', borderRadius: 12, borderWidth: 1, borderColor: C.line, backgroundColor: C.surface }, calendarPickerMonth: { color: C.ink, fontSize: 14, fontWeight: '900' }, calendarWeekdays: { marginTop: 10, flexDirection: 'row' }, calendarWeekday: { width: '14.285%', color: C.ink40, textAlign: 'center', fontSize: 8, fontWeight: '900' }, calendarGrid: { marginTop: 7, flexDirection: 'row', flexWrap: 'wrap' }, calendarDay: { width: '14.285%', height: 48, alignItems: 'center', justifyContent: 'center', borderRadius: 12 }, calendarDayActive: { backgroundColor: C.optic }, calendarDayOutside: { opacity: .42 }, calendarDayDisabled: { opacity: .18 }, calendarDayText: { color: C.ink, fontSize: 12, fontWeight: '800' }, calendarDayTextActive: { color: '#0E2321', fontWeight: '900' }, calendarTodayDot: { position: 'absolute', bottom: 6, width: 4, height: 4, borderRadius: 2, backgroundColor: C.teal }, calendarTodayDotActive: { backgroundColor: '#0E2321' }, timeOptionList: { flex: 1, marginTop: 16 }, timeOptionContent: { paddingBottom: 12 }, timeOptionRow: { justifyContent: 'space-between', gap: 7 }, timeOption: { width: '31.5%', minHeight: 48, marginBottom: 8, paddingHorizontal: 7, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 3, borderRadius: 12, borderWidth: 1, borderColor: C.line, backgroundColor: C.surface }, timeOptionActive: { borderColor: C.optic, backgroundColor: C.optic }, timeOptionText: { color: C.ink70, fontSize: 8, fontWeight: '800' }, timeOptionTextActive: { color: '#0E2321', fontWeight: '900' }, capacityCard: { minHeight: 70, padding: 11, flexDirection: 'row', alignItems: 'center', gap: 9, borderRadius: 16, borderWidth: 1, borderColor: C.line, backgroundColor: C.surface }, capacityIcon: { width: 42, height: 42, alignItems: 'center', justifyContent: 'center', borderRadius: 13, backgroundColor: '#E5F0ED' }, capacityTitle: { color: C.ink, fontSize: 10, fontWeight: '900' }, capacityMeta: { marginTop: 3, color: C.ink40, fontSize: 7.5 }, capacityInput: { width: 58, minHeight: 44, paddingHorizontal: 8, borderRadius: 11, backgroundColor: C.paper, color: C.ink, textAlign: 'center', fontSize: 17, fontWeight: '900' }, choiceGroup: { flexDirection: 'row', gap: 7 }, choice: { minHeight: 47, flex: 1, paddingHorizontal: 5, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 5, borderRadius: 12, borderWidth: 1, borderColor: C.line, backgroundColor: C.surface }, choiceActive: { borderColor: C.teal, backgroundColor: C.optic }, choiceText: { color: C.ink40, fontSize: 8, fontWeight: '800' }, choiceTextActive: { color: '#0E2321', fontWeight: '900' }, numericRow: { flexDirection: 'row', gap: 6 }, numericField: { flex: 1, minHeight: 67, padding: 8, borderRadius: 13, borderWidth: 1, borderColor: C.line, backgroundColor: C.surface }, numericLabel: { color: C.ink40, fontSize: 5.5, fontWeight: '900', letterSpacing: .35 }, numericInput: { flex: 1, padding: 0, color: C.ink, fontSize: 12, fontWeight: '900' }, setupError: { marginBottom: 14, padding: 11, flexDirection: 'row', alignItems: 'center', gap: 7, borderRadius: 12, backgroundColor: '#F7EAE6' }, setupErrorText: { flex: 1, color: C.brick, fontSize: 8, lineHeight: 12, fontWeight: '800' },
+  rotationPresetList: { gap: 8 }, rotationPreset: { minHeight: 70, padding: 11, flexDirection: 'row', alignItems: 'center', gap: 10, borderRadius: 16, borderWidth: 1, borderColor: C.line, backgroundColor: C.surface }, rotationPresetActive: { borderColor: C.teal, backgroundColor: '#F4F9F7' }, rotationPresetIcon: { width: 40, height: 40, alignItems: 'center', justifyContent: 'center', borderRadius: 12, backgroundColor: '#E5F0ED' }, rotationPresetIconActive: { backgroundColor: C.optic }, rotationPresetTitle: { color: C.ink, fontSize: 11, fontWeight: '900' }, rotationPresetMeta: { marginTop: 3, color: C.ink40, fontSize: 7.5, lineHeight: 11 }, rotationControlList: { overflow: 'hidden', borderRadius: 16, borderWidth: 1, borderColor: C.line, backgroundColor: C.surface }, rotationControl: { minHeight: 72, padding: 11, flexDirection: 'row', alignItems: 'center', gap: 7, borderBottomWidth: StyleSheet.hairlineWidth, borderColor: C.line }, rotationControlTitle: { color: C.ink, fontSize: 10, fontWeight: '900' }, rotationControlMeta: { marginTop: 3, color: C.ink40, fontSize: 7.5 }, rotationControlInput: { width: 48, minHeight: 43, borderRadius: 11, backgroundColor: C.paper, color: C.ink, textAlign: 'center', fontSize: 16, fontWeight: '900' }, rotationControlUnit: { width: 21, color: C.ink40, fontSize: 6, fontWeight: '900' }, manualInfo: { marginTop: 18, padding: 13, flexDirection: 'row', alignItems: 'center', gap: 10, borderRadius: 16, backgroundColor: '#E5F0ED' }, manualInfoIcon: { width: 40, height: 40, alignItems: 'center', justifyContent: 'center', borderRadius: 12, backgroundColor: C.surface }, manualInfoTitle: { color: C.ink, fontSize: 10, fontWeight: '900' }, manualInfoMeta: { marginTop: 3, color: C.ink70, fontSize: 8, lineHeight: 12 }, stepActions: { marginTop: 18, flexDirection: 'row', gap: 9 }, stepPrimaryButton: { marginTop: 0, flex: 1.3 }, optionalToggle: { minHeight: 72, marginTop: 20, padding: 11, flexDirection: 'row', alignItems: 'center', gap: 10, borderRadius: 16, borderWidth: 1, borderColor: C.line, backgroundColor: C.surface }, optionalIcon: { width: 41, height: 41, alignItems: 'center', justifyContent: 'center', borderRadius: 12, backgroundColor: '#E5F0ED' }, optionalTitle: { color: C.ink, fontSize: 10, fontWeight: '900' }, optionalMeta: { marginTop: 3, color: C.ink40, fontSize: 7.5 }, optionalPanel: { marginTop: 4 }, reviewCard: { marginTop: 18, padding: 15, borderRadius: 18, borderBottomLeftRadius: 8, borderBottomRightRadius: 8, backgroundColor: C.ink }, reviewEyebrow: { color: C.optic, fontSize: 7, fontWeight: '900', letterSpacing: .7 }, reviewTitle: { marginTop: 4, color: C.surface, fontSize: 15, fontWeight: '900' }, reviewMeta: { marginTop: 5, color: '#B9C8C2', fontSize: 8.5, lineHeight: 13 },
   fieldHead: { flexDirection: 'row', alignItems: 'flex-end', justifyContent: 'space-between' }, countText: { marginBottom: 9, color: C.teal, fontSize: 8, fontWeight: '900' }, nameInput: { minHeight: 142, padding: 14, borderRadius: 17, borderWidth: 1, borderColor: C.line, backgroundColor: C.surface, color: C.ink, fontSize: 13, lineHeight: 21, textAlignVertical: 'top' }, policyInput: { minHeight: 86, marginTop: 8, fontSize: 10, lineHeight: 15 }, helper: { marginTop: 7, color: C.ink40, fontSize: 8, lineHeight: 12 }, helperTop: { marginTop: -4, marginBottom: 9, color: C.ink40, fontSize: 9, lineHeight: 13 },
   rulesCard: { minHeight: 70, marginTop: 18, padding: 12, flexDirection: 'row', alignItems: 'center', gap: 10, borderRadius: 17, borderWidth: 1, borderColor: C.line, backgroundColor: C.surface }, rulesIcon: { width: 42, height: 42, borderRadius: 13, alignItems: 'center', justifyContent: 'center', backgroundColor: '#E5F0ED' }, rulesTitle: { color: C.ink, fontSize: 11, fontWeight: '900' }, rulesMeta: { marginTop: 4, color: C.ink40, fontSize: 8 }, primaryButton: { minHeight: 58, marginTop: 18, paddingHorizontal: 18, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8, borderRadius: 15, backgroundColor: C.optic }, disabledButton: { opacity: .42 }, primaryText: { color: C.ink, fontSize: 12, fontWeight: '900' },
   joinCard: { minHeight: 68, marginTop: 12, padding: 11, flexDirection: 'row', alignItems: 'center', gap: 10, borderRadius: 16, borderWidth: 1, borderColor: C.line, backgroundColor: C.surface }, joinCardActive: { borderColor: C.teal, backgroundColor: '#F4F9F7' }, joinCheck: { width: 40, height: 40, borderRadius: 12, alignItems: 'center', justifyContent: 'center', backgroundColor: '#E5F0ED' }, joinCheckActive: { backgroundColor: C.optic }, joinTitle: { color: C.ink, fontSize: 11, fontWeight: '900' }, joinMeta: { marginTop: 3, color: C.ink40, fontSize: 8, lineHeight: 12 },
@@ -583,10 +787,10 @@ const lightStyles = StyleSheet.create({
   inviteCard: { marginBottom: 12, padding: 12, flexDirection: 'row', alignItems: 'center', gap: 10, borderRadius: 17, borderWidth: 1, borderColor: C.teal, backgroundColor: C.surface }, inviteCode: { minWidth: 72, padding: 8, alignItems: 'center', borderRadius: 11, backgroundColor: C.ink }, inviteCodeLabel: { color: C.ink40, fontSize: 5, fontWeight: '900', letterSpacing: .4 }, inviteCodeValue: { marginTop: 2, color: C.optic, fontSize: 15, fontWeight: '900', letterSpacing: 1.2 }, inviteTitle: { color: C.ink, fontSize: 9, fontWeight: '900' }, inviteMeta: { marginTop: 3, color: C.ink40, fontSize: 6.5, lineHeight: 10 }, shareButton: { width: 39, height: 39, alignItems: 'center', justifyContent: 'center', borderRadius: 12, backgroundColor: C.optic },
   courtCard: { marginBottom: 10, padding: 14, borderRadius: 20, borderBottomLeftRadius: 8, borderBottomRightRadius: 8, borderWidth: 1, borderColor: C.line, backgroundColor: C.surface, ...shadow }, openCourtCard: { borderStyle: 'dashed', borderColor: C.teal, shadowOpacity: 0 }, courtCardHead: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }, courtNumber: { color: C.ink, fontSize: 12, fontWeight: '900', letterSpacing: .5 }, courtStatus: { marginTop: 3, color: C.ink40, fontSize: 8 }, statusPill: { minHeight: 25, paddingHorizontal: 8, flexDirection: 'row', alignItems: 'center', gap: 4, borderRadius: 13 }, statusDot: { width: 5, height: 5, borderRadius: 3, backgroundColor: C.surface }, statusText: { color: C.surface, fontSize: 6, fontWeight: '900', letterSpacing: .5 }, compactScore: { marginTop: 12, flexDirection: 'row', alignItems: 'stretch' }, compactTeam: { flex: 1, alignItems: 'center' }, compactNames: { width: '100%', color: C.ink70, textAlign: 'center', fontSize: 8, fontWeight: '800' }, compactNumber: { marginTop: 2, color: C.ink, fontSize: 32, lineHeight: 37, fontWeight: '900', fontVariant: ['tabular-nums'] }, scoreDivider: { width: 1, marginHorizontal: 10, backgroundColor: C.line }, courtFoot: { marginTop: 8, paddingTop: 9, borderTopWidth: 1, borderColor: C.line, flexDirection: 'row', justifyContent: 'space-between' }, scorerMeta: { color: C.teal, fontSize: 8, fontWeight: '800' }, timer: { color: C.ink, fontSize: 10, fontWeight: '900', fontVariant: ['tabular-nums'] }, openPrompt: { minHeight: 58, marginTop: 10, flexDirection: 'row', alignItems: 'center', gap: 10 }, openPlus: { width: 40, height: 40, borderRadius: 13, alignItems: 'center', justifyContent: 'center', backgroundColor: C.optic }, openTitle: { color: C.ink, fontSize: 11, fontWeight: '900' }, openMeta: { marginTop: 3, color: C.ink40, fontSize: 8 },
   queueHeadActions: { alignItems: 'flex-end', gap: 5 }, queueCount: { color: C.teal, fontSize: 7, fontWeight: '900' }, addPlayerButton: { minHeight: 31, paddingHorizontal: 9, flexDirection: 'row', alignItems: 'center', gap: 4, borderRadius: 10, backgroundColor: C.optic }, addPlayerText: { color: C.ink, fontSize: 7, fontWeight: '900' }, fairCard: { marginBottom: 9, padding: 11, flexDirection: 'row', alignItems: 'flex-start', gap: 9, borderRadius: 14, backgroundColor: '#E5F0ED' }, fairIcon: { width: 34, height: 34, alignItems: 'center', justifyContent: 'center', borderRadius: 11, backgroundColor: C.surface }, fairTitle: { color: C.ink, fontSize: 9, fontWeight: '900' }, fairMeta: { marginTop: 3, color: C.ink70, fontSize: 7.5, lineHeight: 12 }, overrideAudit: { marginBottom: 9, padding: 10, flexDirection: 'row', alignItems: 'flex-start', gap: 8, borderRadius: 13, backgroundColor: '#F7EAE6' }, overrideAuditTitle: { color: C.brick, fontSize: 8, fontWeight: '900' }, overrideAuditMeta: { marginTop: 2, color: C.ink70, fontSize: 7, lineHeight: 11 }, queueCard: { paddingHorizontal: 12, borderRadius: 18, borderWidth: 1, borderColor: C.line, backgroundColor: C.surface }, queueRow: { minHeight: 65, flexDirection: 'row', alignItems: 'center', gap: 7 }, rowBorder: { borderTopWidth: 1, borderColor: C.line }, queuePosition: { width: 20, color: C.ink40, textAlign: 'center', fontSize: 9, fontWeight: '900' }, avatar: { width: 38, height: 38, borderRadius: 13, alignItems: 'center', justifyContent: 'center', backgroundColor: C.teal }, avatarText: { color: C.surface, fontSize: 9, fontWeight: '900' }, playerName: { color: C.ink, fontSize: 11, fontWeight: '900' }, playerMeta: { marginTop: 3, color: C.ink40, fontSize: 8 }, priorityButton: { width: 31, height: 31, alignItems: 'center', justifyContent: 'center', borderRadius: 10, backgroundColor: C.paper }, priorityButtonActive: { backgroundColor: C.optic }, doneButton: { minWidth: 44, minHeight: 31, alignItems: 'center', justifyContent: 'center', borderRadius: 10, backgroundColor: C.paper }, doneText: { color: C.ink40, fontSize: 8, fontWeight: '800' }, emptyQueue: { minHeight: 130, alignItems: 'center', justifyContent: 'center' }, emptyTitle: { marginTop: 7, color: C.ink, fontSize: 11, fontWeight: '900' }, emptyMeta: { marginTop: 4, color: C.ink40, fontSize: 8 },
-  lead: { marginTop: -5, marginBottom: 15, color: C.ink70, fontSize: 10, lineHeight: 15 }, explainCard: { marginBottom: 12, padding: 11, flexDirection: 'row', alignItems: 'flex-start', gap: 9, borderRadius: 15, borderWidth: 1, borderColor: C.teal, backgroundColor: C.surface }, teamsCard: { flexDirection: 'row', gap: 9 }, lineupTeam: { flex: 1, padding: 12, borderRadius: 18, borderBottomLeftRadius: 7, borderBottomRightRadius: 7, backgroundColor: '#E5F0ED' }, lineupTeamAway: { backgroundColor: '#F8EDE9' }, teamLabel: { color: C.ink40, fontSize: 7, fontWeight: '900', letterSpacing: .7 }, lineupSlot: { minHeight: 50, marginTop: 8, paddingHorizontal: 8, flexDirection: 'row', alignItems: 'center', gap: 7, borderRadius: 11, backgroundColor: C.surface }, smallAvatar: { width: 29, height: 29, borderRadius: 10, alignItems: 'center', justifyContent: 'center', backgroundColor: C.ink }, smallAvatarText: { color: C.surface, fontSize: 7, fontWeight: '900' }, lineupName: { flex: 1, color: C.ink, fontSize: 8, fontWeight: '800' }, openSlot: { color: C.ink40, fontSize: 8 }, pickerCard: { paddingHorizontal: 12, borderRadius: 17, borderWidth: 1, borderColor: C.line, backgroundColor: C.surface }, pickerRow: { minHeight: 54, flexDirection: 'row', alignItems: 'center', gap: 8 }, overrideInput: { minHeight: 82, fontSize: 10, lineHeight: 15 }, scorerGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 }, scorerChoice: { width: '48%', minHeight: 54, paddingHorizontal: 8, flexDirection: 'row', alignItems: 'center', gap: 7, borderRadius: 13, borderWidth: 1, borderColor: C.line, backgroundColor: C.surface }, scorerChoiceActive: { borderColor: C.teal, backgroundColor: '#E5F0ED' }, scorerAvatarActive: { backgroundColor: C.teal }, scorerName: { flex: 1, color: C.ink, fontSize: 8, fontWeight: '800' },
+  lead: { marginTop: -5, marginBottom: 15, color: C.ink70, fontSize: 10, lineHeight: 15 }, lineupMode: { marginBottom: 12, padding: 4, flexDirection: 'row', gap: 4, borderRadius: 14, backgroundColor: '#E7EBE6' }, lineupModeChoice: { minHeight: 46, flex: 1, paddingHorizontal: 7, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 5, borderRadius: 11 }, lineupModeChoiceActive: { backgroundColor: C.optic }, lineupModeText: { color: C.ink40, textAlign: 'center', fontSize: 7.5, fontWeight: '800' }, lineupModeTextActive: { color: '#0E2321', fontWeight: '900' }, explainCard: { marginBottom: 12, padding: 11, flexDirection: 'row', alignItems: 'flex-start', gap: 9, borderRadius: 15, borderWidth: 1, borderColor: C.teal, backgroundColor: C.surface }, teamsCard: { flexDirection: 'row', gap: 9 }, lineupTeam: { flex: 1, padding: 12, borderRadius: 18, borderBottomLeftRadius: 7, borderBottomRightRadius: 7, backgroundColor: '#E5F0ED' }, lineupTeamAway: { backgroundColor: '#F8EDE9' }, teamLabel: { color: C.ink40, fontSize: 7, fontWeight: '900', letterSpacing: .7 }, lineupSlot: { minHeight: 50, marginTop: 8, paddingHorizontal: 8, flexDirection: 'row', alignItems: 'center', gap: 7, borderRadius: 11, backgroundColor: C.surface }, smallAvatar: { width: 29, height: 29, borderRadius: 10, alignItems: 'center', justifyContent: 'center', backgroundColor: C.ink }, smallAvatarText: { color: C.surface, fontSize: 7, fontWeight: '900' }, lineupName: { flex: 1, color: C.ink, fontSize: 8, fontWeight: '800' }, openSlot: { color: C.ink40, fontSize: 8 }, pickerCard: { paddingHorizontal: 12, borderRadius: 17, borderWidth: 1, borderColor: C.line, backgroundColor: C.surface }, pickerRow: { minHeight: 54, flexDirection: 'row', alignItems: 'center', gap: 8 }, overrideInput: { minHeight: 82, fontSize: 10, lineHeight: 15 }, scorerGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 }, scorerChoice: { width: '48%', minHeight: 54, paddingHorizontal: 8, flexDirection: 'row', alignItems: 'center', gap: 7, borderRadius: 13, borderWidth: 1, borderColor: C.line, backgroundColor: C.surface }, scorerChoiceActive: { borderColor: C.teal, backgroundColor: '#E5F0ED' }, scorerAvatarActive: { backgroundColor: C.teal }, scorerName: { flex: 1, color: C.ink, fontSize: 8, fontWeight: '800' },
   timerPill: { minHeight: 34, paddingHorizontal: 9, flexDirection: 'row', alignItems: 'center', gap: 5, borderRadius: 17, backgroundColor: C.ink }, timerText: { color: C.surface, fontSize: 9, fontWeight: '900', fontVariant: ['tabular-nums'] }, matchPointBanner: { minHeight: 48, marginBottom: 12, paddingHorizontal: 12, flexDirection: 'row', alignItems: 'center', gap: 8, borderRadius: 13, backgroundColor: C.optic }, matchPointText: { flex: 1, color: C.ink, fontSize: 9, fontWeight: '900' }, finishedBanner: { minHeight: 48, marginBottom: 12, paddingHorizontal: 12, flexDirection: 'row', alignItems: 'center', gap: 8, borderRadius: 13, backgroundColor: C.teal }, finishedText: { flex: 1, color: C.surface, fontSize: 9, fontWeight: '800' }, scoreCard: { flexDirection: 'row', gap: 9 }, scoreTeam: { minHeight: 280, flex: 1, padding: 13, alignItems: 'center', borderRadius: 21, borderBottomLeftRadius: 8, borderBottomRightRadius: 8, borderWidth: 1, borderColor: C.line, backgroundColor: C.surface, ...shadow }, scoreTeamAway: { backgroundColor: '#FFFDFC' }, scoreNames: { minHeight: 38, marginTop: 9, color: C.ink, textAlign: 'center', fontSize: 10, lineHeight: 14, fontWeight: '900' }, bigScore: { marginTop: 13, color: C.ink, fontSize: 72, lineHeight: 80, fontWeight: '900', fontVariant: ['tabular-nums'], letterSpacing: -4 }, pointButton: { width: '100%', minHeight: 54, marginTop: 'auto', flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 4, borderRadius: 13, backgroundColor: C.teal }, pointButtonAway: { backgroundColor: C.brick }, pointText: { color: C.surface, fontSize: 9, fontWeight: '900', letterSpacing: .7 },
   scorerCard: { marginTop: 13, padding: 14, borderRadius: 18, borderWidth: 1, borderColor: C.line, backgroundColor: C.surface }, scorerHead: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }, scorerTitle: { marginTop: 3, color: C.ink, fontSize: 14, fontWeight: '900' }, assignmentPill: { paddingHorizontal: 7, minHeight: 24, justifyContent: 'center', borderRadius: 12, backgroundColor: '#E5F0ED' }, assignmentText: { color: C.teal, fontSize: 6, fontWeight: '900' }, scorerHelp: { marginTop: 6, color: C.ink40, fontSize: 8 }, scorerChips: { marginTop: 10, flexDirection: 'row', flexWrap: 'wrap', gap: 6 }, scorerChip: { minHeight: 34, paddingHorizontal: 9, flexDirection: 'row', alignItems: 'center', gap: 4, borderRadius: 11, backgroundColor: C.paper }, scorerChipActive: { borderWidth: 1, borderColor: C.teal, backgroundColor: '#E5F0ED' }, scorerChipText: { color: C.ink40, fontSize: 8, fontWeight: '800' }, scorerChipTextActive: { color: C.teal, fontWeight: '900' }, liveActions: { marginTop: 13, flexDirection: 'row', gap: 9 }, secondaryButton: { minHeight: 49, flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 5, borderRadius: 13, borderWidth: 1, borderColor: C.line, backgroundColor: C.surface }, secondaryText: { color: C.teal, fontSize: 9, fontWeight: '900' }, endMatchButton: { minHeight: 49, flex: 1.3, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 5, borderRadius: 13, backgroundColor: C.ink }, endMatchText: { color: C.surface, fontSize: 9, fontWeight: '900' },
-  modalBackdrop: { flex: 1, justifyContent: 'flex-end', backgroundColor: 'rgba(14,35,33,.5)' }, sheet: { padding: 20, paddingBottom: 32, borderTopLeftRadius: 25, borderTopRightRadius: 25, backgroundColor: C.paper }, sheetHandle: { width: 42, height: 4, alignSelf: 'center', marginBottom: 18, borderRadius: 2, backgroundColor: C.line }, sheetTitle: { marginTop: 3, color: C.ink, fontSize: 23, fontWeight: '900' }, sheetLead: { marginTop: 5, marginBottom: 11, color: C.ink40, fontSize: 9, lineHeight: 14 }, singleInput: { minHeight: 52, paddingHorizontal: 13, borderRadius: 13, borderWidth: 1, borderColor: C.line, backgroundColor: C.surface, color: C.ink, fontSize: 12, fontWeight: '700' }, inputError: { marginTop: 6, color: C.brick, fontSize: 8, fontWeight: '800' }, endPlayerRow: { minHeight: 59, flexDirection: 'row', alignItems: 'center', gap: 9, borderBottomWidth: 1, borderColor: C.line }, returnPill: { minHeight: 28, paddingHorizontal: 8, alignItems: 'center', justifyContent: 'center', borderRadius: 14, backgroundColor: '#E5F0ED' }, returnText: { color: C.teal, fontSize: 6, fontWeight: '900' }, donePill: { backgroundColor: '#F8EDE9' }, donePillText: { color: C.brick }, sheetActions: { marginTop: 16, flexDirection: 'row', gap: 9 }, confirmButton: { minHeight: 49, flex: 1, alignItems: 'center', justifyContent: 'center', borderRadius: 13, backgroundColor: C.ink }, confirmText: { color: C.surface, fontSize: 9, fontWeight: '900' },
+  modalBackdrop: { flex: 1, justifyContent: 'flex-end', backgroundColor: 'rgba(14,35,33,.5)' }, sheet: { padding: 20, paddingBottom: 32, borderTopLeftRadius: 25, borderTopRightRadius: 25, backgroundColor: C.paper }, sheetHandle: { width: 42, height: 4, alignSelf: 'center', marginBottom: 18, borderRadius: 2, backgroundColor: C.line }, sheetTitle: { marginTop: 3, color: C.ink, fontSize: 23, fontWeight: '900' }, sheetLead: { marginTop: 5, marginBottom: 11, color: C.ink40, fontSize: 9, lineHeight: 14 }, venuePickerSheet: { height: '82%', paddingBottom: 18 }, venuePickerHead: { flexDirection: 'row', alignItems: 'center', gap: 10 }, venueSearchBox: { minHeight: 52, marginTop: 16, paddingHorizontal: 12, flexDirection: 'row', alignItems: 'center', gap: 8, borderRadius: 14, borderWidth: 1, borderColor: C.line, backgroundColor: C.surface }, venueSearchInput: { flex: 1, color: C.ink, fontSize: 11, fontWeight: '800' }, venueResultCount: { minWidth: 26, minHeight: 26, paddingHorizontal: 6, textAlign: 'center', textAlignVertical: 'center', borderRadius: 13, overflow: 'hidden', backgroundColor: '#E5F0ED', color: C.teal, fontSize: 8, fontWeight: '900' }, venueFlatList: { flex: 1 }, venueList: { paddingTop: 10, paddingBottom: 18 }, venueListItem: { minHeight: 70, marginBottom: 7, padding: 10, flexDirection: 'row', alignItems: 'center', gap: 10, borderRadius: 15, borderWidth: 1, borderColor: C.line, backgroundColor: C.surface }, venueListItemActive: { borderColor: C.teal, backgroundColor: '#F4F9F7' }, venueListIcon: { width: 42, height: 42, alignItems: 'center', justifyContent: 'center', borderRadius: 13, backgroundColor: '#E5F0ED' }, venueListIconActive: { backgroundColor: C.optic }, venueListName: { color: C.ink, fontSize: 11, fontWeight: '900' }, venueListMeta: { marginTop: 3, color: C.ink40, fontSize: 8 }, venueEmpty: { minHeight: 220, alignItems: 'center', justifyContent: 'center' }, venueEmptyTitle: { marginTop: 8, color: C.ink, fontSize: 11, fontWeight: '900' }, venueEmptyMeta: { marginTop: 4, color: C.ink40, fontSize: 8 }, singleInput: { minHeight: 52, paddingHorizontal: 13, borderRadius: 13, borderWidth: 1, borderColor: C.line, backgroundColor: C.surface, color: C.ink, fontSize: 12, fontWeight: '700' }, inputError: { marginTop: 6, color: C.brick, fontSize: 8, fontWeight: '800' }, endPlayerRow: { minHeight: 59, flexDirection: 'row', alignItems: 'center', gap: 9, borderBottomWidth: 1, borderColor: C.line }, returnPill: { minHeight: 28, paddingHorizontal: 8, alignItems: 'center', justifyContent: 'center', borderRadius: 14, backgroundColor: '#E5F0ED' }, returnText: { color: C.teal, fontSize: 6, fontWeight: '900' }, donePill: { backgroundColor: '#F8EDE9' }, donePillText: { color: C.brick }, sheetActions: { marginTop: 16, flexDirection: 'row', gap: 9 }, confirmButton: { minHeight: 49, flex: 1, alignItems: 'center', justifyContent: 'center', borderRadius: 13, backgroundColor: C.ink }, confirmText: { color: C.surface, fontSize: 9, fontWeight: '900' },
   announcementInput: { minHeight: 105, paddingTop: 13, textAlignVertical: 'top' },
   tvScreen: { flex: 1, padding: 24, backgroundColor: C.ink }, tvHeader: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }, tvBrand: { color: C.optic, fontSize: 9, fontWeight: '900', letterSpacing: 1.2 }, tvTitle: { marginTop: 4, color: C.surface, fontSize: 28, fontWeight: '900' }, tvClose: { width: 44, height: 44, alignItems: 'center', justifyContent: 'center', borderRadius: 14, backgroundColor: '#304743' }, tvStats: { marginTop: 22, padding: 18, flexDirection: 'row', justifyContent: 'space-around', borderRadius: 18, backgroundColor: '#17302D' }, tvNumber: { color: C.surface, textAlign: 'center', fontSize: 30, fontWeight: '900' }, tvLabel: { marginTop: 3, color: '#9FB3AC', textAlign: 'center', fontSize: 7, fontWeight: '900', letterSpacing: .8 }, tvSection: { marginTop: 22, color: C.optic, fontSize: 9, fontWeight: '900', letterSpacing: 1 }, tvCourts: { marginTop: 10, flexDirection: 'row', flexWrap: 'wrap', gap: 10 }, tvCourt: { width: '48%', minHeight: 135, padding: 14, borderRadius: 17, backgroundColor: '#17302D' }, tvCourtOpen: { borderWidth: 1, borderColor: C.optic }, tvCourtName: { color: '#9FB3AC', fontSize: 8, fontWeight: '900' }, tvScore: { marginTop: 8, color: C.surface, fontSize: 36, fontWeight: '900' }, tvOpen: { marginTop: 13, color: C.optic, fontSize: 24, fontWeight: '900' }, tvPlayers: { marginTop: 5, color: '#C8D3CF', fontSize: 8, lineHeight: 12 }, tvNext: { marginTop: 'auto', padding: 18, borderRadius: 18, backgroundColor: C.optic }, tvNextNames: { marginTop: 8, color: '#0E2321', fontSize: 18, lineHeight: 24, fontWeight: '900' }, tvReason: { marginTop: 6, color: '#3C4A45', fontSize: 8, lineHeight: 12 },
   summaryContent: { flexGrow: 1, alignItems: 'center', justifyContent: 'center' }, summaryIcon: { width: 72, height: 72, marginBottom: 18, borderRadius: 36, alignItems: 'center', justifyContent: 'center', backgroundColor: C.optic }, summaryTitle: { marginTop: 5, color: C.ink, fontSize: 28, fontWeight: '900' }, summaryLead: { maxWidth: 300, marginTop: 7, color: C.ink40, textAlign: 'center', fontSize: 10, lineHeight: 16 }, summaryWarning: { marginTop: 10, color: C.brick, fontSize: 8, fontWeight: '800' }, summaryStats: { width: '100%', marginTop: 23, paddingVertical: 17, flexDirection: 'row', borderRadius: 18, backgroundColor: C.surface }, summaryStat: { flex: 1, alignItems: 'center' }, summaryNumber: { color: C.ink, fontSize: 27, fontWeight: '900' },

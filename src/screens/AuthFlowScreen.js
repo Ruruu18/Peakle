@@ -20,6 +20,7 @@ if (Platform.OS === 'android' && UIManager.setLayoutAnimationEnabledExperimental
 }
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { StatusBar } from 'expo-status-bar';
+import Constants, { ExecutionEnvironment } from 'expo-constants';
 import Ionicons from '@expo/vector-icons/Ionicons';
 import * as Google from 'expo-auth-session/providers/google';
 import * as WebBrowser from 'expo-web-browser';
@@ -265,8 +266,9 @@ function Field({ label, icon, error, dark = false, onFocus, onBlur, secureTextEn
   );
 }
 
-function GoogleButton({ label, onSuccess, onError, onBeforeStart, dark = false, lastUsed = false, disabled = false }) {
+function GoogleButton({ label, onSuccess, onExpoGoSignIn, onError, onBeforeStart, dark = false, lastUsed = false, disabled = false }) {
   const [busy, setBusy] = useState(false);
+  const isExpoGo = Constants.executionEnvironment === ExecutionEnvironment.StoreClient;
   const iosClientId = process.env.EXPO_PUBLIC_GOOGLE_IOS_CLIENT_ID;
   const androidClientId = process.env.EXPO_PUBLIC_GOOGLE_ANDROID_CLIENT_ID;
   const webClientId = process.env.EXPO_PUBLIC_GOOGLE_WEB_CLIENT_ID;
@@ -302,6 +304,13 @@ function GoogleButton({ label, onSuccess, onError, onBeforeStart, dark = false, 
     const canStart = await onBeforeStart?.();
     if (canStart === false) return;
     onError('');
+    if (isExpoGo) {
+      setBusy(true);
+      try { await onExpoGoSignIn(); }
+      catch (error) { onError(error.message || 'Google sign-in could not be completed.'); }
+      finally { setBusy(false); }
+      return;
+    }
     if (!configured) { onError('Add your Google OAuth client ID to enable Google sign-in.'); return; }
     setBusy(true);
     try { await promptAsync(); } catch (_) { setBusy(false); onError('Google sign-in could not be opened.'); }
@@ -309,7 +318,7 @@ function GoogleButton({ label, onSuccess, onError, onBeforeStart, dark = false, 
 
   return (
     <View style={styles.googleButtonClip}>
-      <Pressable accessibilityLabel={`${label}${lastUsed ? ', last used' : ''}`} disabled={busy || !request || disabled} onPress={start} style={({ pressed }) => [styles.googleButton, dark && styles.googleButtonDark, disabled && styles.disabledButton, pressed && styles.pressed]}>
+      <Pressable accessibilityLabel={`${label}${lastUsed ? ', last used' : ''}`} disabled={busy || (!isExpoGo && !request) || disabled} onPress={start} style={({ pressed }) => [styles.googleButton, dark && styles.googleButtonDark, disabled && styles.disabledButton, pressed && styles.pressed]}>
         <Image source={require('../../public/images/google-g.png')} style={styles.googleMark} resizeMode="contain" />
         <Text style={[styles.googleText, dark && styles.googleTextDark]}>{busy ? 'Connecting to Google…' : label}</Text>
         {lastUsed ? <View style={styles.googleLastUsed}><Text style={styles.googleLastUsedText}>LAST USED</Text></View> : null}
@@ -363,7 +372,7 @@ function Welcome({ onLogin, onCreate }) {
 }
 
 function AccountForm({ kind, onBack, onAlternate, onNewAccount, onForgot, onNeedsVerification }) {
-  const { signIn, signUp, rememberPendingVerification, signInWithGoogle, lastSignInMethod, rememberedEmail } = useAuth();
+  const { signIn, signUp, rememberPendingVerification, signInWithGoogle, signInWithGoogleOAuth, lastSignInMethod, rememberedEmail } = useAuth();
   const [name, setName] = useState('');
   const [email, setEmail] = useState(kind === 'login' ? rememberedEmail : '');
   const [password, setPassword] = useState('');
@@ -456,7 +465,7 @@ function AccountForm({ kind, onBack, onAlternate, onNewAccount, onForgot, onNeed
           {errors.form ? <Text style={styles.googleError}>{errors.form}</Text> : null}
           <Pressable disabled={busy} onPress={submit} style={({ pressed }) => [styles.primary, styles.authPrimary, (pressed || busy) && styles.pressed]}><Text style={styles.authPrimaryText}>{busy ? 'One moment…' : create ? 'Continue' : 'Log in'}</Text><Icon name="arrow-forward" color={C.ink} /></Pressable>
           <View style={styles.orRow}><View style={[styles.orLine, styles.orLineDark]} /><Text style={[styles.orText, styles.orTextDark]}>OR</Text><View style={[styles.orLine, styles.orLineDark]} /></View>
-          <GoogleButton dark onBeforeStart={() => create && !acceptedTerms ? requestRegistrationConsent({ waitForDecision: true }) : true} lastUsed={!create && lastSignInMethod === 'google'} label={create ? 'Sign up with Google' : 'Sign in with Google'} onError={setGoogleError} onSuccess={async (googleUser) => { setGoogleError(''); await signInWithGoogle(googleUser); }} />
+          <GoogleButton dark onBeforeStart={() => create && !acceptedTerms ? requestRegistrationConsent({ waitForDecision: true }) : true} lastUsed={!create && lastSignInMethod === 'google'} label={create ? 'Sign up with Google' : 'Sign in with Google'} onError={setGoogleError} onExpoGoSignIn={signInWithGoogleOAuth} onSuccess={async (googleUser) => { setGoogleError(''); await signInWithGoogle(googleUser); }} />
           {googleError ? <Text style={styles.googleError}>{googleError}</Text> : null}
           <View style={styles.switchRow}><Text style={styles.switchCopyDark}>{create ? 'Already have an account?' : 'New to Peakle?'}</Text><Pressable onPress={onAlternate}><Text style={styles.switchLinkDark}>{create ? 'Log in' : 'Create account'}</Text></Pressable></View>
         </ScrollView>
@@ -467,7 +476,7 @@ function AccountForm({ kind, onBack, onAlternate, onNewAccount, onForgot, onNeed
 }
 
 function VerifyEmail({ email, onLogin, onUseDifferentEmail }) {
-  const { resendSignupConfirmation, signInWithGoogle, authLinkError } = useAuth();
+  const { resendSignupConfirmation, signInWithGoogle, signInWithGoogleOAuth, authLinkError } = useAuth();
   const [cooldown, setCooldown] = useState(60);
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState('');
@@ -507,7 +516,7 @@ function VerifyEmail({ email, onLogin, onUseDifferentEmail }) {
         <Pressable disabled={busy || cooldown > 0} onPress={resend} style={({ pressed }) => [styles.primary, styles.authPrimary, styles.verificationPrimary, (pressed || busy || cooldown > 0) && styles.disabledButton]}><Text style={styles.authPrimaryText}>{busy ? 'Sending…' : cooldown > 0 ? `Resend in ${cooldown}s` : 'Resend verification email'}</Text><Icon name="refresh-outline" color={C.ink} /></Pressable>
         <View style={styles.orRow}><View style={[styles.orLine, styles.orLineDark]} /><Text style={[styles.orText, styles.orTextDark]}>ALREADY USE GOOGLE?</Text><View style={[styles.orLine, styles.orLineDark]} /></View>
         <Text style={styles.verificationGoogleHint}>If you originally joined with Google, continue with Google instead. Google accounts do not need a separate Peakle verification email.</Text>
-        <GoogleButton dark label="Continue with Google" onError={setGoogleError} onSuccess={async (googleUser) => { setGoogleError(''); await signInWithGoogle(googleUser); }} />
+        <GoogleButton dark label="Continue with Google" onError={setGoogleError} onExpoGoSignIn={signInWithGoogleOAuth} onSuccess={async (googleUser) => { setGoogleError(''); await signInWithGoogle(googleUser); }} />
         {googleError ? <Text accessibilityRole="alert" style={styles.googleError}>{googleError}</Text> : null}
         <Pressable onPress={onLogin} style={({ pressed }) => [styles.verificationSecondary, pressed && styles.pressed]}><Text style={styles.switchLinkDark}>Back to log in</Text></Pressable>
         <Pressable onPress={onUseDifferentEmail} style={({ pressed }) => [styles.verificationSecondary, pressed && styles.pressed]}><Text style={styles.authLink}>Use a different email</Text></Pressable>

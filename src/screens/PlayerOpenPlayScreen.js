@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useState } from 'react';
-import { ActivityIndicator, Pressable, RefreshControl, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
+import { ActivityIndicator, Pressable, RefreshControl, StyleSheet, Text, TextInput, View } from 'react-native';
 import Ionicons from '@expo/vector-icons/Ionicons';
 import { distanceInKm, formatDistance, useUserLocation } from '../context/LocationContext';
 import { createDarkStyleSheet, DARK_CONTENT_COLORS, useTheme } from '../context/ThemeContext';
@@ -13,6 +13,7 @@ import {
 import { requireSupabase } from '../lib/supabase';
 import { useOperations } from '../context/OperationsContext';
 import ConnectionStatus from '../components/ConnectionStatus';
+import ScrollView from '../components/FocusResetScrollView';
 
 const LIGHT_C = { ink: '#0E2321', paper: '#F3F5EF', surface: '#FFFFFF', optic: '#D6E94A', teal: '#1C6B66', brick: '#B6472E', ink70: '#3C4A45', ink40: '#7C8983', line: '#DDE3DA' };
 let C = LIGHT_C;

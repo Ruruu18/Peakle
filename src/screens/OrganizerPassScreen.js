@@ -1,8 +1,9 @@
 import React, { useMemo, useState } from 'react';
-import { ActivityIndicator, Modal, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { ActivityIndicator, Modal, Pressable, StyleSheet, Text, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { StatusBar } from 'expo-status-bar';
 import Ionicons from '@expo/vector-icons/Ionicons';
+import ScrollView from '../components/FocusResetScrollView';
 import { useOrganizerPass } from '../context/OrganizerPassContext';
 import { useAppMode } from '../context/AppModeContext';
 import { getOrganizerPassPlan, ORGANIZER_PASS_PLANS } from '../services/organizerPass';

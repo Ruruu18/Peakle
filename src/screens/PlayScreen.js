@@ -8,7 +8,6 @@ import {
   Modal,
   Platform,
   Pressable,
-  ScrollView,
   StyleSheet,
   Text,
   TextInput,
@@ -18,13 +17,12 @@ import {
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { StatusBar } from 'expo-status-bar';
 import Ionicons from '@expo/vector-icons/Ionicons';
-import OpenPlayScreen from './OpenPlayScreen';
 import PlayerOpenPlayScreen from './PlayerOpenPlayScreen';
+import ScrollView from '../components/FocusResetScrollView';
 import { useAuth } from '../context/AuthContext';
-import { useOrganizerPass } from '../context/OrganizerPassContext';
 import { createDarkStyleSheet, DARK_CONTENT_COLORS, useTheme } from '../context/ThemeContext';
 import { listVenues, loadUnfinishedMatch, saveCompletedMatch, saveUnfinishedMatch } from '../services/database';
-import useNearbyPlayers from '../hooks/useNearbyPlayers';
+import { useNearbyPlayersContext } from '../context/NearbyPlayersContext';
 
 const LIGHT_C = {
   ink: '#0E2321', paper: '#F3F5EF', surface: '#FFFFFF', optic: '#D6E94A',
@@ -299,10 +297,10 @@ function NearbyLobby({ players, invited, outgoingInvites, onToggle, full, visibl
   );
 }
 
-function SetupScreen({ courts, nearbyPlayers, nearbyPresence, currentUserName, currentUserId, currentUserAvatar, onStart, focusChallenge, onJoinOpenPlay, onHostOpenPlay, unfinishedMatch, onResume }) {
+function SetupScreen({ courts, nearbyPlayers, nearbyPresence, currentUserName, currentUserId, currentUserAvatar, onStart, focusChallenge, onJoinOpenPlay, onFindPlay, unfinishedMatch, onResume, openNearbyPlayersToken }) {
   const [matchType, setMatchType] = useState('doubles');
   const [mode, setMode] = useState('casual');
-  const [access, setAccess] = useState('private');
+  const [access, setAccess] = useState(() => openNearbyPlayersToken ? 'public' : 'private');
   const [target, setTarget] = useState(11);
   const [bestOf, setBestOf] = useState(3);
   const [winByTwo, setWinByTwo] = useState(true);
@@ -314,7 +312,28 @@ function SetupScreen({ courts, nearbyPlayers, nearbyPresence, currentUserName, c
   const [showCourts, setShowCourts] = useState(false);
   const setupId = useRef(`${Date.now()}-${Math.random().toString(36).slice(2)}`).current;
   const appliedInviteIds = useRef(new Set());
+  const scrollRef = useRef(null);
+  const nearbySectionY = useRef(0);
+  const pendingNearbyScroll = useRef(Boolean(openNearbyPlayersToken));
+  const handledNearbyToken = useRef(null);
   const requiredPlayers = matchType === 'doubles' ? 2 : 1;
+
+  const scrollToNearbyPlayers = () => {
+    if (!nearbySectionY.current) return;
+    pendingNearbyScroll.current = false;
+    scrollRef.current?.scrollTo({ y: Math.max(0, nearbySectionY.current - 16), animated: true });
+  };
+
+  useEffect(() => {
+    if (!openNearbyPlayersToken || handledNearbyToken.current === openNearbyPlayersToken) return undefined;
+    handledNearbyToken.current = openNearbyPlayersToken;
+    pendingNearbyScroll.current = true;
+    setAccess('public');
+    setPlayers(emptyLineup(currentUserName));
+    setInvited([]);
+    const timer = setTimeout(scrollToNearbyPlayers, 250);
+    return () => clearTimeout(timer);
+  }, [currentUserName, openNearbyPlayersToken]);
 
   const updatePlayer = (team, index, value) => {
     setPlayers((current) => current.map((group, groupIndex) => (
@@ -327,10 +346,33 @@ function SetupScreen({ courts, nearbyPlayers, nearbyPresence, currentUserName, c
   useEffect(() => { if (!court && courts.length) setCourt(courts[0]); }, [courts, court]);
   const nearbyScorers = nearbyPlayers.filter((person) => !onCourtScorers.includes(person.name));
   const scorerIsValid = scorerSource === 'court' ? onCourtScorers.includes(scorer) : nearbyScorers.some((person) => person.name === scorer);
-  const canStart = Boolean(court) && scorerIsValid && trimmedPlayers.flat().every(Boolean);
+  const joinedInvite = nearbyPresence.joinedInvite;
+  const joinedSender = joinedInvite?.sender;
+  const canStart = !joinedInvite && Boolean(court) && scorerIsValid && trimmedPlayers.flat().every(Boolean);
   const acceptedProfiles = nearbyPresence.outgoingInvites.filter((invite) => invite.status === 'accepted' && invite.match_payload?.setupId === setupId).map((invite) => invite.recipient).filter(Boolean);
-  const registeredPlayers = [{ id: currentUserId, name: currentUserName }, ...acceptedProfiles.map((profile) => ({ id: profile.id, name: profile.display_name }))];
+  const registeredPlayers = [{ id: currentUserId, name: currentUserName, avatar: currentUserAvatar }, ...acceptedProfiles.map((profile) => ({ id: profile.id, name: profile.display_name, avatar: profile.avatar_url }))];
+  const lineupProfiles = [...nearbyPlayers, ...(joinedSender ? [{ id: joinedSender.id, name: joinedSender.display_name, avatar: joinedSender.avatar_url }] : [])]
+    .filter((profile, index, rows) => profile?.id && rows.findIndex((candidate) => candidate?.id === profile.id) === index);
   const matchConfiguration = { matchType, mode, access, target, bestOf, winByTwo, players: trimmedPlayers, registeredPlayers, court, scorer, scorerSource, focusChallenge };
+
+  useEffect(() => {
+    if (!joinedInvite?.id || !joinedSender?.display_name) return;
+    const payload = joinedInvite.match_payload || {};
+    const joinedMatchType = payload.matchType === 'singles' ? 'singles' : 'doubles';
+    const senderName = joinedSender.display_name;
+    setMatchType(joinedMatchType);
+    setMode(payload.mode === 'ranked' ? 'ranked' : 'casual');
+    setAccess('public');
+    setTarget(Number(payload.target) || 11);
+    setBestOf(Number(payload.bestOf) || 3);
+    setWinByTwo(payload.winByTwo !== false);
+    setPlayers(joinedMatchType === 'singles'
+      ? [[senderName], [currentUserName || 'You']]
+      : [[senderName, currentUserName || 'You'], ['', '']]);
+    setScorerSource('court');
+    setScorer(senderName);
+    if (payload.court) setCourt(payload.court);
+  }, [currentUserName, joinedInvite?.id, joinedSender?.display_name]);
 
   useEffect(() => {
     const invite = nearbyPresence.outgoingInvites.find((item) => item.status === 'accepted' && item.match_payload?.setupId === setupId && !appliedInviteIds.current.has(item.id) && item.recipient?.display_name);
@@ -380,14 +422,12 @@ function SetupScreen({ courts, nearbyPlayers, nearbyPresence, currentUserName, c
   };
 
   return (
-    <ScrollView contentContainerStyle={styles.content} showsVerticalScrollIndicator={false} keyboardShouldPersistTaps="handled">
+    <ScrollView ref={scrollRef} contentContainerStyle={styles.content} showsVerticalScrollIndicator={false} keyboardShouldPersistTaps="handled">
       <Header
         eyebrow="MATCH DAY"
         title="Set up a match"
         action={<View style={styles.liveChip}><View style={styles.liveDot} /><Text style={styles.liveChipText}>COURT-SIDE</Text></View>}
       />
-
-      <IncomingInvites invites={nearbyPresence.incomingInvites} onRespond={nearbyPresence.respond} />
 
       {unfinishedMatch && <View style={styles.resumeCard}><View style={styles.resumeIcon}><Icon name="bookmark" size={20} color={C.ink} /></View><View style={styles.flex}><Text style={styles.resumeEyebrow}>UNFINISHED MATCH SAVED</Text><Text style={styles.resumeTitle}>{teamName(unfinishedMatch.players[0])} · {unfinishedMatch.scores[0]}–{unfinishedMatch.scores[1]} · {teamName(unfinishedMatch.players[1])}</Text><Text style={styles.resumeMeta}>Continue from the saved score when you have court time again.</Text></View><Pressable accessibilityRole="button" onPress={onResume} style={({ pressed }) => [styles.resumeButton, pressed && styles.pressed]}><Text style={styles.resumeButtonText}>Resume</Text><Icon name="play" size={13} color={C.surface} /></Pressable></View>}
 
@@ -396,12 +436,11 @@ function SetupScreen({ courts, nearbyPlayers, nearbyPresence, currentUserName, c
         <View style={styles.flex}><Text style={styles.openPlayEntryEyebrow}>PLAYER OPEN PLAY</Text><Text style={styles.openPlayEntryTitle}>Join an organizer session</Text><Text style={styles.openPlayEntryMeta}>Discover public sessions or enter a six-character invitation code.</Text></View>
         <Icon name="chevron-forward" color={C.teal} />
       </Pressable>
-      <Pressable onPress={onHostOpenPlay} style={({ pressed }) => [styles.hostOpenPlayEntry, pressed && styles.pressed]}>
-        <View style={styles.hostOpenPlayIcon}><Icon name="key-outline" size={20} color={C.teal} /></View>
-        <View style={styles.flex}><Text style={styles.openPlayEntryEyebrow}>ORGANIZER MODE</Text><Text style={styles.openPlayEntryTitle}>Host open play</Text><Text style={styles.openPlayEntryMeta}>Publish registration, approve players, and run every court.</Text></View>
+      <Pressable onPress={onFindPlay} style={({ pressed }) => [styles.matchmakingEntry, pressed && styles.pressed]}>
+        <View style={styles.matchmakingEntryIcon}><Icon name="search" size={21} color="#0E2321" /></View>
+        <View style={styles.flex}><Text style={styles.openPlayEntryEyebrow}>FIND A GAME</Text><Text style={styles.openPlayEntryTitle}>Match with players</Text><Text style={styles.openPlayEntryMeta}>Publish availability or find a partner, opponent, or substitute.</Text></View>
         <Icon name="chevron-forward" color={C.teal} />
       </Pressable>
-
       <View style={styles.introCard}>
         <View style={styles.introIcon}><Icon name="tennisball-outline" size={26} color="#0E2321" /></View>
         <View style={styles.introCopy}><Text style={[styles.introTitle, { color: '#0E2321' }]}>Ready when you are.</Text><Text style={[styles.bodySmall, { color: '#3C4A45' }]}>Choose the format, add players, then keep score point by point.</Text></View>
@@ -420,8 +459,8 @@ function SetupScreen({ courts, nearbyPlayers, nearbyPresence, currentUserName, c
         onPress={() => onStart(matchConfiguration)}
         style={({ pressed }) => [styles.quickStartButton, !canStart && styles.disabled, pressed && canStart && styles.pressed]}
       >
-        <View style={styles.quickStartIcon}><Icon name="person" size={17} color="#0E2321" /></View>
-        <View style={styles.quickStartCopy}><Text style={styles.quickStartTitle}>Choose the first server</Text><Text numberOfLines={1} style={styles.quickStartMeta}>{scorer || 'Scorer needed'} will make the pre-game decision</Text></View>
+        <View style={styles.quickStartIcon}><Icon name={joinedInvite ? 'time-outline' : 'person'} size={17} color="#0E2321" /></View>
+        <View style={styles.quickStartCopy}><Text style={styles.quickStartTitle}>{joinedInvite ? `Joined ${joinedSender?.display_name || 'host'}'s match` : 'Choose the first server'}</Text><Text numberOfLines={1} style={styles.quickStartMeta}>{joinedInvite ? 'Your lineup is ready. The host controls match setup and scoring.' : `${scorer || 'Scorer needed'} will make the pre-game decision`}</Text></View>
         <Icon name="arrow-forward" size={18} color={C.surface} />
       </Pressable>
 
@@ -438,7 +477,7 @@ function SetupScreen({ courts, nearbyPlayers, nearbyPresence, currentUserName, c
         { value: 'public', label: 'Public', icon: 'globe-outline' },
       ]} />
 
-      {access === 'public' && <NearbyLobby players={nearbyPlayers} invited={invited} outgoingInvites={nearbyPresence.outgoingInvites.filter((invite) => invite.match_payload?.setupId === setupId)} onToggle={toggleNearbyPlayer} full={trimmedPlayers.flat().every(Boolean)} visible={nearbyPresence.visible} loading={nearbyPresence.loading} error={nearbyPresence.error} onVisibility={nearbyPresence.setDiscoveryVisible} />}
+      {access === 'public' && <View onLayout={(event) => { nearbySectionY.current = event.nativeEvent.layout.y; if (pendingNearbyScroll.current) requestAnimationFrame(scrollToNearbyPlayers); }}><NearbyLobby players={nearbyPlayers} invited={invited} outgoingInvites={nearbyPresence.outgoingInvites.filter((invite) => invite.match_payload?.setupId === setupId)} onToggle={toggleNearbyPlayer} full={trimmedPlayers.flat().every(Boolean)} visible={nearbyPresence.visible} loading={nearbyPresence.loading} error={nearbyPresence.error} onVisibility={nearbyPresence.setDiscoveryVisible} /></View>}
 
       <View style={styles.fieldGroup}>
         <Text style={styles.sectionLabel}>COURT</Text>
@@ -476,7 +515,7 @@ function SetupScreen({ courts, nearbyPlayers, nearbyPresence, currentUserName, c
 
       <View style={styles.fieldGroup}>
         <Text style={styles.sectionLabel}>COURT LINEUP</Text>
-        <CourtLineup players={players} matchType={matchType} court={court} onSwap={() => setPlayers(([first, second]) => [second, first])} currentUserName={currentUserName} currentUserAvatar={currentUserAvatar} registeredPlayers={nearbyPlayers} />
+        <CourtLineup players={players} matchType={matchType} court={court} onSwap={() => setPlayers(([first, second]) => [second, first])} currentUserName={currentUserName} currentUserAvatar={currentUserAvatar} registeredPlayers={lineupProfiles} />
         <Text style={styles.lineupHint}>Edit a player below or swap both sides directly on the court.</Text>
         <View style={styles.teamsGrid}>
           {[0, 1].map((team) => (
@@ -991,13 +1030,12 @@ function ResultScreen({ result, onRematch, onNewMatch }) {
   );
 }
 
-export default function PlayScreen({ route, navigation }) {
+export default function PlayScreen({ route }) {
   const { isDark } = useTheme();
   C = isDark ? { ...LIGHT_C, ...DARK_CONTENT_COLORS } : LIGHT_C;
   styles = isDark ? darkStyles : lightStyles;
   const { user } = useAuth();
-  const { hasOrganizerAccess } = useOrganizerPass();
-  const nearbyPresence = useNearbyPlayers(25);
+  const nearbyPresence = useNearbyPlayersContext();
   const [courts, setCourts] = useState([]);
   const [screen, setScreen] = useState('setup');
   const [match, setMatch] = useState(null);
@@ -1007,6 +1045,7 @@ export default function PlayScreen({ route, navigation }) {
   const [unfinishedMatch, setUnfinishedMatch] = useState(null);
   const handledStartToken = useRef(null);
   const handledFocusToken = useRef(null);
+  const handledNearbyToken = useRef(null);
 
   useEffect(() => {
     listVenues().then((venues) => {
@@ -1086,6 +1125,16 @@ export default function PlayScreen({ route, navigation }) {
   }, [route?.params?.startLiveToken]);
 
   useEffect(() => {
+    const token = route?.params?.nearbyPlayersToken;
+    if (!token || handledNearbyToken.current === token) return;
+    handledNearbyToken.current = token;
+    setMatch(null);
+    setResult(null);
+    setScreen('setup');
+    setOpenPlayMode(null);
+  }, [route?.params?.nearbyPlayersToken]);
+
+  useEffect(() => {
     const openPlayCode = route?.params?.openPlayCode;
     if (!openPlayCode) return;
     setOpenPlayMode('join');
@@ -1094,8 +1143,8 @@ export default function PlayScreen({ route, navigation }) {
   return (
     <SafeAreaView style={styles.safe}>
       <StatusBar style={screen === 'live' || isDark ? 'light' : 'dark'} backgroundColor={screen === 'live' ? '#0E2321' : C.paper} />
-      {openPlayMode === 'host' ? <OpenPlayScreen onExit={() => setOpenPlayMode(null)} /> : openPlayMode === 'join' ? <PlayerOpenPlayScreen initialCode={route?.params?.openPlayCode || ''} onBack={() => setOpenPlayMode(null)} /> : <>
-      {screen === 'setup' && <SetupScreen courts={courts} nearbyPlayers={nearbyPresence.players} nearbyPresence={nearbyPresence} currentUserName={user?.name} currentUserId={user?.id} currentUserAvatar={user?.picture} onStart={startMatch} focusChallenge={focusChallenge} onJoinOpenPlay={() => setOpenPlayMode('join')} onHostOpenPlay={() => { if (hasOrganizerAccess) setOpenPlayMode('host'); else navigation.navigate('Pass'); }} unfinishedMatch={unfinishedMatch} onResume={resumeMatch} />}
+      {openPlayMode === 'join' ? <PlayerOpenPlayScreen initialCode={route?.params?.openPlayCode || ''} onBack={() => setOpenPlayMode(null)} /> : <>
+      {screen === 'setup' && <SetupScreen courts={courts} nearbyPlayers={nearbyPresence.players} nearbyPresence={nearbyPresence} currentUserName={user?.name} currentUserId={user?.id} currentUserAvatar={user?.picture} onStart={startMatch} focusChallenge={focusChallenge} onJoinOpenPlay={() => setOpenPlayMode('join')} onFindPlay={() => navigation.navigate('Pickleball', { openTab: 'Find play', ownerTab: 'Play' })} unfinishedMatch={unfinishedMatch} onResume={resumeMatch} openNearbyPlayersToken={route?.params?.nearbyPlayersToken} />}
       {screen === 'pregame' && match && <PreGameScreen match={match} onBack={() => setScreen('setup')} onStart={startLiveMatch} />}
       {screen === 'live' && match && <LiveMatch match={match} onFinish={finishMatch} />}
       {screen === 'result' && result && <ResultScreen result={result} onRematch={() => startMatch(match)} onNewMatch={reset} />}
@@ -1117,8 +1166,7 @@ const lightStyles = StyleSheet.create({
   liveChip: { minHeight: 34, paddingHorizontal: 10, flexDirection: 'row', alignItems: 'center', gap: 6, borderRadius: 18, backgroundColor: '#E5F0ED' }, liveDot: { width: 7, height: 7, borderRadius: 4, backgroundColor: C.teal }, liveChipText: { color: C.teal, fontSize: 8, fontWeight: '900', letterSpacing: .7 },
   invitesCard: { marginBottom: 12, padding: 13, borderRadius: 17, borderWidth: 1, borderColor: '#B9D22C', backgroundColor: '#FAFCEB' }, invitesTitleRow: { flexDirection: 'row', alignItems: 'center', gap: 9 }, inviteBell: { width: 36, height: 36, borderRadius: 11, alignItems: 'center', justifyContent: 'center', backgroundColor: C.optic }, invitesEyebrow: { color: C.teal, fontSize: 7, fontWeight: '900', letterSpacing: .7 }, invitesTitle: { marginTop: 2, color: C.ink, fontSize: 11, fontWeight: '900' }, inviteRequest: { minHeight: 52, marginTop: 9, paddingTop: 9, flexDirection: 'row', alignItems: 'center', gap: 7, borderTopWidth: 1, borderColor: '#DFE8AD' }, inviteRequestCopy: { flex: 1, minWidth: 0 }, inviteSender: { color: C.ink, fontSize: 10, fontWeight: '900' }, inviteDetail: { marginTop: 2, color: C.ink40, fontSize: 7, lineHeight: 10 }, declineInvite: { width: 34, height: 34, borderRadius: 10, alignItems: 'center', justifyContent: 'center', borderWidth: 1, borderColor: '#E8C7BF', backgroundColor: C.surface }, acceptInvite: { minWidth: 62, height: 34, paddingHorizontal: 9, borderRadius: 10, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 3, backgroundColor: C.optic }, acceptInviteText: { color: C.ink, fontSize: 8, fontWeight: '900' },
   introCard: { padding: 14, flexDirection: 'row', alignItems: 'center', gap: 12, borderRadius: 18, borderBottomLeftRadius: 8, borderBottomRightRadius: 8, backgroundColor: C.optic }, introIcon: { width: 48, height: 48, alignItems: 'center', justifyContent: 'center', borderRadius: 14, backgroundColor: 'rgba(255,255,255,.48)' }, introCopy: { flex: 1 }, introTitle: { color: C.ink, fontSize: 14, fontWeight: '800' }, bodySmall: { marginTop: 3, color: C.ink40, fontSize: 10, lineHeight: 15 },
-  openPlayEntry: { minHeight: 78, marginBottom: 8, padding: 12, flexDirection: 'row', alignItems: 'center', gap: 10, borderRadius: 18, borderBottomLeftRadius: 8, borderBottomRightRadius: 8, borderWidth: 1, borderColor: C.teal, backgroundColor: C.surface }, openPlayEntryIcon: { width: 44, height: 44, borderRadius: 13, alignItems: 'center', justifyContent: 'center', backgroundColor: C.optic }, openPlayEntryEyebrow: { color: C.teal, fontSize: 7, fontWeight: '900', letterSpacing: .7 }, openPlayEntryTitle: { marginTop: 2, color: C.ink, fontSize: 11, fontWeight: '900' }, openPlayEntryMeta: { marginTop: 3, color: C.ink40, fontSize: 7, lineHeight: 11 },
-  hostOpenPlayEntry: { minHeight: 70, marginBottom: 12, padding: 11, flexDirection: 'row', alignItems: 'center', gap: 10, borderRadius: 16, borderWidth: 1, borderColor: C.line, backgroundColor: C.surface }, hostOpenPlayIcon: { width: 40, height: 40, borderRadius: 12, alignItems: 'center', justifyContent: 'center', backgroundColor: '#E5F0ED' },
+  openPlayEntry: { minHeight: 78, marginBottom: 8, padding: 12, flexDirection: 'row', alignItems: 'center', gap: 10, borderRadius: 18, borderBottomLeftRadius: 8, borderBottomRightRadius: 8, borderWidth: 1, borderColor: C.teal, backgroundColor: C.surface }, openPlayEntryIcon: { width: 44, height: 44, borderRadius: 13, alignItems: 'center', justifyContent: 'center', backgroundColor: C.optic }, matchmakingEntry: { minHeight: 78, marginBottom: 8, padding: 12, flexDirection: 'row', alignItems: 'center', gap: 10, borderRadius: 18, borderWidth: 1, borderColor: C.line, backgroundColor: C.surface }, matchmakingEntryIcon: { width: 44, height: 44, borderRadius: 13, alignItems: 'center', justifyContent: 'center', backgroundColor: '#E5F0ED' }, openPlayEntryEyebrow: { color: C.teal, fontSize: 7, fontWeight: '900', letterSpacing: .7 }, openPlayEntryTitle: { marginTop: 2, color: C.ink, fontSize: 11, fontWeight: '900' }, openPlayEntryMeta: { marginTop: 3, color: C.ink40, fontSize: 7, lineHeight: 11 },
   focusSetupCard: { minHeight: 82, marginTop: 10, padding: 12, flexDirection: 'row', alignItems: 'center', gap: 10, borderRadius: 16, borderWidth: 1, borderColor: '#B9D22C', backgroundColor: '#F9FCEB' }, focusSetupIcon: { width: 40, height: 40, borderRadius: 12, alignItems: 'center', justifyContent: 'center', backgroundColor: C.optic }, focusSetupCopy: { flex: 1 }, focusSetupEyebrow: { color: C.teal, fontSize: 7, fontWeight: '900', letterSpacing: .7 }, focusSetupTitle: { marginTop: 3, color: C.ink, fontSize: 10, lineHeight: 14, fontWeight: '800' }, focusSetupMeta: { marginTop: 3, color: C.ink40, fontSize: 7 },
   preGameContent: { flexGrow: 1 }, drawHero: { padding: 22, alignItems: 'center', borderRadius: 24, borderBottomLeftRadius: 10, borderBottomRightRadius: 10, backgroundColor: C.ink }, drawHeroIcon: { width: 66, height: 66, marginBottom: 13, alignItems: 'center', justifyContent: 'center', borderRadius: 33, borderWidth: 6, borderColor: 'rgba(255,255,255,.16)', backgroundColor: C.optic }, drawEyebrow: { color: '#9FB3AC', fontSize: 8, fontWeight: '900', letterSpacing: 1 }, drawTitle: { marginTop: 4, color: C.surface, fontSize: 24, lineHeight: 30, fontWeight: '900', textAlign: 'center' }, drawLead: { maxWidth: 300, marginTop: 6, color: '#CBD7D2', fontSize: 10, lineHeight: 15, textAlign: 'center' }, drawTeams: { marginTop: 13, flexDirection: 'row', alignItems: 'stretch', gap: 10 }, drawTeam: { flex: 1, minHeight: 218, padding: 13, alignItems: 'center', borderRadius: 20, borderBottomLeftRadius: 9, borderBottomRightRadius: 9, borderWidth: 1, borderColor: C.line, backgroundColor: C.surface }, drawTeamAway: { backgroundColor: '#FFFDFC' }, drawTeamWinner: { borderWidth: 2, borderColor: C.optic, backgroundColor: '#FAFCEB' }, drawTeamBadge: { width: 36, height: 36, alignItems: 'center', justifyContent: 'center', borderRadius: 11, backgroundColor: C.teal }, drawTeamBadgeAway: { backgroundColor: C.brick }, drawTeamBadgeText: { color: C.surface, fontSize: 9, fontWeight: '900' }, drawTeamName: { minHeight: 38, marginTop: 9, color: C.ink, fontSize: 11, lineHeight: 15, fontWeight: '900', textAlign: 'center' }, serverChoices: { width: '100%', marginTop: 5, marginBottom: 12, gap: 6 }, serverChoice: { minHeight: 34, paddingHorizontal: 7, flexDirection: 'row', alignItems: 'center', gap: 5, borderRadius: 10, borderWidth: 1, borderColor: C.line, backgroundColor: C.paper }, serverChoiceSelected: { borderColor: '#B9D22C', backgroundColor: C.optic }, serverChoiceText: { flex: 1, color: C.ink70, fontSize: 7, fontWeight: '800' }, serverChoiceTextSelected: { color: C.ink, fontWeight: '900' }, drawServeStatus: { minHeight: 29, marginTop: 'auto', paddingHorizontal: 8, flexDirection: 'row', alignItems: 'center', gap: 4, borderRadius: 15, backgroundColor: C.paper }, drawServeStatusActive: { backgroundColor: C.optic }, drawServeStatusText: { color: C.ink40, fontSize: 6, fontWeight: '900', letterSpacing: .5 }, drawServeStatusTextActive: { color: C.ink }, preGameSummary: { marginTop: 13, paddingHorizontal: 13, borderRadius: 17, borderWidth: 1, borderColor: C.line, backgroundColor: C.surface }, preGameSummaryRow: { minHeight: 65, flexDirection: 'row', alignItems: 'center', gap: 10, borderBottomWidth: 1, borderColor: C.line }, preGameSummaryLabel: { color: C.ink40, fontSize: 7, fontWeight: '900', letterSpacing: .7 }, preGameSummaryValue: { marginTop: 2, color: C.ink, fontSize: 11, fontWeight: '900' }, preGameBack: { alignSelf: 'center', minHeight: 44, marginTop: 8, paddingHorizontal: 10, flexDirection: 'row', alignItems: 'center', gap: 5 }, preGameBackText: { color: C.ink40, fontSize: 9, fontWeight: '700' },
   quickStartButton: { minHeight: 60, marginTop: 10, paddingHorizontal: 12, flexDirection: 'row', alignItems: 'center', gap: 10, borderRadius: 15, backgroundColor: C.ink }, quickStartIcon: { width: 36, height: 36, alignItems: 'center', justifyContent: 'center', borderRadius: 18, backgroundColor: C.optic }, quickStartCopy: { flex: 1, minWidth: 0 }, quickStartTitle: { color: C.surface, fontSize: 11, fontWeight: '900' }, quickStartMeta: { marginTop: 3, color: 'rgba(255,255,255,.58)', fontSize: 7 },

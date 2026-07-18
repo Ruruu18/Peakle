@@ -122,6 +122,12 @@ export async function markNotificationRead(id) {
   if (error) throw error;
 }
 
+export async function markAllNotificationsRead() {
+  const { data, error } = await requireSupabase().rpc('mark_all_notifications_read');
+  if (error) throw error;
+  return data || 0;
+}
+
 export async function publishOpenPlayAnnouncement(sessionId, body) {
   const client = requireSupabase();
   const { data: auth } = await client.auth.getUser();

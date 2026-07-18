@@ -1,10 +1,11 @@
 import React, { useCallback, useState } from 'react';
-import { ActivityIndicator, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
+import { ActivityIndicator, Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
 import { useFocusEffect } from '@react-navigation/native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { StatusBar } from 'expo-status-bar';
 import Ionicons from '@expo/vector-icons/Ionicons';
 import OpenPlayScreen from './OpenPlayScreen';
+import ScrollView from '../components/FocusResetScrollView';
 import { useOpenPlaySession } from '../context/OpenPlaySessionContext';
 import { useOrganizerPass } from '../context/OrganizerPassContext';
 import { createDarkStyleSheet, DARK_CONTENT_COLORS, useTheme } from '../context/ThemeContext';
@@ -98,6 +99,7 @@ export function OrganizerPlayersScreen() {
 export function OrganizerMoreScreen({ navigation }) {
   useOrganizerTheme();
   const destinations = [
+    { route: 'Pickleball', icon: 'trophy-outline', title: 'Programs & insights', detail: 'Clinics, leagues, recurring sessions, memberships, and venue reports.' },
     { route: 'Pass', icon: 'card-outline', title: 'Subscription & access', detail: 'Plan status and payment-free demo controls.' },
     { route: 'Venue', icon: 'business-outline', title: 'Venue management', detail: 'Manage courts, availability, pricing, and operations.' },
     { route: 'Staff', icon: 'key-outline', title: 'Staff access', detail: 'Assign managers, front desk, monitors, scorers, and viewers.' },

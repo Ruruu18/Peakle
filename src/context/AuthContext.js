@@ -1,12 +1,29 @@
 import React, { createContext, useContext, useEffect, useMemo, useState } from 'react';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Linking } from 'react-native';
+import { makeRedirectUri } from 'expo-auth-session';
+import * as WebBrowser from 'expo-web-browser';
 import { isSupabaseConfigured, requireSupabase, supabase } from '../lib/supabase';
 
 const AuthContext = createContext(null);
 const PENDING_VERIFICATION_EMAIL_KEY = '@peakle/pending-verification-email';
 const LAST_SIGN_IN_METHOD_KEY = '@peakle/last-sign-in-method';
 const REMEMBERED_EMAIL_KEY = '@peakle/remembered-email';
+const ONBOARDING_SAVE_TIMEOUT_MS = 15000;
+
+async function withTimeout(promise, timeoutMs, message) {
+  let timeoutId;
+  try {
+    return await Promise.race([
+      promise,
+      new Promise((_, reject) => {
+        timeoutId = setTimeout(() => reject(new Error(message)), timeoutMs);
+      }),
+    ]);
+  } finally {
+    clearTimeout(timeoutId);
+  }
+}
 
 function mapUser(authUser, profile, isAdmin = false) {
   if (!authUser) return null;
@@ -82,6 +99,20 @@ async function restoreSessionFromUrl(url) {
     }
   }
   return params.get('type') === 'recovery' || url.includes('reset-password');
+}
+
+async function getExpoGoOAuthRedirectUrl() {
+  const generatedUrl = makeRedirectUri({ path: 'oauth/callback' });
+  const launchUrl = await Linking.getInitialURL().catch(() => null);
+  if (!launchUrl?.startsWith('exp://')) return generatedUrl;
+
+  // Build the callback from the URL that actually opened Expo Go. This avoids
+  // returning a physical phone to Metro's unusable exp://localhost address.
+  const launchBase = launchUrl
+    .split('/--/')[0]
+    .replace(/[?#].*$/, '')
+    .replace(/\/$/, '');
+  return `${launchBase}/--/oauth/callback`;
 }
 
 export function AuthProvider({ children }) {
@@ -222,6 +253,41 @@ export function AuthProvider({ children }) {
     setUser(await readCurrentUser(data.user));
   };
 
+  // Expo Go cannot present itself as Peakle's registered native Google client.
+  // Route that environment through Supabase's approved HTTPS OAuth callback,
+  // then restore the returned Supabase session from the Expo deep link.
+  const signInWithGoogleOAuth = async () => {
+    const client = requireSupabase();
+    const redirectTo = await getExpoGoOAuthRedirectUrl();
+    if (__DEV__) console.info(`[Peakle Google OAuth] Add this Supabase redirect URL: ${redirectTo}`);
+    const { data, error } = await client.auth.signInWithOAuth({
+      provider: 'google',
+      options: {
+        redirectTo,
+        skipBrowserRedirect: true,
+        queryParams: { prompt: 'select_account' },
+      },
+    });
+    if (error) throw error;
+    if (!data?.url) throw new Error('Google sign-in could not be started.');
+
+    const result = await WebBrowser.openAuthSessionAsync(data.url, redirectTo);
+    if (result.type !== 'success' || !result.url) return { cancelled: true };
+
+    await restoreSessionFromUrl(result.url);
+    const { data: sessionData, error: sessionError } = await client.auth.getSession();
+    if (sessionError) throw sessionError;
+    const authUser = sessionData.session?.user;
+    if (!authUser) throw new Error('Google sign-in completed without an account session.');
+
+    setPendingVerificationEmail('');
+    await AsyncStorage.removeItem(PENDING_VERIFICATION_EMAIL_KEY).catch(() => {});
+    await recordLogin(authUser.id, 'google');
+    await rememberSignInMethod('google');
+    setUser(await readCurrentUser(authUser));
+    return { cancelled: false };
+  };
+
   const requestPasswordReset = async (email) => {
     const redirectTo = Linking.createURL('reset-password');
     const { error } = await requireSupabase().auth.resetPasswordForEmail(email, { redirectTo });
@@ -237,7 +303,13 @@ export function AuthProvider({ children }) {
 
   const completeOnboarding = async (profile) => {
     const client = requireSupabase();
-    let authUser = (await client.auth.getUser()).data.user;
+    const authResult = await withTimeout(
+      client.auth.getUser(),
+      ONBOARDING_SAVE_TIMEOUT_MS,
+      'Peakle could not verify your session. Check your connection and try again.',
+    );
+    if (authResult.error) throw authResult.error;
+    let authUser = authResult.data.user;
     if (!authUser && profile.idToken) {
       const { data, error } = await client.auth.signInWithIdToken({ provider: 'google', token: profile.idToken, access_token: profile.accessToken });
       if (error) throw error;
@@ -249,16 +321,51 @@ export function AuthProvider({ children }) {
       authUser = result.user;
     }
     if (!authUser) throw new Error('Your account session is missing. Please log in again.');
-    const { error } = await client.from('profiles').update({
+    const profilePayload = {
+      id: authUser.id,
       display_name: profile.name,
       avatar_url: profile.avatar || profile.picture || null,
       home_area: profile.location,
       skill_rating: null,
       play_preference: profile.preference,
       onboarding_completed: true,
-    }).eq('id', authUser.id);
+    };
+    let { data: savedProfile, error } = await withTimeout(
+      client
+        .from('profiles')
+        .update(profilePayload)
+        .eq('id', authUser.id)
+        .select('*')
+        .maybeSingle(),
+      ONBOARDING_SAVE_TIMEOUT_MS,
+      'Profile setup timed out. Check your connection and try again.',
+    );
     if (error) throw error;
-    setUser(await readCurrentUser(authUser));
+    if (!savedProfile) {
+      const insertResult = await withTimeout(
+        client
+          .from('profiles')
+          .insert(profilePayload)
+          .select('*')
+          .single(),
+        ONBOARDING_SAVE_TIMEOUT_MS,
+        'Profile setup timed out. Check your connection and try again.',
+      );
+      if (insertResult.error) throw insertResult.error;
+      savedProfile = insertResult.data;
+    }
+    if (!savedProfile?.onboarding_completed) {
+      throw new Error('Your profile was not saved. Please try again.');
+    }
+    const currentUser = await withTimeout(
+      readCurrentUser(authUser),
+      ONBOARDING_SAVE_TIMEOUT_MS,
+      'Your profile was saved, but Peakle could not finish loading. Reopen the app and log in again.',
+    );
+    if (!currentUser?.onboardingCompleted) {
+      throw new Error('Your profile setup could not be verified. Please try again.');
+    }
+    setUser(currentUser);
   };
 
   const updateProfile = async (changes) => {
@@ -300,6 +407,7 @@ export function AuthProvider({ children }) {
     resendSignupConfirmation,
     clearPendingVerification,
     signInWithGoogle,
+    signInWithGoogleOAuth,
     requestPasswordReset,
     updatePassword,
     completeOnboarding,

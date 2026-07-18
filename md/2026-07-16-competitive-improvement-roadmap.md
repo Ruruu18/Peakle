@@ -194,6 +194,8 @@ Never surprise players with a fee after they have selected a slot. PEAKLE should
 
 ## Priority 6 — Deep pickleball differentiation
 
+**Implemented July 17, 2026:** PEAKLE now keeps independent singles and doubles ratings and updates them only after every registered participant confirms a ranked result; a dispute freezes verification and rating changes. The Competitive Hub adds availability sharing, partner/opponent/substitute requests, private team challenges, verified performance breakdowns by partner, opponent, venue, court, and format, and explicit profile/availability visibility controls. Players can register for leagues, ladders, seasons, tournaments, clinics, coaching, and capacity-safe program waitlists, and request venue memberships or credit packages without collecting payment before Priority 5 is deployed. Organizers can publish recurring skill-divided programs, competitions with live standings, and memberships/packages. Venue reporting includes bookings, revenue, utilization, peak hour, unique and returning players, cancellations, open-play attendance, program registration, and CSV export. Production deployment requires migration `202607170004` as described in `supabase/README.md`.
+
 ### Player and team features
 
 - Singles and doubles ratings.

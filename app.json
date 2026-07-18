@@ -19,7 +19,11 @@
       "supportsTablet": true,
       "bundleIdentifier": "com.peakle.app",
       "infoPlist": {
-        "NSLocationWhenInUseUsageDescription": "Peakle uses your location to find nearby courts, teams, and players."
+        "NSLocationWhenInUseUsageDescription": "Peakle uses your location to find nearby courts, teams, and players.",
+        "LSApplicationQueriesSchemes": [
+          "comgooglemaps",
+          "waze"
+        ]
       }
     },
     "android": {

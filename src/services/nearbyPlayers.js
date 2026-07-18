@@ -1,6 +1,7 @@
 import { requireSupabase } from '../lib/supabase';
 
-const INVITE_WINDOW_MS = 15 * 60 * 1000;
+export const INVITE_WINDOW_MS = 60 * 1000;
+const JOINED_INVITE_WINDOW_MS = 15 * 60 * 1000;
 
 function initials(name) {
   return (name || 'P').split(/\s+/).map((part) => part[0]).join('').slice(0, 2).toUpperCase();
@@ -15,16 +16,22 @@ function distanceLabel(distance) {
 export async function publishPresence(userId, location, { visible = true, availability = 'available' } = {}) {
   if (!userId || ![location?.latitude, location?.longitude].every(Number.isFinite)) return;
   const now = new Date().toISOString();
-  const { error } = await requireSupabase().from('player_presence').upsert({
-    user_id: userId,
-    latitude: location.latitude,
-    longitude: location.longitude,
-    is_visible: visible,
-    availability,
-    last_seen_at: now,
-    updated_at: now,
-  });
+  const { data, error } = await requireSupabase()
+    .from('player_presence')
+    .upsert({
+      user_id: userId,
+      latitude: location.latitude,
+      longitude: location.longitude,
+      is_visible: visible,
+      availability,
+      last_seen_at: now,
+      updated_at: now,
+    }, { onConflict: 'user_id' })
+    .select('user_id, is_visible, availability, last_seen_at')
+    .single();
   if (error) throw error;
+  if (!data?.user_id || !data.is_visible) throw new Error('Peakle could not publish your nearby-player visibility.');
+  return data;
 }
 
 export async function stopPresence(userId, { disable = false } = {}) {
@@ -61,6 +68,18 @@ export async function sendMatchInvite(recipientId, matchPayload) {
   const client = requireSupabase();
   const { data: auth, error: authError } = await client.auth.getUser();
   if (authError || !auth.user) throw authError || new Error('Sign in to invite a player.');
+  const staleCutoff = new Date(Date.now() - INVITE_WINDOW_MS).toISOString();
+  const { data: staleInvites, error: staleError } = await client.from('match_invites')
+    .select('id')
+    .eq('sender_id', auth.user.id)
+    .eq('recipient_id', recipientId)
+    .eq('status', 'pending')
+    .lte('created_at', staleCutoff);
+  if (staleError) throw staleError;
+  for (const staleInvite of staleInvites || []) {
+    const { error: cancelError } = await client.rpc('cancel_match_invite', { p_invite_id: staleInvite.id });
+    if (cancelError) throw cancelError;
+  }
   const { data, error } = await client.rpc('send_match_invite', { p_recipient_id: recipientId, p_match_payload: matchPayload });
   if (error) throw error;
   return data;
@@ -70,18 +89,24 @@ export async function listMatchInvites() {
   const client = requireSupabase();
   const { data: auth, error: authError } = await client.auth.getUser();
   if (authError || !auth.user) return { incoming: [], outgoing: [] };
-  const cutoff = new Date(Date.now() - INVITE_WINDOW_MS).toISOString();
+  const pendingCutoff = new Date(Date.now() - INVITE_WINDOW_MS).toISOString();
+  const historyCutoff = new Date(Date.now() - JOINED_INVITE_WINDOW_MS).toISOString();
   const [incomingResult, outgoingResult] = await Promise.all([
     client.from('match_invites')
       .select('*, sender:profiles!match_invites_sender_id_fkey(id, display_name, avatar_url, skill_rating)')
-      .eq('recipient_id', auth.user.id).eq('status', 'pending').gte('created_at', cutoff).order('created_at', { ascending: false }),
+      .eq('recipient_id', auth.user.id).gte('created_at', historyCutoff).order('created_at', { ascending: false }),
     client.from('match_invites')
       .select('*, recipient:profiles!match_invites_recipient_id_fkey(id, display_name, avatar_url, skill_rating)')
-      .eq('sender_id', auth.user.id).gte('created_at', cutoff).order('created_at', { ascending: false }),
+      .eq('sender_id', auth.user.id).gte('created_at', historyCutoff).order('created_at', { ascending: false }),
   ]);
   const error = incomingResult.error || outgoingResult.error;
   if (error) throw error;
-  return { incoming: incomingResult.data || [], outgoing: outgoingResult.data || [] };
+  const incomingRows = incomingResult.data || [];
+  return {
+    incoming: incomingRows.filter((invite) => invite.status === 'pending' && invite.created_at >= pendingCutoff),
+    joinedInvite: incomingRows.find((invite) => invite.status === 'accepted') || null,
+    outgoing: outgoingResult.data || [],
+  };
 }
 
 export async function respondToMatchInvite(inviteId, accept) {

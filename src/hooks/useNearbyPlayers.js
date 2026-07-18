@@ -18,7 +18,7 @@ const REFRESH_MS = 20_000;
 const PRESENCE_AVAILABILITY = { free: 'available', away: 'offline', in_play: 'busy' };
 
 function friendlyError(error) {
-  if (error?.code === '42P01' || error?.code === 'PGRST202' || error?.message?.includes('schema cache')) {
+  if (error?.code === '42P01' || error?.code === 'PGRST202' || error?.code === 'PGRST205' || error?.message?.includes('schema cache')) {
     return 'Nearby player setup has not been installed on Supabase yet.';
   }
   return error?.message || 'Nearby players are unavailable right now.';
@@ -32,6 +32,7 @@ export default function useNearbyPlayers(radiusKm = 25) {
   const [players, setPlayers] = useState([]);
   const [incomingInvites, setIncomingInvites] = useState([]);
   const [outgoingInvites, setOutgoingInvites] = useState([]);
+  const [joinedInvite, setJoinedInvite] = useState(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
   const visibleRef = useRef(false);
@@ -48,6 +49,7 @@ export default function useNearbyPlayers(radiusKm = 25) {
       const result = await listMatchInvites();
       setIncomingInvites(result.incoming);
       setOutgoingInvites(result.outgoing);
+      setJoinedInvite(result.joinedInvite);
     } catch (nextError) {
       setError(friendlyError(nextError));
     }
@@ -67,15 +69,18 @@ export default function useNearbyPlayers(radiusKm = 25) {
     }
   }, [radiusKm]);
 
-  const publish = useCallback(async () => {
-    const location = locationRef.current;
-    if (!visibleRef.current || appStateRef.current !== 'active' || !user?.id) return;
-    if (![location?.latitude, location?.longitude].every(Number.isFinite)) return;
+  const publish = useCallback(async (locationOverride) => {
+    const location = locationOverride || locationRef.current;
+    if (!visibleRef.current || ['inactive', 'background'].includes(appStateRef.current) || !user?.id) return false;
+    if (![location?.latitude, location?.longitude].every(Number.isFinite)) return false;
     try {
+      locationRef.current = location;
       await publishPresence(user.id, location, { visible: true, availability: PRESENCE_AVAILABILITY[user.presenceStatus] || 'available' });
       await refreshPlayers();
+      return true;
     } catch (nextError) {
       setError(friendlyError(nextError));
+      throw nextError;
     }
   }, [refreshPlayers, user?.id, user?.presenceStatus]);
 
@@ -94,7 +99,7 @@ export default function useNearbyPlayers(radiusKm = 25) {
   useEffect(() => {
     if (!settingsReady) return;
     refreshInvites();
-    if (visible) publish();
+    if (visible) publish().catch(() => {});
     else setPlayers([]);
   }, [publish, refreshInvites, settingsReady, userLocation.latitude, userLocation.longitude, visible]);
 
@@ -102,7 +107,7 @@ export default function useNearbyPlayers(radiusKm = 25) {
     if (!settingsReady || !user?.id) return undefined;
     const timer = setInterval(() => {
       refreshInvites();
-      if (visibleRef.current) publish();
+      if (visibleRef.current) publish().catch(() => {});
     }, REFRESH_MS);
     return () => clearInterval(timer);
   }, [publish, refreshInvites, settingsReady, user?.id]);
@@ -113,7 +118,7 @@ export default function useNearbyPlayers(radiusKm = 25) {
       appStateRef.current = nextState;
       if (nextState === 'active') {
         refreshInvites();
-        publish();
+        publish().catch(() => {});
       } else if (wasActive && user?.id && visibleRef.current) {
         stopPresence(user.id).catch(() => {});
       }
@@ -138,14 +143,19 @@ export default function useNearbyPlayers(radiusKm = 25) {
     setLoading(true);
     setError('');
     try {
-      if (nextVisible && ![locationRef.current?.latitude, locationRef.current?.longitude].every(Number.isFinite)) {
-        const located = await useCurrentLocation();
-        if (!located) return false;
+      let location = locationRef.current;
+      if (nextVisible && ![location?.latitude, location?.longitude].every(Number.isFinite)) {
+        location = await useCurrentLocation();
+        if (!location) return false;
+        locationRef.current = location;
       }
       visibleRef.current = nextVisible;
       setVisible(nextVisible);
       await AsyncStorage.setItem(storageKey, String(nextVisible));
-      if (nextVisible) await publish();
+      if (nextVisible) {
+        const wasPublished = await publish(location);
+        if (!wasPublished) throw new Error('Peakle could not start nearby-player visibility. Reopen the app and try again.');
+      }
       else {
         setPlayers([]);
         await stopPresence(user.id, { disable: true });
@@ -201,6 +211,7 @@ export default function useNearbyPlayers(radiusKm = 25) {
     players,
     incomingInvites,
     outgoingInvites,
+    joinedInvite,
     setDiscoveryVisible,
     invite,
     respond,

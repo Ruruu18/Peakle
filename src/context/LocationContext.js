@@ -69,8 +69,9 @@ export function LocationProvider({ children }) {
       const result = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.High });
       const coords = { latitude: result.coords.latitude, longitude: result.coords.longitude };
       const label = await resolveAddress(coords);
-      setUserLocation({ ...coords, label, source: 'gps' });
-      return true;
+      const located = { ...coords, label, source: 'gps' };
+      setUserLocation(located);
+      return located;
     } catch {
       if (!quiet) setError('We could not get your position. Check location services and try again.');
       return false;

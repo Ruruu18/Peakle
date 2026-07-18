@@ -19,6 +19,21 @@ The first migration creates the normalized model, automatic user profiles, stora
 
 `migrations/202607170003_priority_4_booking.sql` completes Priority 4. It adds venue-local calendars, pricing rules, court and venue blackouts, expiring server price quotes, atomic multi-court booking, request idempotency, revision-checked changes and cancellations, immutable booking audit records, FIFO court waitlists, richer receipt state, Realtime availability, and booking reminders. Apply it only after migrations 001 and 002; it extends the Priority 3 notification types.
 
+`migrations/202607170004_priority_6_pickleball.sql` completes Priority 6. It adds independent verified singles/doubles ratings, participant result confirmation and disputes, availability and partner/opponent/substitute matching, team challenges, competitions and standings, recurring venue programs, capacity-safe registration, memberships/packages/credits, privacy controls, and server-authorized venue analytics. Apply it after migration 003. Membership requests remain pending and collect no money until the Priority 5 payment and settlement workflow is deployed.
+
+`migrations/202607170005_priority_6_privacy_controls.sql` makes Competitive Hub privacy changes atomic. Turning matching off closes open requests immediately, and both publishing and claiming requests require matching to be enabled. Apply it after migration 004.
+
+`migrations/202607170009_team_conversation_reads.sql` adds per-member team conversation read state, secure conversation summaries, and unread counts for the Teams inbox and bottom-tab badge. Apply it after the earlier Priority 6 migrations before testing communication-first Teams navigation.
+
+### Priority 6 verification
+
+1. Record a ranked singles or doubles match with registered Peakle accounts, then have every participant confirm it in **Profile → Performance rating**. Confirm the result becomes verified exactly once and only the matching format rating changes.
+2. Dispute another result and confirm no rating history row is created for it.
+3. Publish availability and a partner or substitute request from one player; claim it from another and confirm the post closes atomically.
+4. From **Organizer → More → Programs & insights**, create a recurring clinic, competition, and package. Register from a player account and confirm a full program returns a waitlist registration.
+5. Compare the 30-day venue metrics with booking/open-play/program source rows, then export the CSV and confirm the same totals are present.
+6. Publish a matching request, then turn off **Allow player matching** under **Profile → Settings → Privacy & matching**. Confirm the request closes immediately, availability is hidden, and neither publishing nor claiming another request succeeds until matching is turned back on.
+
 ### Priority 4 booking operations
 
 1. Apply migration 003 and reload the PostgREST schema cache if your project does not do so automatically.
@@ -135,6 +150,8 @@ In **Authentication > Email Templates**, customize **Confirm signup** and **Rese
 5. In the Web client in Google Cloud, add this Supabase callback as an authorized redirect URI:
 
    `https://melbfzfuxrviybblipua.supabase.co/auth/v1/callback`
+
+6. To test Google sign-in in Expo Go, add `exp://**` under **Supabase > Authentication > URL Configuration > Redirect URLs**. Expo Go uses the Supabase-hosted Google OAuth flow because it cannot identify itself as Peakle's native Google client.
 
 Restart Expo with a cleared cache after changing environment variables:
 

@@ -9,6 +9,7 @@ React Native implementation of Peakle, backed by Supabase for authentication and
 - `PlayScreen` — match setup scaffold
 - `CompeteScreen` — leaderboards and squad scaffold
 - `ProfileScreen` — player profile scaffold
+- `PickleballHubScreen` — verified ratings, matching, competition, programs, memberships, and venue insights
 
 The five screens are connected through the custom Peakle bottom-tab navigator in `src/navigation/AppNavigator.js`.
 

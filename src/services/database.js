@@ -231,11 +231,34 @@ export async function updateManagedCourt(courtId, changes) {
   return data;
 }
 
-export async function listMyBookings() {
+export async function listMyBookingsPage({ historyPage = 0, historyPageSize = 30 } = {}) {
   const client = requireSupabase();
-  const { data, error } = await client.from('bookings').select('*, venues(*), courts(*)').order('starts_at', { ascending: false });
-  if (error) throw error;
-  return data;
+  const now = new Date().toISOString();
+  const historyFrom = historyPage * historyPageSize;
+  const historyTo = historyFrom + historyPageSize;
+  const fields = '*, venues(*), courts(*)';
+  const [upcomingResult, historyResult] = await Promise.all([
+    client.from('bookings').select(fields)
+      .in('status', ['pending', 'confirmed'])
+      .gt('ends_at', now)
+      .order('starts_at', { ascending: true }),
+    client.from('bookings').select(fields)
+      .or(`status.in.(cancelled,completed,no_show),ends_at.lte.${now}`)
+      .order('starts_at', { ascending: false })
+      .range(historyFrom, historyTo),
+  ]);
+  if (upcomingResult.error) throw upcomingResult.error;
+  if (historyResult.error) throw historyResult.error;
+  const history = historyResult.data || [];
+  return {
+    bookings: [...(upcomingResult.data || []), ...history.slice(0, historyPageSize)],
+    hasMoreHistory: history.length > historyPageSize,
+  };
+}
+
+export async function listMyBookings(options) {
+  const result = await listMyBookingsPage(options);
+  return result.bookings;
 }
 
 export async function extendBooking(bookingId) {
@@ -616,6 +639,18 @@ export async function listTeamMessages(teamId) {
   const { data, error } = await requireSupabase().from('team_messages').select('*, profiles(display_name, avatar_url)').eq('team_id', teamId).order('created_at');
   if (error) throw error;
   return data;
+}
+
+export async function listTeamConversationSummaries(teamIds) {
+  if (!teamIds.length) return [];
+  const { data, error } = await requireSupabase().rpc('list_team_conversations', { p_team_ids: teamIds });
+  if (error) throw error;
+  return data || [];
+}
+
+export async function markTeamConversationRead(teamId) {
+  const { error } = await requireSupabase().rpc('mark_team_conversation_read', { p_team_id: teamId });
+  if (error) throw error;
 }
 
 export async function sendTeamMessage(teamId, body, imageUrl = null) {

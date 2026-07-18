@@ -11,6 +11,8 @@ import { AuthProvider, useAuth } from './src/context/AuthContext';
 import AuthFlowScreen from './src/screens/AuthFlowScreen';
 import { ThemeProvider, useTheme } from './src/context/ThemeContext';
 import { OperationsProvider } from './src/context/OperationsContext';
+import { NearbyPlayersProvider } from './src/context/NearbyPlayersContext';
+import MatchInviteOverlay from './src/components/MatchInviteOverlay';
 
 const colors = { ink: '#0E2321', optic: '#D6E94A', surface: '#FFFFFF' };
 const linking = {
@@ -40,7 +42,7 @@ function Root() {
   if (passwordRecovery) return <AuthFlowScreen key="password-recovery" initialScreen="reset-password" />;
   if (!user) return <AuthFlowScreen key="login" initialScreen="login" />;
   if (!user.onboardingCompleted) return <AuthFlowScreen key={`new-user-setup-${user.id}`} initialScreen="new-user-overview" />;
-  return <NavigationContainer theme={navigationTheme} linking={linking}><AppNavigator /></NavigationContainer>;
+  return <View style={styles.appShell}><NavigationContainer theme={navigationTheme} linking={linking}><AppNavigator /></NavigationContainer><MatchInviteOverlay /></View>;
 }
 
 export default function App() {
@@ -49,15 +51,17 @@ export default function App() {
       <AuthProvider>
         <OperationsProvider>
           <LocationProvider>
-            <ThemeProvider>
-              <OrganizerPassProvider>
-                <AppModeProvider>
-                  <OpenPlaySessionProvider>
-                    <Root />
-                  </OpenPlaySessionProvider>
-                </AppModeProvider>
-              </OrganizerPassProvider>
-            </ThemeProvider>
+            <NearbyPlayersProvider>
+              <ThemeProvider>
+                <OrganizerPassProvider>
+                  <AppModeProvider>
+                    <OpenPlaySessionProvider>
+                      <Root />
+                    </OpenPlaySessionProvider>
+                  </AppModeProvider>
+                </OrganizerPassProvider>
+              </ThemeProvider>
+            </NearbyPlayersProvider>
           </LocationProvider>
         </OperationsProvider>
       </AuthProvider>
@@ -66,6 +70,7 @@ export default function App() {
 }
 
 const styles = StyleSheet.create({
+  appShell: { flex: 1 },
   launchScreen: { flex: 1, alignItems: 'center', justifyContent: 'center', backgroundColor: colors.ink },
   launchMark: { width: 50, height: 50, borderRadius: 25, alignItems: 'center', justifyContent: 'center', backgroundColor: colors.optic },
   launchLetter: { color: colors.ink, fontSize: 24, fontWeight: '900' },

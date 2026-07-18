@@ -46,6 +46,7 @@ const BACKGROUND_COLORS = {
   '#F0F6D4': '#34412E',
   '#F4F9F7': '#203B37',
   '#F6FAF8': '#203B37',
+  '#F7FAF7': '#203B37',
   '#D9E8E3': '#203B37',
   '#F7EAE6': '#402C29',
   '#F8EDE9': '#402C29',
@@ -73,6 +74,7 @@ const ACCENT_INK_STYLES = new Set([
   'avatarBadgeText', 'surpriseText',
   'saveText', 'addText', 'createVenueText', 'approveVenueText', 'modalConfirmText',
   'choiceTextActive', 'approveText', 'spotsText',
+  'newPillText',
 ]);
 
 // Active switches keep the brighter yellow-green brand accent in dark mode.

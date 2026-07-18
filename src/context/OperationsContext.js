@@ -11,6 +11,7 @@ import {
   flushOpenPlayOperations,
   getPendingOpenPlayOperations,
   listNotifications,
+  markAllNotificationsRead,
   markNotificationRead,
   queueOpenPlayOperation,
   savePushToken,
@@ -112,13 +113,18 @@ export function OperationsProvider({ children }) {
     await markNotificationRead(id);
     setNotifications((current) => current.map((notice) => notice.id === id ? { ...notice, read_at: new Date().toISOString() } : notice));
   }, []);
+  const readAllNotifications = useCallback(async () => {
+    await markAllNotificationsRead();
+    const readAt = new Date().toISOString();
+    setNotifications((current) => current.map((notice) => notice.read_at ? notice : { ...notice, read_at: readAt }));
+  }, []);
   const online = network.isConnected !== false && network.isInternetReachable !== false;
   const connectionState = !online ? 'offline' : realtime;
   const value = useMemo(() => ({
     connectionState, online, pendingOperations, reportRealtime, enqueueOperation, flush,
     notifications, unreadCount: notifications.filter((notice) => !notice.read_at).length,
-    refreshNotifications, readNotification, enablePushNotifications, disablePushNotifications,
-  }), [connectionState, disablePushNotifications, enablePushNotifications, enqueueOperation, flush, notifications, online, pendingOperations, readNotification, refreshNotifications, reportRealtime]);
+    refreshNotifications, readNotification, readAllNotifications, enablePushNotifications, disablePushNotifications,
+  }), [connectionState, disablePushNotifications, enablePushNotifications, enqueueOperation, flush, notifications, online, pendingOperations, readAllNotifications, readNotification, refreshNotifications, reportRealtime]);
   return <OperationsContext.Provider value={value}>{children}</OperationsContext.Provider>;
 }
 
