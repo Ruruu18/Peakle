@@ -17,27 +17,73 @@ Deno.serve(async (request) => {
   if (error) return Response.json({ error: error.message }, { status: 500 });
   if (!notices?.length) return Response.json({ processed: 0 });
 
+  const now = Date.now();
+  const expiredNotices = notices.filter((notice) => {
+    const expiresAt = Date.parse(notice.data?.expiresAt || '');
+    return Number.isFinite(expiresAt) && expiresAt <= now;
+  });
+  if (expiredNotices.length) {
+    await supabase.from('user_notifications')
+      .update({ push_status: 'skipped', push_error: 'Notification expired before dispatch' })
+      .in('id', expiredNotices.map((notice) => notice.id));
+  }
+  const activeNotices = notices.filter((notice) => !expiredNotices.some((expired) => expired.id === notice.id));
+  if (!activeNotices.length) return Response.json({ processed: notices.length, sent: 0 });
+  const recipientIds = [...new Set(activeNotices.map((notice) => notice.user_id))];
+  const { data: profiles, error: profileError } = await supabase
+    .from('profiles')
+    .select('id, notification_preferences')
+    .in('id', recipientIds);
+  if (profileError) return Response.json({ error: profileError.message }, { status: 500 });
+
+  const preferencesByUser = new Map(
+    (profiles || []).map((profile) => [profile.id, profile.notification_preferences || {}]),
+  );
+  const messageKinds = new Set(['direct_message', 'direct_message_request', 'direct_message_accepted']);
+  const mutedNotices = activeNotices.filter((notice) =>
+    messageKinds.has(notice.kind)
+      && preferencesByUser.get(notice.user_id)?.messages === false
+  );
+  if (mutedNotices.length) {
+    await supabase.from('user_notifications')
+      .update({ push_status: 'skipped', push_error: 'Message notifications disabled by user' })
+      .in('id', mutedNotices.map((notice) => notice.id));
+  }
+  const deliverableNotices = activeNotices.filter(
+    (notice) => !mutedNotices.some((muted) => muted.id === notice.id),
+  );
+  if (!deliverableNotices.length) return Response.json({ processed: notices.length, sent: 0 });
+
   const { data: tokens, error: tokenError } = await supabase
     .from('device_push_tokens')
     .select('user_id, expo_push_token')
-    .in('user_id', [...new Set(notices.map((notice) => notice.user_id))])
+    .in('user_id', [...new Set(deliverableNotices.map((notice) => notice.user_id))])
     .eq('enabled', true);
   if (tokenError) return Response.json({ error: tokenError.message }, { status: 500 });
 
-  const messages = notices.flatMap((notice) => (tokens || [])
+  const messages = deliverableNotices.flatMap((notice) => (tokens || [])
     .filter((token) => token.user_id === notice.user_id)
-    .map((token) => ({
-      to: token.expo_push_token,
-      sound: 'default',
-      title: notice.title,
-      body: notice.body,
-      data: { ...notice.data, notificationId: notice.id },
-      channelId: 'open-play',
-      priority: 'high',
-      _notificationId: notice.id,
-    })));
+    .map((token) => {
+      const expiresAt = Date.parse(notice.data?.expiresAt || '');
+      const isDirectMessage = notice.kind === 'direct_message';
+      return {
+        to: token.expo_push_token,
+        sound: 'default',
+        title: notice.title,
+        body: notice.body,
+        data: { ...notice.data, notificationId: notice.id },
+        channelId: isDirectMessage ? 'messages' : 'open-play',
+        ...(isDirectMessage ? {
+          categoryId: 'peakle_direct_message',
+          collapseId: `conversation:${notice.data?.conversationId || notice.id}`,
+        } : {}),
+        priority: 'high',
+        ...(Number.isFinite(expiresAt) ? { expiration: Math.floor(expiresAt / 1000) } : {}),
+        _notificationId: notice.id,
+      };
+    }));
 
-  const noticesWithoutTokens = notices.filter((notice) => !messages.some((message) => message._notificationId === notice.id));
+  const noticesWithoutTokens = deliverableNotices.filter((notice) => !messages.some((message) => message._notificationId === notice.id));
   if (noticesWithoutTokens.length) {
     await supabase.from('user_notifications').update({ push_status: 'skipped', push_error: 'No enabled device token' })
       .in('id', noticesWithoutTokens.map((notice) => notice.id));

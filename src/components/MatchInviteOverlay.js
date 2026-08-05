@@ -2,7 +2,8 @@ import React, { useEffect, useMemo, useState } from 'react';
 import { Pressable, StyleSheet, Text, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import Ionicons from '@expo/vector-icons/Ionicons';
-import CartoonAvatar from './CartoonAvatar';
+import { createMobileStyleSheet } from '../utils/mobileStyles';
+import ProfilePhoto from './ProfilePhoto';
 import { useNearbyPlayersContext } from '../context/NearbyPlayersContext';
 import { INVITE_WINDOW_MS } from '../services/nearbyPlayers';
 
@@ -11,7 +12,7 @@ function secondsRemaining(invite) {
   return Math.max(0, Math.ceil((new Date(invite.created_at).getTime() + INVITE_WINDOW_MS - Date.now()) / 1000));
 }
 
-export default function MatchInviteOverlay() {
+export default function MatchInviteOverlay({ onAccepted }) {
   const insets = useSafeAreaInsets();
   const { incomingInvites, respond } = useNearbyPlayersContext();
   const invite = incomingInvites[0] || null;
@@ -38,7 +39,10 @@ export default function MatchInviteOverlay() {
   const answer = async (accept) => {
     if (busy) return;
     setBusy(true);
-    try { await respond(invite.id, accept); }
+    try {
+      const succeeded = await respond(invite.id, accept);
+      if (accept && succeeded) onAccepted?.(invite);
+    }
     finally { setBusy(false); }
   };
 
@@ -47,7 +51,7 @@ export default function MatchInviteOverlay() {
       <View accessibilityRole="alert" style={[styles.card, { top: Math.max(insets.top, 12) + 8 }]}>
         <View style={styles.timerRail}><View style={[styles.timerFill, { width: `${Math.max(0, Math.min(100, remaining / 60 * 100))}%` }]} /></View>
         <View style={styles.heading}>
-          <CartoonAvatar avatar={invite.sender?.avatar_url} name={senderName} size={46} />
+          <ProfilePhoto photo={invite.sender?.avatar_url} name={senderName} size={46} />
           <View style={styles.copy}>
             <Text style={styles.eyebrow}>MATCH INVITATION · {remaining}s</Text>
             <Text numberOfLines={1} style={styles.title}>{senderName} wants to play</Text>
@@ -68,7 +72,7 @@ export default function MatchInviteOverlay() {
   );
 }
 
-const styles = StyleSheet.create({
+const styles = createMobileStyleSheet({
   layer: { ...StyleSheet.absoluteFillObject, zIndex: 1000, elevation: 1000 },
   card: { position: 'absolute', left: 14, right: 14, overflow: 'hidden', padding: 14, borderWidth: 1, borderColor: '#304743', borderRadius: 22, backgroundColor: '#0E2321', shadowColor: '#07110F', shadowOpacity: .3, shadowRadius: 18, shadowOffset: { width: 0, height: 9 }, elevation: 18 },
   timerRail: { position: 'absolute', top: 0, left: 0, right: 0, height: 4, backgroundColor: '#304743' },

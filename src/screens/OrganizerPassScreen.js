@@ -3,11 +3,13 @@ import { ActivityIndicator, Modal, Pressable, StyleSheet, Text, View } from 'rea
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { StatusBar } from 'expo-status-bar';
 import Ionicons from '@expo/vector-icons/Ionicons';
+import Svg, { Defs, LinearGradient, Stop, Rect } from 'react-native-svg';
 import ScrollView from '../components/FocusResetScrollView';
 import { useOrganizerPass } from '../context/OrganizerPassContext';
 import { useAppMode } from '../context/AppModeContext';
 import { getOrganizerPassPlan, ORGANIZER_PASS_PLANS } from '../services/organizerPass';
 import { createDarkStyleSheet, DARK_CONTENT_COLORS, useTheme } from '../context/ThemeContext';
+import { createMobileStyleSheet } from '../utils/mobileStyles';
 
 const LIGHT_C = {
   ink: '#0E2321', paper: '#F3F5EF', surface: '#FFFFFF', optic: '#D6E94A',
@@ -25,6 +27,14 @@ const FEATURES = [
 function formatDate(value) {
   if (!value) return '—';
   return new Date(value).toLocaleDateString('en-PH', { month: 'short', day: 'numeric', year: 'numeric' });
+}
+
+function formatDateShort(value) {
+  if (!value) return '—';
+  const date = new Date(value);
+  const month = (date.getMonth() + 1).toString().padStart(2, '0');
+  const year = date.getFullYear().toString().slice(-2);
+  return `${month}/${year}`;
 }
 
 function Icon({ name, size = 20, color }) {
@@ -46,6 +56,7 @@ export default function OrganizerPassScreen({ navigation }) {
   const [error, setError] = useState('');
   const selectedPlan = useMemo(() => getOrganizerPassPlan(selectedPlanId), [selectedPlanId]);
   const activePlan = getOrganizerPassPlan(entitlement.planId);
+  const isPro = activePlan?.tier === 'pro' || isAdminAccess;
 
   const runAction = async (action, successMessage) => {
     setError('');
@@ -81,16 +92,39 @@ export default function OrganizerPassScreen({ navigation }) {
         </View>
 
         {hasOrganizerAccess ? (
-          <View style={styles.activeCard}>
-            <View style={styles.activeHead}>
-              <View style={styles.activeIcon}><Icon name="checkmark" size={24} color="#0E2321" /></View>
-              <View style={styles.flex}><Text style={styles.activeEyebrow}>ACCESS ACTIVE</Text><Text style={styles.activeTitle}>{isAdminAccess ? 'Platform administrator' : `Organizer ${activePlan.tier.charAt(0).toUpperCase() + activePlan.tier.slice(1)} · ${activePlan.name}`}</Text></View>
+          <View style={styles.activeContainer}>
+            <View style={[styles.activeCard, isPro && styles.activeCardPro]}>
+              {isPro && (
+                <Svg pointerEvents="none" height="100%" width="100%" style={StyleSheet.absoluteFillObject}>
+                  <Defs>
+                    <LinearGradient id="grad" x1="0%" y1="0%" x2="100%" y2="100%">
+                      <Stop offset="0%" stopColor={LIGHT_C.optic} />
+                      <Stop offset="55%" stopColor="#BEDD62" />
+                      <Stop offset="100%" stopColor="#8EC69D" />
+                    </LinearGradient>
+                  </Defs>
+                  <Rect x="0" y="0" width="100%" height="100%" fill="url(#grad)" />
+                </Svg>
+              )}
+              <View style={{ padding: 24 }}>
+                <View style={styles.activeHead}>
+                  <View style={[styles.activeIcon, isPro && styles.activeIconPro]}><Icon name="diamond-outline" size={24} color={isPro ? '#FFFFFF' : LIGHT_C.optic} /></View>
+                  <View style={styles.flex}>
+                    <Text style={[styles.activeEyebrow, isPro && styles.activeEyebrowPro]}>ORGANIZER PASS</Text>
+                    <Text style={[styles.activeTitle, isPro && styles.activeTitlePro]}>PEAKLE</Text>
+                  </View>
+                </View>
+                <View style={styles.activeBody}>
+                  <Text style={[styles.activePlanName, isPro && styles.activePlanNamePro]}>{isAdminAccess ? 'Administrator' : `Organizer ${activePlan.tier.charAt(0).toUpperCase() + activePlan.tier.slice(1)}`}</Text>
+                  <Text style={[styles.activePlanMeta, isPro && styles.activePlanMetaPro]}>{isAdminAccess ? 'Full organizer access · No expiration' : `${activePlan.name} · Ends ${formatDateShort(entitlement.currentPeriodEnd)}`}</Text>
+                </View>
+                <View style={[styles.activeFooter, isPro && styles.activeFooterPro]}>
+                  <Icon name="shield-checkmark-outline" size={16} color="#0E2321" />
+                  <Text style={[styles.activeFooterText, isPro && styles.activeFooterTextPro]}>Organizer workspace unlocked</Text>
+                </View>
+              </View>
             </View>
-            <View style={styles.activeMetaRow}>
-              <View><Text style={styles.activeMetaLabel}>VALID THROUGH</Text><Text style={styles.activeMetaValue}>{isAdminAccess ? 'No expiration' : formatDate(entitlement.currentPeriodEnd)}</Text></View>
-              <View style={styles.activeMetaRight}><Text style={styles.activeMetaLabel}>RENEWAL</Text><Text style={styles.activeMetaValue}>{isAdminAccess ? 'Not required' : entitlement.autoRenews ? 'Automatic' : 'Canceled'}</Text></View>
-            </View>
-            <Pressable onPress={() => { if (mode === 'player') setMode('organizer'); else navigation.navigate('Sessions'); }} style={styles.primaryButton}><Text style={styles.primaryText}>{mode === 'player' ? 'Switch to Organizer mode' : 'Open session control'}</Text><Icon name="arrow-forward" color="#0E2321" /></Pressable>
+            <Pressable onPress={() => { if (mode === 'player') setMode('organizer'); else navigation.navigate('Sessions'); }} style={[styles.primaryButton, { marginTop: 14 }]}><Text style={styles.primaryText}>{mode === 'player' ? 'Switch to Organizer mode' : 'Open session control'}</Text><Icon name="arrow-forward" color="#0E2321" /></Pressable>
           </View>
         ) : (
           <View style={styles.hero}>
@@ -163,12 +197,23 @@ export default function OrganizerPassScreen({ navigation }) {
   );
 }
 
-const lightStyles = StyleSheet.create({
+const lightStyles = createMobileStyleSheet({
   safe: { flex: 1, backgroundColor: LIGHT_C.paper }, content: { paddingHorizontal: 20, paddingTop: 20, paddingBottom: 48 }, flex: { flex: 1 },
   header: { minHeight: 52, flexDirection: 'row', alignItems: 'center', gap: 11 }, backButton: { width: 42, height: 42, alignItems: 'center', justifyContent: 'center', borderRadius: 13, borderWidth: 1, borderColor: LIGHT_C.line, backgroundColor: LIGHT_C.surface }, headerCopy: { flex: 1 }, eyebrow: { color: LIGHT_C.ink40, fontSize: 8, fontWeight: '900', letterSpacing: .9 }, title: { marginTop: 2, color: LIGHT_C.ink, fontSize: 23, fontWeight: '900' }, demoPill: { minHeight: 29, paddingHorizontal: 9, flexDirection: 'row', alignItems: 'center', gap: 5, borderRadius: 15, backgroundColor: LIGHT_C.tealWash }, demoDot: { width: 7, height: 7, borderRadius: 4, backgroundColor: LIGHT_C.optic }, demoPillText: { color: LIGHT_C.teal, fontSize: 7, fontWeight: '900' },
   demoNotice: { marginTop: 18, padding: 12, flexDirection: 'row', alignItems: 'flex-start', gap: 9, borderRadius: 14, borderWidth: 1, borderColor: '#BFD8D2', backgroundColor: LIGHT_C.tealWash }, demoNoticeTitle: { color: LIGHT_C.ink, fontSize: 10, fontWeight: '900' }, demoNoticeText: { marginTop: 3, color: LIGHT_C.ink70, fontSize: 8, lineHeight: 12 },
   hero: { marginTop: 14, padding: 20, borderRadius: 23, borderBottomLeftRadius: 9, borderBottomRightRadius: 9, backgroundColor: LIGHT_C.ink }, heroIcon: { width: 51, height: 51, marginBottom: 22, alignItems: 'center', justifyContent: 'center', borderRadius: 16, backgroundColor: LIGHT_C.optic }, heroEyebrow: { color: '#9FB3AC', fontSize: 8, fontWeight: '900', letterSpacing: .9 }, heroTitle: { marginTop: 5, color: LIGHT_C.surface, fontSize: 24, lineHeight: 30, fontWeight: '900' }, heroBody: { marginTop: 9, color: '#CBD7D2', fontSize: 10, lineHeight: 16 },
-  activeCard: { marginTop: 14, padding: 17, borderRadius: 22, borderBottomLeftRadius: 9, borderBottomRightRadius: 9, backgroundColor: LIGHT_C.ink }, activeHead: { flexDirection: 'row', alignItems: 'center', gap: 11 }, activeIcon: { width: 46, height: 46, alignItems: 'center', justifyContent: 'center', borderRadius: 14, backgroundColor: LIGHT_C.optic }, activeEyebrow: { color: LIGHT_C.optic, fontSize: 7, fontWeight: '900', letterSpacing: .8 }, activeTitle: { marginTop: 3, color: LIGHT_C.surface, fontSize: 15, fontWeight: '900' }, activeMetaRow: { marginTop: 17, paddingTop: 14, flexDirection: 'row', justifyContent: 'space-between', borderTopWidth: 1, borderColor: 'rgba(255,255,255,.16)' }, activeMetaRight: { alignItems: 'flex-end' }, activeMetaLabel: { color: '#9FB3AC', fontSize: 6, fontWeight: '900', letterSpacing: .6 }, activeMetaValue: { marginTop: 3, color: LIGHT_C.surface, fontSize: 10, fontWeight: '900' },
+  activeContainer: { marginTop: 14 },
+  activeCard: { borderRadius: 20, backgroundColor: LIGHT_C.optic, overflow: 'hidden' },
+  activeHead: { flexDirection: 'row', alignItems: 'center', gap: 12 },
+  activeIcon: { width: 46, height: 46, alignItems: 'center', justifyContent: 'center', borderRadius: 14, backgroundColor: '#0E2321' },
+  activeEyebrow: { color: '#0E2321', fontSize: 9, fontWeight: '900', letterSpacing: 1 },
+  activeTitle: { marginTop: 2, color: '#0E2321', fontSize: 11, fontWeight: '900', letterSpacing: 0.5 },
+  activeBody: { marginTop: 24, marginBottom: 24 },
+  activePlanName: { color: '#0E2321', fontSize: 24, fontWeight: '900' },
+  activePlanMeta: { marginTop: 4, color: '#0E2321', fontSize: 11, fontWeight: '600' },
+  activeFooter: { paddingTop: 16, flexDirection: 'row', alignItems: 'center', gap: 8, borderTopWidth: 1, borderColor: 'rgba(14, 35, 33, 0.1)' },
+  activeFooterText: { color: '#0E2321', fontSize: 11, fontWeight: '800' },
+  activeCardPro: { backgroundColor: LIGHT_C.optic, overflow: 'hidden' }, activeIconPro: { backgroundColor: '#0E2321' }, activeEyebrowPro: { color: '#0E2321' }, activeTitlePro: { color: '#0E2321' }, activePlanNamePro: { color: '#0E2321' }, activePlanMetaPro: { color: '#0E2321' }, activeFooterPro: { borderColor: 'rgba(14, 35, 33, 0.1)' }, activeFooterTextPro: { color: '#0E2321' },
   sectionHead: { marginTop: 25, marginBottom: 10 }, sectionEyebrow: { color: LIGHT_C.ink40, fontSize: 8, fontWeight: '900', letterSpacing: .9 }, sectionTitle: { marginTop: 3, color: LIGHT_C.ink, fontSize: 19, fontWeight: '900' }, planList: { gap: 9 }, planCard: { minHeight: 78, paddingHorizontal: 13, flexDirection: 'row', alignItems: 'center', gap: 10, borderRadius: 17, borderWidth: 1, borderColor: LIGHT_C.line, backgroundColor: LIGHT_C.surface }, planCardSelected: { borderWidth: 2, borderColor: LIGHT_C.teal }, radio: { width: 21, height: 21, alignItems: 'center', justifyContent: 'center', borderRadius: 11, borderWidth: 1, borderColor: LIGHT_C.ink40 }, radioSelected: { borderColor: LIGHT_C.teal }, radioDot: { width: 11, height: 11, borderRadius: 6, backgroundColor: LIGHT_C.teal }, planNameRow: { flexDirection: 'row', alignItems: 'center', gap: 6 }, planName: { color: LIGHT_C.ink, fontSize: 12, fontWeight: '900' }, planDetail: { marginTop: 4, color: LIGHT_C.ink40, fontSize: 7.5 }, savePill: { paddingHorizontal: 6, paddingVertical: 3, borderRadius: 7, backgroundColor: LIGHT_C.optic }, saveText: { color: LIGHT_C.ink, fontSize: 5.5, fontWeight: '900' }, planPrice: { alignItems: 'flex-end' }, price: { color: LIGHT_C.ink, fontSize: 17, fontWeight: '900' }, pricePeriod: { marginTop: 2, color: LIGHT_C.ink40, fontSize: 7 },
   primaryButton: { minHeight: 54, marginTop: 14, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 7, borderRadius: 14, backgroundColor: LIGHT_C.optic }, primaryText: { color: LIGHT_C.ink, fontSize: 10, fontWeight: '900' }, disabled: { opacity: .45 }, restoreButton: { minHeight: 45, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6 }, restoreText: { color: LIGHT_C.teal, fontSize: 9, fontWeight: '900' },
   featureCard: { paddingHorizontal: 13, borderRadius: 18, borderWidth: 1, borderColor: LIGHT_C.line, backgroundColor: LIGHT_C.surface }, featureRow: { minHeight: 75, flexDirection: 'row', alignItems: 'center', gap: 10 }, featureIcon: { width: 39, height: 39, alignItems: 'center', justifyContent: 'center', borderRadius: 12, backgroundColor: LIGHT_C.tealWash }, featureTitle: { color: LIGHT_C.ink, fontSize: 10, fontWeight: '900' }, featureDetail: { marginTop: 3, color: LIGHT_C.ink40, fontSize: 7.5, lineHeight: 11 }, rowBorder: { borderTopWidth: 1, borderColor: LIGHT_C.line },
@@ -176,4 +221,20 @@ const lightStyles = StyleSheet.create({
   modalBackdrop: { flex: 1, padding: 23, alignItems: 'center', justifyContent: 'center', backgroundColor: 'rgba(14,35,33,.65)' }, modalCard: { width: '100%', maxWidth: 380, padding: 20, borderRadius: 23, backgroundColor: LIGHT_C.paper }, checkoutIcon: { width: 54, height: 54, marginBottom: 14, alignItems: 'center', justifyContent: 'center', borderRadius: 17, backgroundColor: LIGHT_C.optic }, modalEyebrow: { color: LIGHT_C.teal, fontSize: 8, fontWeight: '900', letterSpacing: .9 }, modalTitle: { marginTop: 4, color: LIGHT_C.ink, fontSize: 22, fontWeight: '900' }, modalPrice: { marginTop: 14, color: LIGHT_C.ink, fontSize: 28, fontWeight: '900' }, modalPeriod: { color: LIGHT_C.ink40, fontSize: 10, fontWeight: '700' }, zeroCharge: { marginTop: 13, padding: 11, flexDirection: 'row', alignItems: 'center', gap: 7, borderRadius: 12, backgroundColor: LIGHT_C.tealWash }, zeroChargeText: { color: LIGHT_C.teal, fontSize: 9, fontWeight: '900' }, modalBody: { marginTop: 12, color: LIGHT_C.ink70, fontSize: 9, lineHeight: 14 }, modalActions: { marginTop: 17, flexDirection: 'row', gap: 8 }, modalCancel: { minHeight: 48, flex: 1, alignItems: 'center', justifyContent: 'center', borderRadius: 13, borderWidth: 1, borderColor: LIGHT_C.line, backgroundColor: LIGHT_C.surface }, modalCancelText: { color: LIGHT_C.ink40, fontSize: 9, fontWeight: '900' }, modalConfirm: { minHeight: 48, flex: 1.35, alignItems: 'center', justifyContent: 'center', borderRadius: 13, backgroundColor: LIGHT_C.optic }, modalConfirmText: { color: LIGHT_C.ink, fontSize: 9, fontWeight: '900' },
 });
 
-const darkStyles = createDarkStyleSheet(lightStyles);
+const darkStyles = {
+  ...createDarkStyleSheet(lightStyles),
+  activeEyebrow: { ...lightStyles.activeEyebrow, color: '#0E2321' },
+  activeTitle: { ...lightStyles.activeTitle, color: '#0E2321' },
+  activePlanName: { ...lightStyles.activePlanName, color: '#0E2321' },
+  activePlanMeta: { ...lightStyles.activePlanMeta, color: '#0E2321' },
+  activeFooterText: { ...lightStyles.activeFooterText, color: '#0E2321' },
+  activeIcon: { ...lightStyles.activeIcon, backgroundColor: '#0E2321' },
+  activeCardPro: { ...lightStyles.activeCardPro },
+  activeIconPro: { ...lightStyles.activeIconPro },
+  activeEyebrowPro: { ...lightStyles.activeEyebrowPro },
+  activeTitlePro: { ...lightStyles.activeTitlePro },
+  activePlanNamePro: { ...lightStyles.activePlanNamePro },
+  activePlanMetaPro: { ...lightStyles.activePlanMetaPro },
+  activeFooterPro: { ...lightStyles.activeFooterPro },
+  activeFooterTextPro: { ...lightStyles.activeFooterTextPro },
+};

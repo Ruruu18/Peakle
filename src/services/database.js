@@ -1,5 +1,6 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as Crypto from 'expo-crypto';
+import * as ImageManipulator from 'expo-image-manipulator';
 import { requireSupabase } from '../lib/supabase';
 
 const unfinishedMatchKey = (userId) => `@peakle/unfinished-match/${userId}`;
@@ -8,6 +9,15 @@ const excludeLegacyDemoVenues = (venues) => (venues || []).filter((venue) => !LE
 
 function isMissingResumeState(error) {
   return error?.code === '42703' || error?.message?.includes('resume_state') && error.message.includes('does not exist');
+}
+
+function isMissingTeamCoverColumn(error) {
+  return (error?.code === '42703' && error?.message?.includes('cover_image_url'))
+    || (error?.message?.includes('cover_image_url') && error.message.includes('does not exist'));
+}
+
+function teamCoverMigrationError() {
+  return new Error('Team cover photos require the latest database update. Apply migration 202607220002_team_cover_image.sql, then try again.');
 }
 
 async function readLocalUnfinishedMatch(userId) {
@@ -131,7 +141,7 @@ export async function createBooking({ userId, venue, court, booking }) {
 }
 
 export async function listVenues({ signal } = {}) {
-  let query = requireSupabase().from('venues').select('*, courts(*)').eq('active', true).eq('courts.active', true).order('name');
+  let query = requireSupabase().from('venues').select('*, courts(*)').eq('active', true).eq('verification_status', 'verified').eq('courts.active', true).order('name');
   if (signal) query = query.abortSignal(signal);
   const { data, error } = await query;
   if (error) throw error;
@@ -168,6 +178,10 @@ export async function listManagedVenues() {
       role: membership.role,
       courts: [...(membership.venues.courts || [])].sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true })),
     }));
+}
+
+export function verifiedPublishingVenues(venues = []) {
+  return venues.filter((venue) => venue?.verification_status === 'verified' && venue.active !== false);
 }
 
 export async function createManagedVenue(details) {
@@ -231,21 +245,27 @@ export async function updateManagedCourt(courtId, changes) {
   return data;
 }
 
-export async function listMyBookingsPage({ historyPage = 0, historyPageSize = 30 } = {}) {
+export async function listMyBookingsPage({ historyPage = 0, historyPageSize = 30, signal } = {}) {
   const client = requireSupabase();
   const now = new Date().toISOString();
   const historyFrom = historyPage * historyPageSize;
   const historyTo = historyFrom + historyPageSize;
   const fields = '*, venues(*), courts(*)';
+  let upcomingQuery = client.from('bookings').select(fields)
+    .in('status', ['pending', 'confirmed'])
+    .gt('ends_at', now)
+    .order('starts_at', { ascending: true });
+  let historyQuery = client.from('bookings').select(fields)
+    .or(`status.in.(cancelled,completed,no_show),ends_at.lte.${now}`)
+    .order('starts_at', { ascending: false })
+    .range(historyFrom, historyTo);
+  if (signal) {
+    upcomingQuery = upcomingQuery.abortSignal(signal);
+    historyQuery = historyQuery.abortSignal(signal);
+  }
   const [upcomingResult, historyResult] = await Promise.all([
-    client.from('bookings').select(fields)
-      .in('status', ['pending', 'confirmed'])
-      .gt('ends_at', now)
-      .order('starts_at', { ascending: true }),
-    client.from('bookings').select(fields)
-      .or(`status.in.(cancelled,completed,no_show),ends_at.lte.${now}`)
-      .order('starts_at', { ascending: false })
-      .range(historyFrom, historyTo),
+    upcomingQuery,
+    historyQuery,
   ]);
   if (upcomingResult.error) throw upcomingResult.error;
   if (historyResult.error) throw historyResult.error;
@@ -292,6 +312,17 @@ export async function listCourtAvailability(courtIds, dateIso) {
     return listCourtSchedule(courtIds[0], dateIso).then((rows) => rows.map((item) => ({ ...item, court_id: courtIds[0], reason: 'Booked' })));
   }
   throw error;
+}
+
+export async function getCourtAvailability(courtIds, startsAt, endsAt) {
+  if (!courtIds?.length) return [];
+  const { data, error } = await requireSupabase().rpc('get_court_availability', {
+    p_court_ids: courtIds,
+    p_starts_at: startsAt,
+    p_ends_at: endsAt,
+  });
+  if (error) throw error;
+  return data || [];
 }
 
 export async function listVenueBookingRules(venueId) {
@@ -360,7 +391,7 @@ export async function loadActiveOpenPlay() {
   if (!root) return null;
   const [playerResult, courtResult, matchResult, decisionResult] = await Promise.all([
     client.from('open_play_players').select('*, profiles!open_play_players_user_id_fkey(display_name, avatar_url, skill_rating)').eq('session_id', root.id),
-    client.from('open_play_courts').select('*').eq('session_id', root.id).order('court_number'),
+    client.from('open_play_courts').select('*, venue_court:courts(name)').eq('session_id', root.id).order('court_number'),
     client.from('open_play_matches').select('*, open_play_match_players(*)').eq('session_id', root.id).order('started_at'),
     client.from('open_play_rotation_decisions').select('*').eq('session_id', root.id).order('created_at', { ascending: false }).limit(25),
   ]);
@@ -389,6 +420,9 @@ export async function loadActiveOpenPlay() {
   const courts = courtResult.data.map((court) => ({
     id: court.id,
     number: court.court_number,
+    venueCourtId: court.venue_court_id,
+    name: court.venue_court?.name || null,
+    matchFormat: court.match_format || root.match_format || 'doubles',
     match: matches.find((match) => matchResult.data.find((row) => row.id === match.id)?.session_court_id === court.id && !match.complete) || null,
   }));
   return {
@@ -484,13 +518,22 @@ export async function syncOpenPlay(session) {
     })));
     if (playerError) throw playerError;
   }
-  const { error: courtError } = await client.from('open_play_courts').upsert(session.courts.map((court) => ({ id: court.id, session_id: session.id, court_number: court.number })));
+  const { error: courtError } = await client.from('open_play_courts').upsert(session.courts.map((court) => ({
+    id: court.id,
+    session_id: session.id,
+    court_number: court.number,
+    venue_court_id: court.venueCourtId || null,
+    match_format: court.matchFormat || (session.matchFormat === 'mixed' ? 'doubles' : session.matchFormat) || 'doubles',
+  })));
   if (courtError) throw courtError;
   const activeMatches = session.courts.flatMap((court) => court.match ? [{ ...court.match, courtId: court.id }] : []);
   const completedMatches = session.completedMatches.map((match) => ({ ...match, courtId: session.courts.find((court) => court.number === match.courtNumber)?.id }));
   const matches = [...completedMatches, ...activeMatches].filter((match) => match.courtId);
   for (const match of matches) {
     const complete = Boolean(match.endedAt || match.complete && completedMatches.some((item) => item.id === match.id));
+    // Match scoring is server-authoritative. Assign/start and score RPCs create
+    // and mutate existing matches atomically, so a delayed organizer snapshot
+    // must never overwrite a newer score or completed state.
     const { error: matchError } = await client.from('open_play_matches').upsert({
       id: match.id,
       session_id: session.id,
@@ -502,7 +545,7 @@ export async function syncOpenPlay(session) {
       status: complete ? 'completed' : 'live',
       started_at: new Date(match.startedAt).toISOString(),
       ended_at: match.endedAt ? new Date(match.endedAt).toISOString() : null,
-    });
+    }, { onConflict: 'id', ignoreDuplicates: true });
     if (matchError) throw matchError;
     const lineup = match.teams.flatMap((team, side) => team.map((playerId, position) => ({ match_id: match.id, player_id: playerId, side, position })));
     const { error: lineupError } = await client.from('open_play_match_players').upsert(lineup);
@@ -510,25 +553,43 @@ export async function syncOpenPlay(session) {
   }
 }
 
+export async function updateOpenPlayMatchScorer(matchId, scorerPlayerId) {
+  const { data, error } = await requireSupabase()
+    .from('open_play_matches')
+    .update({ scorer_player_id: scorerPlayerId })
+    .eq('id', matchId)
+    .select('id')
+    .maybeSingle();
+  if (error) throw error;
+  if (!data) throw new Error('Only the session organizer can change the assigned scorer.');
+}
+
 export async function completeOpenPlay(sessionId) {
   if (!sessionId) return;
-  const { error } = await requireSupabase().from('open_play_sessions').update({ status: 'completed', ended_at: new Date().toISOString() }).eq('id', sessionId);
+  const { data, error } = await requireSupabase()
+    .from('open_play_sessions')
+    .update({ status: 'completed', ended_at: new Date().toISOString() })
+    .eq('id', sessionId)
+    .select('id')
+    .maybeSingle();
   if (error) throw error;
+  if (!data) throw new Error('The live session could not be ended. Refresh it and try again.');
 }
 
 export async function listTeams() {
   const client = requireSupabase();
   const { data: auth } = await client.auth.getUser();
-  const { data, error } = await client.from('teams').select('*, team_members(user_id, role, profiles(display_name, avatar_url, skill_rating))').order('created_at', { ascending: false });
+  const { data, error } = await client.from('teams').select('*, team_members(user_id, role, profiles(display_name, avatar_url, skill_rating))').neq('status', 'archived').order('created_at', { ascending: false });
   if (error) throw error;
-  return data.map((team) => {
+  const unique = data.filter((team, index, arr) => arr.findIndex((t) => t.id === team.id) === index);
+  return unique.map((team) => {
     const mine = team.team_members.find((member) => member.user_id === auth.user?.id);
     return {
       id: team.id, name: team.name, tag: team.tag, location: team.location || '', latitude: team.latitude, longitude: team.longitude,
       members: team.member_count ?? team.team_members.length, capacity: team.capacity, rating: '—', level: team.skill_level || 'Open level', color: team.color || '#1C6B66',
-      icon: 'people-outline', role: mine ? ({ creator: 'Owner', admin: 'Admin', co_admin: 'Co-admin', member: 'Member' }[mine.role]) : null, motto: team.motto || '', about: team.about || '',
-      image: team.image_url, isDiscoverable: team.is_discoverable, status: team.status || ((team.member_count ?? team.team_members.length) >= 4 ? 'active' : 'forming'),
-      roster: team.team_members.map((member) => ({ id: member.user_id, name: member.profiles?.display_name || 'Player', initials: (member.profiles?.display_name || 'P').split(/\s+/).map((part) => part[0]).join('').slice(0, 2).toUpperCase(), role: ({ creator: 'Owner', admin: 'Admin', co_admin: 'Co-admin', member: 'Member' }[member.role]) || 'Member', rating: member.profiles?.skill_rating ?? 'Unrated', color: '#1C6B66' })),
+      icon: 'people-outline', role: mine ? ({ creator: 'Owner', admin: 'Admin', co_admin: 'Co-admin', member: 'Member' }[mine.role]) : null, about: team.about || '',
+      image: team.image_url, coverImage: team.cover_image_url, isDiscoverable: team.is_discoverable, status: team.status || ((team.member_count ?? team.team_members.length) >= 4 ? 'active' : 'forming'),
+      roster: team.team_members.map((member) => ({ id: member.user_id, name: member.profiles?.display_name || 'Player', initials: (member.profiles?.display_name || 'P').split(/\s+/).map((part) => part[0]).join('').slice(0, 2).toUpperCase(), avatar: member.profiles?.avatar_url || null, role: ({ creator: 'Owner', admin: 'Admin', co_admin: 'Co-admin', member: 'Member' }[member.role]) || 'Member', rating: member.profiles?.skill_rating ?? 'Unrated', color: '#1C6B66' })),
       acceptedMembers: team.team_members.filter((member) => member.user_id !== auth.user?.id).map((member) => ({ id: member.user_id, name: member.profiles?.display_name || 'Player', rating: member.profiles?.skill_rating ?? 'Unrated' })),
     };
   });
@@ -538,22 +599,48 @@ export async function createTeamRecord(details) {
   const client = requireSupabase();
   const { data: auth } = await client.auth.getUser();
   if (!auth.user) throw new Error('Sign in to create a team.');
-  const { data, error } = await client.from('teams').insert({
-    creator_id: auth.user.id, name: details.name, tag: details.tag, motto: details.motto, about: details.about,
+  const creationRequestId = details.creationRequestId || Crypto.randomUUID();
+  const values = {
+    id: creationRequestId,
+    creator_id: auth.user.id, name: details.name, tag: details.tag, motto: null, about: details.about,
     location: details.location, latitude: details.latitude, longitude: details.longitude, skill_level: details.level,
-    capacity: details.capacity, color: details.color || '#1C6B66', image_url: details.image || null,
+    capacity: details.capacity, color: details.color || '#1C6B66', image_url: details.image || null, cover_image_url: details.coverImage || null,
     is_discoverable: Boolean(details.isDiscoverable),
-  }).select().single();
+  };
+  let { data, error } = await client.from('teams').insert(values).select().single();
+  if (isMissingTeamCoverColumn(error)) {
+    if (details.coverImage) throw teamCoverMigrationError();
+    const { cover_image_url: ignoredCover, ...legacyValues } = values;
+    ({ data, error } = await client.from('teams').insert(legacyValues).select().single());
+  }
+  if (error?.code === '23505') {
+    const { data: existing, error: existingError } = await client.from('teams').select().eq('id', creationRequestId).maybeSingle();
+    if (existingError) throw existingError;
+    if (existing) return existing;
+  }
+  if (error?.code === '23514' && error.message?.includes('teams_tag_check')) {
+    throw new Error('We could not generate a valid team abbreviation. Update the team name and try again.');
+  }
   if (error) throw error;
   return data;
 }
 
 export async function updateTeamRecord(teamId, details) {
-  const { error } = await requireSupabase().from('teams').update({
-    name: details.name, tag: details.tag, motto: details.motto, about: details.about, location: details.location,
+  const client = requireSupabase();
+  const values = {
+    name: details.name, tag: details.tag, motto: null, about: details.about, location: details.location,
     latitude: details.latitude, longitude: details.longitude, skill_level: details.level, capacity: details.capacity,
-    color: details.color, image_url: details.image || null, is_discoverable: Boolean(details.isDiscoverable),
-  }).eq('id', teamId);
+    color: details.color, image_url: details.image || null, cover_image_url: details.coverImage || null, is_discoverable: Boolean(details.isDiscoverable),
+  };
+  let { error } = await client.from('teams').update(values).eq('id', teamId);
+  if (isMissingTeamCoverColumn(error)) {
+    if (details.coverImage) throw teamCoverMigrationError();
+    const { cover_image_url: ignoredCover, ...legacyValues } = values;
+    ({ error } = await client.from('teams').update(legacyValues).eq('id', teamId));
+  }
+  if (error?.code === '23514' && error.message?.includes('teams_tag_check')) {
+    throw new Error('We could not generate a valid team abbreviation. Update the team name and try again.');
+  }
   if (error) throw error;
 }
 
@@ -562,6 +649,19 @@ export async function requestTeamJoin(teamId, note = '') {
   const { data: auth } = await client.auth.getUser();
   if (!auth.user) throw new Error('Sign in to join a team.');
   const { error } = await client.from('team_join_requests').upsert({ team_id: teamId, user_id: auth.user.id, note, status: 'pending' }, { onConflict: 'team_id,user_id' });
+  if (error) throw error;
+}
+
+export async function cancelTeamJoin(teamId) {
+  const client = requireSupabase();
+  const { data: auth } = await client.auth.getUser();
+  if (!auth.user) throw new Error('Sign in to cancel a join request.');
+  const { error } = await client
+    .from('team_join_requests')
+    .delete()
+    .eq('team_id', teamId)
+    .eq('user_id', auth.user.id)
+    .eq('status', 'pending');
   if (error) throw error;
 }
 
@@ -595,7 +695,7 @@ export async function listMyTeamInvitations() {
   const { data: auth } = await client.auth.getUser();
   if (!auth.user) return [];
   const { data, error } = await client.from('team_invitations')
-    .select('*, teams(id, name, tag, motto, location, skill_level, capacity, image_url, color, is_discoverable, status)')
+    .select('*, teams(id, name, tag, location, skill_level, capacity, image_url, color, is_discoverable, status)')
     .eq('invited_user_id', auth.user.id)
     .eq('status', 'pending')
     .gt('expires_at', new Date().toISOString())
@@ -615,7 +715,12 @@ export async function respondTeamInvitation(invitationId, accept) {
 
 export async function listTeamRequests(teamIds) {
   if (!teamIds.length) return [];
-  const { data, error } = await requireSupabase().from('team_join_requests').select('*, profiles(display_name, skill_rating, avatar_url)').in('team_id', teamIds).eq('status', 'pending');
+  const { data, error } = await requireSupabase()
+    .from('team_join_requests')
+    .select('*, profiles!team_join_requests_user_id_fkey(display_name, skill_rating, avatar_url, home_area, play_preference)')
+    .in('team_id', teamIds)
+    .eq('status', 'pending')
+    .order('created_at', { ascending: false });
   if (error) throw error;
   return data;
 }
@@ -635,10 +740,113 @@ export async function reviewTeamRequest(request, accept) {
   if (error) throw error;
 }
 
-export async function listTeamMessages(teamId) {
-  const { data, error } = await requireSupabase().from('team_messages').select('*, profiles(display_name, avatar_url)').eq('team_id', teamId).order('created_at');
+export async function updateTeamMemberRole(teamId, userId, role) {
+  const { data, error } = await requireSupabase().rpc('update_team_member_role', {
+    p_team_id: teamId,
+    p_user_id: userId,
+    p_role: role,
+  });
   if (error) throw error;
   return data;
+}
+
+export async function removeTeamMember(teamId, userId) {
+  const { error } = await requireSupabase().rpc('remove_team_member', {
+    p_team_id: teamId,
+    p_user_id: userId,
+  });
+  if (error) throw error;
+}
+
+const TEAM_MESSAGE_SELECT = '*, profiles!team_messages_sender_id_fkey(display_name, avatar_url), team_message_reactions(emoji, user_id), team_message_pins(pinned_by, pinned_at)';
+const CHAT_PAGE_SIZE = 40;
+
+async function addSignedChatMedia(client, rows) {
+  const paths = [...new Set((rows || []).map((row) => row.media_path).filter(Boolean))];
+  if (!paths.length) return (rows || []).map((row) => ({ ...row, media_url: row.image_url || null }));
+  const { data, error } = await client.storage.from('team-chat-media').createSignedUrls(paths, 3600);
+  if (error) throw error;
+  const urls = new Map((data || []).map((item, index) => [paths[index], item.signedUrl]));
+  return (rows || []).map((row) => ({ ...row, media_url: row.media_path ? urls.get(row.media_path) || null : row.image_url }));
+}
+
+async function removeHiddenChatRows(client, rows) {
+  const ids = (rows || []).map((row) => row.id);
+  if (!ids.length) return rows || [];
+  const { data, error } = await client.from('team_message_hides').select('message_id').in('message_id', ids);
+  if (error) throw error;
+  const hiddenIds = new Set((data || []).map((item) => item.message_id));
+  return rows.filter((row) => !hiddenIds.has(row.id));
+}
+
+export async function listTeamMessages(teamId, { before = null, limit = CHAT_PAGE_SIZE } = {}) {
+  const client = requireSupabase();
+  let query = client.from('team_messages').select(TEAM_MESSAGE_SELECT).eq('team_id', teamId).order('created_at', { ascending: false }).order('id', { ascending: false }).limit(limit + 1);
+  if (before?.createdAt && before?.id) {
+    query = query.or(`created_at.lt.${before.createdAt},and(created_at.eq.${before.createdAt},id.lt.${before.id})`);
+  } else if (before?.createdAt) {
+    query = query.lt('created_at', before.createdAt);
+  }
+  const { data, error } = await query;
+  if (error) throw error;
+  const page = data || [];
+  const hasMore = page.length > limit;
+  const rows = page.slice(0, limit);
+  const cursorRow = rows[rows.length - 1];
+  const visibleRows = (await removeHiddenChatRows(client, rows)).reverse();
+  return {
+    rows: await addSignedChatMedia(client, visibleRows),
+    hasMore,
+    cursor: cursorRow ? { createdAt: cursorRow.created_at, id: cursorRow.id } : null,
+  };
+}
+
+export async function getTeamMessage(messageId) {
+  const client = requireSupabase();
+  const { data, error } = await client.from('team_messages').select(TEAM_MESSAGE_SELECT).eq('id', messageId).maybeSingle();
+  if (error) throw error;
+  if (!data) return null;
+  const { data: hidden, error: hiddenError } = await client.from('team_message_hides').select('message_id').eq('message_id', messageId).maybeSingle();
+  if (hiddenError) throw hiddenError;
+  if (hidden) return null;
+  return (await addSignedChatMedia(client, [data]))[0];
+}
+
+export async function listPinnedTeamMessages(teamId) {
+  const client = requireSupabase();
+  const { data: pins, error: pinsError } = await client.from('team_message_pins')
+    .select('message_id, pinned_at')
+    .eq('team_id', teamId)
+    .order('pinned_at', { ascending: false });
+  if (pinsError) throw pinsError;
+  if (!pins?.length) return [];
+  const { data, error } = await client.from('team_messages')
+    .select(TEAM_MESSAGE_SELECT)
+    .in('id', pins.map((pin) => pin.message_id))
+    .is('deleted_at', null);
+  if (error) throw error;
+  const pinnedAt = new Map(pins.map((pin) => [pin.message_id, pin.pinned_at]));
+  const rows = (data || []).sort((a, b) => new Date(pinnedAt.get(b.id)) - new Date(pinnedAt.get(a.id)));
+  return addSignedChatMedia(client, await removeHiddenChatRows(client, rows));
+}
+
+export async function listTeamSharedMedia(teamId, limit = 120) {
+  const client = requireSupabase();
+  const { data, error } = await client.from('team_messages')
+    .select(TEAM_MESSAGE_SELECT)
+    .eq('team_id', teamId)
+    .is('deleted_at', null)
+    .or('media_path.not.is.null,image_url.not.is.null')
+    .order('created_at', { ascending: false })
+    .limit(limit);
+  if (error) throw error;
+  return addSignedChatMedia(client, await removeHiddenChatRows(client, data || []));
+}
+
+export async function listTeamMessageReadStates(teamId) {
+  const { data, error } = await requireSupabase().from('team_message_reads').select('user_id, last_read_at, profiles(display_name, avatar_url)').eq('team_id', teamId);
+  if (error) throw error;
+  return data || [];
 }
 
 export async function listTeamConversationSummaries(teamIds) {
@@ -653,21 +861,193 @@ export async function markTeamConversationRead(teamId) {
   if (error) throw error;
 }
 
-export async function sendTeamMessage(teamId, body, imageUrl = null) {
-  const client = requireSupabase();
-  const { data: auth } = await client.auth.getUser();
-  const { data, error } = await client.from('team_messages').insert({ team_id: teamId, sender_id: auth.user.id, body: body || null, image_url: imageUrl }).select('*, profiles(display_name, avatar_url)').single();
+export async function getChatSafetyStatus() {
+  const { data, error } = await requireSupabase().rpc('get_chat_safety_status');
+  if (error) throw error;
+  const status = Array.isArray(data) ? data[0] : data;
+  return {
+    acknowledged: Boolean(status?.acknowledged),
+    isAdult: Boolean(status?.is_adult),
+    eligible: Boolean(status?.eligible),
+    suspended: Boolean(status?.suspended),
+    suspendedUntil: status?.suspended_until || null,
+  };
+}
+
+export async function acknowledgeChatSafety(isAdult) {
+  const { data, error } = await requireSupabase().rpc('acknowledge_chat_safety', { p_is_adult: Boolean(isAdult) });
+  if (error) throw error;
+  const status = Array.isArray(data) ? data[0] : data;
+  return {
+    acknowledged: Boolean(status?.acknowledged),
+    isAdult: Boolean(status?.is_adult),
+    eligible: Boolean(status?.eligible),
+    suspended: Boolean(status?.suspended),
+    suspendedUntil: status?.suspended_until || null,
+  };
+}
+
+export async function listBlockedChatUsers() {
+  const { data, error } = await requireSupabase().rpc('list_blocked_chat_users');
+  if (error) throw error;
+  return (data || []).map((item) => ({
+    id: item.user_id,
+    name: item.display_name || 'Peakle player',
+    avatar: item.avatar_url || null,
+    blockedAt: item.blocked_at,
+  }));
+}
+
+export async function blockChatUser(userId) {
+  const { error } = await requireSupabase().rpc('block_chat_user', { p_user_id: userId });
+  if (error) throw error;
+}
+
+export async function unblockChatUser(userId) {
+  const { error } = await requireSupabase().rpc('unblock_chat_user', { p_user_id: userId });
+  if (error) throw error;
+}
+
+export async function reportTeamMessage(messageId, reason, details = '') {
+  const { data, error } = await requireSupabase().rpc('report_team_message', {
+    p_message_id: messageId,
+    p_reason: reason,
+    p_details: details?.trim() || null,
+  });
   if (error) throw error;
   return data;
 }
 
-export async function uploadTeamImage(teamId, uri) {
+export async function moderateTeamMessage(messageId, reason) {
+  const { error } = await requireSupabase().rpc('moderate_team_message', {
+    p_message_id: messageId,
+    p_reason: reason,
+  });
+  if (error) throw error;
+}
+
+export async function sendTeamMessage(teamId, body, media = null) {
+  const client = requireSupabase();
+  const { data: auth } = await client.auth.getUser();
+  if (!auth.user) throw new Error('Sign in before sending a message.');
+  const { data, error } = await client.from('team_messages').insert({
+    team_id: teamId,
+    sender_id: auth.user.id,
+    body: body?.trim() || null,
+    media_path: media?.path || null,
+    media_type: media?.type || null,
+    media_name: media?.name || null,
+    media_mime: media?.mime || null,
+    media_size: media?.size || null,
+  }).select(TEAM_MESSAGE_SELECT).single();
+  if (error) throw error;
+  return (await addSignedChatMedia(client, [data]))[0];
+}
+
+export async function editTeamMessage(messageId, body) {
+  const client = requireSupabase();
+  const { error } = await client.rpc('edit_team_message', { p_message_id: messageId, p_body: body });
+  if (error) throw error;
+  return getTeamMessage(messageId);
+}
+
+export async function unsendTeamMessage(messageId) {
+  const client = requireSupabase();
+  const { data, error } = await client.rpc('unsend_team_message', { p_message_id: messageId });
+  if (error) throw error;
+  const mediaPath = Array.isArray(data) ? data[0]?.media_path : data?.media_path;
+  if (mediaPath) {
+    const { error: removeError } = await client.storage.from('team-chat-media').remove([mediaPath]);
+    if (removeError) console.warn('The message was unsent but its media cleanup failed.', removeError.message);
+  }
+  return getTeamMessage(messageId);
+}
+
+export async function hideTeamMessage(messageId) {
+  const { error } = await requireSupabase().rpc('hide_team_message', { p_message_id: messageId });
+  if (error) throw error;
+}
+
+export async function toggleTeamMessageReaction(messageId, emoji) {
+  const client = requireSupabase();
+  const { error } = await client.rpc('toggle_team_message_reaction', { p_message_id: messageId, p_emoji: emoji });
+  if (error) throw error;
+  return getTeamMessage(messageId);
+}
+
+export async function toggleTeamMessagePin(messageId) {
+  const client = requireSupabase();
+  const { error } = await client.rpc('toggle_team_message_pin', { p_message_id: messageId });
+  if (error) throw error;
+  return getTeamMessage(messageId);
+}
+
+const mediaExtension = (mime, fileName = '') => {
+  const known = {
+    'image/jpeg': 'jpg', 'image/png': 'png', 'image/webp': 'webp', 'image/gif': 'gif',
+    'video/mp4': 'mp4', 'video/quicktime': 'mov', 'video/webm': 'webm',
+  };
+  return known[mime] || fileName.split('.').pop()?.toLowerCase() || 'bin';
+};
+
+export async function uploadTeamChatMedia(teamId, asset, requestedType) {
+  const client = requireSupabase();
+  const { data: auth } = await client.auth.getUser();
+  if (!auth.user) throw new Error('Sign in before uploading media.');
+
+  const originalMime = asset.mimeType || (requestedType === 'video' ? 'video/mp4' : 'image/jpeg');
+  const isGif = originalMime === 'image/gif' || asset.fileName?.toLowerCase().endsWith('.gif');
+  if (isGif) throw new Error('GIF sending is temporarily unavailable.');
+  if (!['image', 'video'].includes(requestedType)) throw new Error('This attachment type is not supported.');
+
+  let uploadUri = asset.uri;
+  let mime = originalMime;
+  let type = requestedType;
+  if (requestedType === 'image') {
+    const actions = Math.max(asset.width || 0, asset.height || 0) > 1600
+      ? [{ resize: asset.width >= asset.height ? { width: 1600 } : { height: 1600 } }]
+      : [];
+    const optimized = await ImageManipulator.manipulateAsync(uploadUri, actions, { compress: 0.76, format: ImageManipulator.SaveFormat.JPEG });
+    uploadUri = optimized.uri;
+    mime = 'image/jpeg';
+  } else if (requestedType === 'video') {
+    const extension = asset.fileName?.split('.').pop()?.toLowerCase();
+    if (extension === 'mov') mime = 'video/quicktime';
+    else if (extension === 'webm') mime = 'video/webm';
+    else if (!['video/mp4', 'video/quicktime', 'video/webm'].includes(mime)) mime = 'video/mp4';
+  }
+
+  const response = await fetch(uploadUri);
+  const file = await response.arrayBuffer();
+  const maxBytes = type === 'video' ? 15 * 1024 * 1024 : 2 * 1024 * 1024;
+  if (file.byteLength > maxBytes) throw new Error(`${type === 'video' ? 'Video' : 'Image'} is too large. The limit is ${Math.round(maxBytes / 1024 / 1024)} MB.`);
+
+  const extension = mediaExtension(mime, asset.fileName);
+  const path = `${teamId}/${auth.user.id}/${Crypto.randomUUID()}.${extension}`;
+  const { error } = await client.storage.from('team-chat-media').upload(path, file, { contentType: mime, upsert: false });
+  if (error) throw error;
+  const { data: signed, error: signedError } = await client.storage.from('team-chat-media').createSignedUrl(path, 3600);
+  if (signedError) {
+    await client.storage.from('team-chat-media').remove([path]).catch(() => {});
+    throw signedError;
+  }
+  return { path, url: signed.signedUrl, type, mime, size: file.byteLength, name: asset.fileName || `Team ${type}.${extension}` };
+}
+
+export async function deleteTeamChatMedia(path) {
+  if (!path) return;
+  const { error } = await requireSupabase().storage.from('team-chat-media').remove([path]);
+  if (error) throw error;
+}
+
+export async function uploadTeamImage(teamId, uri, kind = 'profile') {
   if (!uri || uri.startsWith('http')) return uri;
   const client = requireSupabase();
   const extension = uri.split('.').pop()?.split('?')[0]?.toLowerCase() || 'jpg';
   const response = await fetch(uri);
   const file = await response.arrayBuffer();
-  const path = `${teamId}/${Date.now()}.${extension}`;
+  const safeKind = kind === 'cover' ? 'cover' : 'profile';
+  const path = `${teamId}/${safeKind}-${Date.now()}.${extension}`;
   const { error } = await client.storage.from('team-images').upload(path, file, { contentType: `image/${extension === 'jpg' ? 'jpeg' : extension}`, upsert: true });
   if (error) throw error;
   return client.storage.from('team-images').getPublicUrl(path).data.publicUrl;
@@ -675,9 +1055,23 @@ export async function uploadTeamImage(teamId, uri) {
 
 export async function saveCompletedMatch(userId, result, userName) {
   const client = requireSupabase();
+  const deterministicMatchId = result.savedMatchId || result.sharedLiveMatchId || null;
+  const endedAtTimestamp = Number.isFinite(result.endedAtTimestamp) ? result.endedAtTimestamp : Date.now();
+  const startedAtTimestamp = Number.isFinite(result.matchStartedAt) ? result.matchStartedAt : endedAtTimestamp - ((result.elapsed || 0) * 1000);
+  const expectedCompletedGames = Number(result.games?.[0] || 0) + Number(result.games?.[1] || 0);
+  const rawScores = result.gameScores?.length ? result.gameScores : [result.scores];
+  const expectedScoreRows = result.reason === 'completed' ? expectedCompletedGames : rawScores.length;
+  const scores = rawScores
+    .map((score) => [Number(score?.[0] || 0), Number(score?.[1] || 0)])
+    .filter((score, index) => index < Math.max(1, expectedScoreRows) && score[0] + score[1] > 0);
+  if (result.reason === 'completed' && (expectedCompletedGames < 1 || scores.length !== expectedCompletedGames)) {
+    throw new Error('The completed score is incomplete. Reopen the connected result and retry recording it.');
+  }
+  if (!scores.length) throw new Error('A 0-0 match cannot be recorded. Add a score or save it as unfinished.');
   const venueId = ['yard', 'rockwell', 'valley'].find((id) => result.court?.id?.startsWith(id));
   const courtNumber = result.court?.id?.match(/(\d+)$/)?.[1];
   const matchValues = {
+    ...(deterministicMatchId ? { id: deterministicMatchId } : {}),
     created_by: userId,
     scorer_id: userId,
     venue_id: venueId || null,
@@ -689,20 +1083,22 @@ export async function saveCompletedMatch(userId, result, userName) {
     best_of: result.bestOf,
     win_by_two: result.winByTwo,
     status: 'completed',
-    started_at: new Date(Date.now() - (result.elapsed || 0) * 1000).toISOString(),
-    ended_at: new Date().toISOString(),
+    started_at: new Date(startedAtTimestamp).toISOString(),
+    ended_at: new Date(endedAtTimestamp).toISOString(),
     resume_state: null,
   };
   const persistMatch = (values) => (result.savedMatchId
     ? client.from('matches').update(values).eq('id', result.savedMatchId).eq('created_by', userId)
-    : client.from('matches').insert(values)).select().single();
+    : result.sharedLiveMatchId
+      ? client.from('matches').upsert(values, { onConflict: 'id' })
+      : client.from('matches').insert(values)).select().single();
   let { data: match, error } = await persistMatch(matchValues);
   if (isMissingResumeState(error)) {
     const { resume_state: _resumeState, ...legacyMatchValues } = matchValues;
     ({ data: match, error } = await persistMatch(legacyMatchValues));
   }
   if (error) throw error;
-  if (result.savedMatchId) {
+  if (deterministicMatchId) {
     const [participants, games] = await Promise.all([
       client.from('match_participants').delete().eq('match_id', match.id),
       client.from('match_games').delete().eq('match_id', match.id),
@@ -724,15 +1120,21 @@ export async function saveCompletedMatch(userId, result, userName) {
   }));
   const { error: participantError } = await client.from('match_participants').insert(lineup);
   if (participantError) throw participantError;
-  const scores = result.gameScores?.length ? result.gameScores : [result.scores];
   const { error: gameError } = await client.from('match_games').insert(scores.map((score, index) => ({
     match_id: match.id, game_number: index + 1, home_score: score[0], away_score: score[1], winner_side: score[0] === score[1] ? null : score[0] > score[1] ? 0 : 1, ended_at: new Date().toISOString(),
   })));
   if (gameError) throw gameError;
-  const rating = calculatePerformanceRating(await listMyMatches());
-  const { error: ratingError } = await client.from('profiles').update({ skill_rating: rating }).eq('id', userId);
-  if (ratingError) throw ratingError;
-  await clearLocalUnfinishedMatch(userId);
+  // The completed match is already durable at this point. Rating refresh and
+  // local cleanup are secondary work and must never turn a successful match
+  // save into a false failure (or cause a duplicate when the user retries).
+  try {
+    const rating = calculatePerformanceRating(await listMyMatches());
+    const { error: ratingError } = await client.from('profiles').update({ skill_rating: rating }).eq('id', userId);
+    if (ratingError) console.warn('Post-match rating refresh failed:', ratingError.message);
+  } catch (ratingError) {
+    console.warn('Post-match rating refresh failed:', ratingError.message);
+  }
+  await clearLocalUnfinishedMatch(userId).catch((cleanupError) => console.warn('Completed-match cleanup failed:', cleanupError.message));
   return match;
 }
 
@@ -796,14 +1198,17 @@ export async function listPlayers() {
   return data.map((player) => ({ id: player.id, name: player.display_name, avatar: player.avatar_url, initials: player.display_name.split(/\s+/).map((part) => part[0]).join('').slice(0, 2), rating: player.skill_rating ?? 'Unrated', distance: 'Available', color: '#1C6B66' }));
 }
 
-export async function listMyMatches() {
+export async function listMyMatches({ limit } = {}) {
   const client = requireSupabase();
-  const { data: auth } = await client.auth.getUser();
-  const { data, error } = await client.from('matches').select('*, match_games(*), match_participants(*, profiles(display_name)), venues(name), courts(name)').eq('status', 'completed').order('ended_at', { ascending: false });
+  const { data: auth } = await client.auth.getSession();
+  const userId = auth?.session?.user?.id;
+  let query = client.from('matches').select('*, match_games(*), match_participants(*, profiles(display_name)), venues(name), courts(name)').eq('status', 'completed').order('ended_at', { ascending: false });
+  if (limit != null) query = query.limit(limit);
+  const { data, error } = await query;
   if (error) throw error;
   return data.map((match) => {
     const games = [...match.match_games].sort((a, b) => a.game_number - b.game_number);
-    const currentParticipant = match.match_participants.find((player) => player.user_id === auth.user?.id);
+    const currentParticipant = match.match_participants.find((player) => player.user_id === userId);
     const currentSide = currentParticipant?.side ?? 0;
     const normalizedGames = games.map((game) => ({ homeScore: currentSide === 0 ? game.home_score : game.away_score, awayScore: currentSide === 0 ? game.away_score : game.home_score }));
     const homeWins = normalizedGames.filter((game) => game.homeScore > game.awayScore).length;
@@ -811,7 +1216,7 @@ export async function listMyMatches() {
     const playerName = (player) => player.guest_name || player.profiles?.display_name || 'Player';
     const opponents = match.match_participants.filter((player) => player.side !== currentSide).sort((a, b) => a.position - b.position).map(playerName).join(' & ');
     const partnerRow = currentParticipant
-      ? match.match_participants.find((player) => player.side === currentSide && player.user_id !== auth.user?.id && player.position !== currentParticipant.position)
+      ? match.match_participants.find((player) => player.side === currentSide && player.user_id !== userId && player.position !== currentParticipant.position)
       : match.match_participants.find((player) => player.side === currentSide && player.position === 1);
     const partner = partnerRow ? playerName(partnerRow) : null;
     return { id: match.id, opponent: opponents || 'Opponent', partner, score: normalizedGames.map((game) => `${game.homeScore}–${game.awayScore}`).join(', '), games: normalizedGames, result: homeWins > awayWins ? 'W' : 'L', date: new Date(match.ended_at).toLocaleDateString('en-US', { month: 'short', day: '2-digit' }).toUpperCase(), endedAt: match.ended_at, startedAt: match.started_at, type: `${match.mode === 'ranked' ? 'Ranked' : 'Casual'} ${match.match_type}`, rating: '—', venue: match.venues ? `${match.venues.name}${match.courts ? ` · ${match.courts.name}` : ''}` : 'Unlisted court', duration: match.started_at && match.ended_at ? `${Math.max(1, Math.round((new Date(match.ended_at) - new Date(match.started_at)) / 60000))} min` : '—', longestRally: null, sideOuts: null, serveWon: null, returnWon: null, kitchenWon: null, errors: null, takeaway: homeWins > awayWins ? 'Match completed and recorded.' : 'Review the scoring pattern from this match.', improve: 'Use the score history to plan the next match.' };

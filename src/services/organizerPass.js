@@ -16,7 +16,7 @@ export const ORGANIZER_PASS_TIERS = Object.freeze({
 export const ORGANIZER_PASS_PLANS = Object.freeze([
   {
     id: 'organizer_monthly',
-    name: 'Monthly',
+    name: 'Plus Monthly',
     tier: 'plus',
     price: 499,
     currency: 'PHP',
@@ -25,13 +25,23 @@ export const ORGANIZER_PASS_PLANS = Object.freeze([
   },
   {
     id: 'organizer_annual',
-    name: 'Annual',
+    name: 'Plus Annual',
     tier: 'plus',
     price: 4990,
     currency: 'PHP',
     billingLabel: 'year',
     durationDays: 365,
     badge: 'SAVE ₱998',
+  },
+  {
+    id: 'organizer_pro_monthly',
+    name: 'Pro Monthly',
+    tier: 'pro',
+    price: 999,
+    currency: 'PHP',
+    billingLabel: 'month',
+    durationDays: 30,
+    badge: 'ALL FEATURES',
   },
 ]);
 

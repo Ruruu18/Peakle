@@ -2,7 +2,7 @@ export const LEGAL_DOCUMENTS = {
   terms: {
     eyebrow: 'PEAKLE LEGAL',
     title: 'Terms of Service',
-    effectiveDate: 'Effective July 15, 2026',
+    effectiveDate: 'Effective July 26, 2026',
     introduction: 'These Terms of Service govern your access to and use of Peakle. By creating an account, signing in, or using the service, you agree to these Terms.',
     sections: [
       {
@@ -20,6 +20,10 @@ export const LEGAL_DOCUMENTS = {
       {
         title: '4. Fair and acceptable use',
         body: 'You may not misuse the service, impersonate another person, submit false results or booking information, harass other users, interfere with security, access data without permission, reverse engineer protected parts of the service, or use Peakle for unlawful or fraudulent activity.',
+      },
+      {
+        title: '4A. Team chat and community safety',
+        body: 'Team chat is currently available only to users who confirm they are at least 18 years old. Messages may be filtered, rate-limited, flagged, hidden, or removed to protect users and enforce these Terms. You may report messages and block senders. Peakle may review reported or automatically flagged content, restrict chat access, preserve limited evidence needed for a safety review, and take proportionate action. Do not share passwords, financial details, precise home addresses, or another person’s private information in chat.',
       },
       {
         title: '5. Content and match records',
@@ -50,7 +54,7 @@ export const LEGAL_DOCUMENTS = {
   privacy: {
     eyebrow: 'YOUR DATA & CHOICES',
     title: 'Privacy Policy',
-    effectiveDate: 'Effective July 15, 2026',
+    effectiveDate: 'Effective July 26, 2026',
     introduction: 'This Privacy Policy explains how Peakle collects, uses, stores, and shares personal data. Peakle processes personal data in accordance with applicable law, including the Philippine Data Privacy Act of 2012 and its implementing rules.',
     sections: [
       {
@@ -64,6 +68,10 @@ export const LEGAL_DOCUMENTS = {
       {
         title: '3. How we use data',
         body: 'We use personal data to create and secure accounts; provide bookings, teams, scoring, profiles, and recommendations; remember preferences; communicate service and account information; prevent fraud and misuse; maintain and improve reliability; respond to requests; and comply with legal obligations.',
+      },
+      {
+        title: '3A. Team chat safety data',
+        body: 'If you use team chat, Peakle stores your adult-status acknowledgement, messages, attachments, reactions, read state, reports, blocks, and moderation records as needed to operate and protect the feature. Automated controls may flag repeated messages, prohibited language, apparent contact information, or other safety patterns for review. A report includes the reported message or a limited content snapshot, its sender and team, the selected reason, optional details, and the reporting account. Reports are not shown to the reported user. Blocking is private and hides the blocked player’s messages from the blocker.',
       },
       {
         title: '4. Legal bases and consent',

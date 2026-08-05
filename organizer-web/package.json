@@ -1,0 +1,35 @@
+{
+  "name": "@peakle/organizer-web",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "dev": "node scripts/next-with-shared-env.mjs dev",
+    "build": "node scripts/next-with-shared-env.mjs build",
+    "start": "node scripts/next-with-shared-env.mjs start",
+    "lint": "eslint .",
+    "typecheck": "tsc --noEmit",
+    "verify:supabase": "node scripts/verify-supabase.mjs"
+  },
+  "dependencies": {
+    "@supabase/ssr": "latest",
+    "@supabase/supabase-js": "latest",
+    "lucide-react": "latest",
+    "next": "latest",
+    "react": "latest",
+    "react-dom": "latest",
+    "sonner": "latest"
+  },
+  "devDependencies": {
+    "@types/node": "latest",
+    "@types/react": "latest",
+    "@types/react-dom": "latest",
+    "eslint": "latest",
+    "eslint-config-next": "latest",
+    "puppeteer": "^25.4.0",
+    "typescript": "latest"
+  },
+  "overrides": {
+    "postcss": "8.5.25",
+    "sharp": "0.35.3"
+  }
+}

@@ -89,14 +89,11 @@ export async function savePushToken({ token, userId }) {
     deviceId = Crypto.randomUUID();
     await AsyncStorage.setItem(deviceKey, deviceId);
   }
-  const { error } = await requireSupabase().from('device_push_tokens').upsert({
-    user_id: userId,
-    expo_push_token: token,
-    platform: Platform.OS,
-    device_id: deviceId,
-    enabled: true,
-    last_seen_at: new Date().toISOString(),
-  }, { onConflict: 'user_id,device_id' });
+  const { error } = await requireSupabase().rpc('register_device_push_token', {
+    p_expo_push_token: token,
+    p_platform: Platform.OS,
+    p_device_id: deviceId,
+  });
   if (error) throw error;
 }
 
@@ -124,6 +121,18 @@ export async function markNotificationRead(id) {
 
 export async function markAllNotificationsRead() {
   const { data, error } = await requireSupabase().rpc('mark_all_notifications_read');
+  if (error) throw error;
+  return data || 0;
+}
+
+export async function deleteNotification(id) {
+  const { data, error } = await requireSupabase().rpc('delete_notification', { p_notification_id: id });
+  if (error) throw error;
+  return Boolean(data);
+}
+
+export async function clearReadNotifications() {
+  const { data, error } = await requireSupabase().rpc('clear_read_notifications');
   if (error) throw error;
   return data || 0;
 }

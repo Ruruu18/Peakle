@@ -16,6 +16,8 @@ export function OpenPlaySessionProvider({ children }) {
   const [courtId, setCourtId] = useState(null);
   const [registrations, setRegistrations] = useState([]);
   const restoredFor = useRef(null);
+  const endingSession = useRef(false);
+  const syncInFlight = useRef(Promise.resolve());
   const [dataReady, setDataReady] = useState(false);
   const cacheKey = user?.id ? `@peakle/open-play-cache/${user.id}` : null;
 
@@ -30,8 +32,12 @@ export function OpenPlaySessionProvider({ children }) {
         if (saved?.id) { setScreen('dashboard'); setSession(saved); setCourtId(null); }
       } catch {}
     }).then(() => loadActiveOpenPlay()).then((saved) => {
-      if (!saved) return;
-      setScreen('dashboard'); setSession(saved); setCourtId(null);
+      if (saved) {
+        setScreen('dashboard'); setSession(saved); setCourtId(null);
+        return;
+      }
+      setScreen('setup'); setSession(null); setCourtId(null);
+      AsyncStorage.removeItem(`@peakle/open-play-cache/${user.id}`).catch(() => {});
     }).catch(() => {}).finally(() => setDataReady(true));
   }, [user?.id]);
 
@@ -42,8 +48,12 @@ export function OpenPlaySessionProvider({ children }) {
   }, [cacheKey, session]);
 
   useEffect(() => {
-    if (!user?.id || !isSupabaseConfigured || !dataReady || pendingOperations > 0 || restoredFor.current !== user.id) return undefined;
-    const timer = setTimeout(() => syncOpenPlay(session).catch(() => {}), 400);
+    if (!user?.id || !isSupabaseConfigured || !dataReady || !session || screen === 'setup' || screen === 'summary' || pendingOperations > 0 || restoredFor.current !== user.id) return undefined;
+    const timer = setTimeout(() => {
+      syncInFlight.current = syncInFlight.current
+        .then(() => endingSession.current ? undefined : syncOpenPlay(session))
+        .catch(() => {});
+    }, 400);
     return () => clearTimeout(timer);
   }, [user?.id, screen, session, courtId, dataReady, pendingOperations]);
 
@@ -104,15 +114,29 @@ export function OpenPlaySessionProvider({ children }) {
     return () => { requireSupabase().removeChannel(channel); reportRealtime(`organizer-${session.id}`, 'REMOVE'); };
   }, [refreshLiveSession, refreshRegistrations, refreshRotationAudit, reportRealtime, session?.id]);
 
+  const endSession = async () => {
+    if (!session?.id) return;
+    endingSession.current = true;
+    try {
+      await syncInFlight.current;
+      await completeOpenPlay(session.id);
+      setScreen('summary');
+      setCourtId(null);
+    } catch (error) {
+      endingSession.current = false;
+      throw error;
+    }
+  };
+
   const resetSession = () => {
-    if (session?.id) completeOpenPlay(session.id).catch(() => {});
+    endingSession.current = false;
     setScreen('setup');
     setSession(null);
     setRegistrations([]);
     setCourtId(null);
   };
 
-  return <OpenPlaySessionContext.Provider value={{ screen, setScreen, session, setSession, courtId, setCourtId, registrations, refreshRegistrations, resetSession }}>{children}</OpenPlaySessionContext.Provider>;
+  return <OpenPlaySessionContext.Provider value={{ screen, setScreen, session, setSession, courtId, setCourtId, registrations, refreshRegistrations, endSession, resetSession }}>{children}</OpenPlaySessionContext.Provider>;
 }
 
 export function useOpenPlaySession() {

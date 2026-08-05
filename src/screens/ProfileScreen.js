@@ -1,5 +1,7 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
+  ActivityIndicator,
+  Image,
   Modal,
   Platform,
   Pressable,
@@ -8,6 +10,7 @@ import {
   TextInput,
   View,
 } from 'react-native';
+import * as Location from 'expo-location';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { StatusBar } from 'expo-status-bar';
 import Ionicons from '@expo/vector-icons/Ionicons';
@@ -15,14 +18,21 @@ import Svg, { Circle } from 'react-native-svg';
 import { useAppMode } from '../context/AppModeContext';
 import { useAuth } from '../context/AuthContext';
 import { useOrganizerPass } from '../context/OrganizerPassContext';
-import { calculatePerformanceRating, listMyMatches, listTeams } from '../services/database';
-import CartoonAvatar from '../components/CartoonAvatar';
-import AvatarBuilder from '../components/AvatarBuilder';
+import { listMyMatches, listTeams } from '../services/database';
+import { getPlayerFollowCounts } from '../services/directMessages';
+import ProfilePhoto from '../components/ProfilePhoto';
+import ProfilePhotoPicker from '../components/ProfilePhotoPicker';
 import NotificationSheet from '../components/NotificationSheet';
+import WorkspaceSwitchModal from '../components/WorkspaceSwitchModal';
 import ScrollView from '../components/FocusResetScrollView';
 import { createDarkStyleSheet, DARK_CONTENT_COLORS, useTheme } from '../context/ThemeContext';
 import { useOperations } from '../context/OperationsContext';
 import { presentNotification } from '../utils/notifications';
+import { createMobileStyleSheet } from '../utils/mobileStyles';
+import { PH_LOCATIONS, formatLocation, locationMatchesSearch, parseLocation } from '../data/phLocations';
+import { peekCachedData, readCachedData, withTimeout, writeCachedData } from '../lib/asyncData';
+import { profileScreenCacheKey } from '../lib/cacheKeys';
+import { supabase } from '../lib/supabase';
 
 const LIGHT_C = {
   ink: '#0E2321', paper: '#F3F5EF', surface: '#FFFFFF', optic: '#D6E94A',
@@ -37,6 +47,12 @@ const PRESENCE_OPTIONS = [
 
 function presenceOption(value) {
   return PRESENCE_OPTIONS.find((option) => option.value === value) || PRESENCE_OPTIONS[0];
+}
+function formatSocialCount(value) {
+  const count = Math.max(0, Number(value) || 0);
+  if (count < 1000) return String(count);
+  if (count < 1_000_000) return `${(count / 1000).toFixed(count < 10_000 ? 1 : 0).replace('.0', '')}K`;
+  return `${(count / 1_000_000).toFixed(count < 10_000_000 ? 1 : 0).replace('.0', '')}M`;
 }
 let C = LIGHT_C;
 
@@ -61,37 +77,21 @@ function Toggle({ value, onChange, label }) {
   );
 }
 
+const BALL_IMAGE = require('../../public/images/ball.png');
+
 function AppModeSwitch({ mode, organizerUnlocked, onChange, onOrganizerPass }) {
   return (
     <View style={styles.appModeCard}>
       <View style={styles.appModeHead}><View><Text style={styles.appModeEyebrow}>APP MODE</Text><Text style={styles.appModeTitle}>Choose your workspace</Text></View><View style={styles.capabilityPill}><Text style={styles.capabilityText}>PLAYER · ORGANIZER</Text></View></View>
       <View style={styles.appModeControl}>
-        {[{ value: 'player', label: 'Player', icon: 'tennisball-outline' }, { value: 'organizer', label: 'Organizer', icon: 'key-outline' }].map((option) => {
+        {[{ value: 'player', label: 'Player', icon: 'pickleball' }, { value: 'organizer', label: 'Organizer', icon: 'key-outline' }].map((option) => {
           const active = mode === option.value;
           const locked = option.value === 'organizer' && !organizerUnlocked;
-          return <Pressable key={option.value} accessibilityRole="radio" accessibilityState={{ checked: active }} onPress={() => locked ? onOrganizerPass() : onChange(option.value)} style={[styles.appModeOption, active && styles.appModeOptionActive, locked && styles.appModeOptionLocked]}><Icon name={locked ? 'lock-closed-outline' : option.icon} size={17} color={active ? '#0E2321' : C.ink40} /><Text style={[styles.appModeOptionText, active && styles.appModeOptionTextActive]}>{option.label}</Text>{active && <View style={styles.appModeActiveDot} />}</Pressable>;
+          return <Pressable key={option.value} accessibilityRole="radio" accessibilityState={{ checked: active }} onPress={() => locked ? onOrganizerPass() : onChange(option.value)} style={[styles.appModeOption, active && styles.appModeOptionActive, locked && styles.appModeOptionLocked]}>{option.icon === 'pickleball' ? <Image source={BALL_IMAGE} style={{ width: 17, height: 17, tintColor: active ? '#0E2321' : C.ink40 }} /> : <Icon name={locked ? 'lock-closed-outline' : option.icon} size={17} color={active ? '#0E2321' : C.ink40} />}<Text style={[styles.appModeOptionText, active && styles.appModeOptionTextActive]}>{option.label}</Text>{active && <View style={styles.appModeActiveDot} />}</Pressable>;
         })}
       </View>
       <Text style={styles.appModeHelp}>{mode === 'organizer' ? 'Organizer tools are active. You can still join your own session as a player.' : organizerUnlocked ? 'Organizer mode is unlocked. Switch whenever you need to host.' : 'Player mode is active. Organizer Pass unlocks the organizer workspace.'}</Text>
     </View>
-  );
-}
-
-function ModeChangeModal({ nextMode, onCancel, onConfirm }) {
-  const organizer = nextMode === 'organizer';
-  return (
-    <Modal visible={Boolean(nextMode)} transparent animationType="fade" onRequestClose={onCancel}>
-      <Pressable accessibilityLabel="Cancel workspace change" onPress={onCancel} style={styles.modeModalBackdrop}>
-        <Pressable accessibilityRole="alert" onPress={(event) => event.stopPropagation()} style={styles.modeDialog}>
-          <View style={styles.modeDialogIcon}><Icon name={organizer ? 'key-outline' : 'tennisball-outline'} size={27} /></View>
-          <Text style={styles.modeDialogEyebrow}>CHANGE APP MODE</Text>
-          <Text style={styles.modeDialogTitle}>Switch to {organizer ? 'Organizer' : 'Player'}?</Text>
-          <Text style={styles.modeDialogBody}>{organizer ? 'You’ll enter the organizer workspace for sessions, courts, queues, and player monitoring.' : 'You’ll return to your personal bookings, matches, team, and player statistics.'}</Text>
-          <View style={styles.modeDialogNote}><Icon name="information-circle-outline" size={17} color={C.teal} /><Text style={styles.modeDialogNoteText}>{organizer ? 'You can still participate as a player in your own session.' : 'Any active organizer session will keep running and can be resumed later.'}</Text></View>
-          <View style={styles.modeDialogActions}><Pressable onPress={onCancel} style={styles.modeCancelButton}><Text style={styles.modeCancelText}>Stay here</Text></Pressable><Pressable onPress={onConfirm} style={styles.modeConfirmButton}><Text style={styles.modeConfirmText}>Switch workspace</Text></Pressable></View>
-        </Pressable>
-      </Pressable>
-    </Modal>
   );
 }
 
@@ -122,7 +122,7 @@ function Overview({ matches, onAchievement, onSeeMatches, onMatch, onStartFocus 
     return Math.max(best, runningStreak);
   }, 0);
 
-  const radius = (82 - 7) / 2;
+  const radius = (96 - 7) / 2;
   const circumference = radius * 2 * Math.PI;
   const offset = circumference - (winRate / 100) * circumference;
 
@@ -130,9 +130,9 @@ function Overview({ matches, onAchievement, onSeeMatches, onMatch, onStartFocus 
     <>
       <View style={styles.statCard}>
         <View style={styles.ring}>
-          <Svg style={{ position: 'absolute' }} width={82} height={82}>
-            <Circle stroke={C.line} fill="none" cx={41} cy={41} r={radius} strokeWidth={7} />
-            <Circle stroke={C.optic} fill="none" cx={41} cy={41} r={radius} strokeWidth={7} strokeDasharray={circumference} strokeDashoffset={offset} strokeLinecap="round" originX={41} originY={41} rotation="-90" />
+          <Svg style={{ position: 'absolute' }} width={96} height={96}>
+            <Circle stroke={C.line} fill="none" cx={48} cy={48} r={radius} strokeWidth={7} />
+            <Circle stroke={C.optic} fill="none" cx={48} cy={48} r={radius} strokeWidth={7} strokeDasharray={circumference} strokeDashoffset={offset} strokeLinecap="round" originX={48} originY={48} rotation="-90" />
           </Svg>
           <View style={styles.ringInner}><Text style={styles.ringValue}>{winRate}<Text style={styles.ringPercent}>%</Text></Text><Text style={styles.statLabel}>WIN RATE</Text></View>
         </View>
@@ -259,7 +259,8 @@ function Settings({ preferences, setPreference, onAction, lastLogin }) {
     <View>
       <Text style={styles.settingsLabel}>PREFERENCES</Text>
       <View style={styles.settingsCard}>
-        <SettingRow icon="notifications-outline" title="Squad notifications" detail="Challenges, invites, and team updates" value={preferences.squad} onToggle={(value) => setPreference('squad', value)} border={false} />
+        <SettingRow icon="chatbubble-ellipses-outline" title="Message notifications" detail="Lock-screen delivery, quick reply, and device test" onPress={() => onAction('Message notifications')} border={false} />
+        <SettingRow icon="notifications-outline" title="Squad notifications" detail="Challenges, invites, and team updates" value={preferences.squad} onToggle={(value) => setPreference('squad', value)} />
         <SettingRow icon="calendar-outline" title="Match reminders" detail="One hour before every match" value={preferences.reminders} onToggle={(value) => setPreference('reminders', value)} />
         <SettingRow icon="sync-outline" title="Calendar sync" detail={preferences.calendar ? 'Syncing with your calendar' : 'Not connected'} value={preferences.calendar} onToggle={(value) => setPreference('calendar', value)} />
       </View>
@@ -285,9 +286,9 @@ function OrganizerOverview({ onMonitor }) {
   return (
     <View>
       <View style={styles.organizerHero}>
-        <View style={styles.organizerHeroHead}><View style={styles.organizerHeroIcon}><Icon name="key" size={20} /></View><View style={styles.flex}><Text style={styles.organizerHeroEyebrow}>ORGANIZER ACCESS</Text><Text style={styles.organizerHeroTitle}>Ready to run the room</Text></View><View style={styles.organizerVerified}><Icon name="checkmark" size={13} color={C.teal} /><Text style={styles.organizerVerifiedText}>ACTIVE</Text></View></View>
+        <View style={styles.organizerHeroHead}><View style={styles.organizerHeroIcon}><Icon name="key" size={20} color="#0E2321" /></View><View style={styles.flex}><Text style={styles.organizerHeroEyebrow}>ORGANIZER ACCESS</Text><Text style={styles.organizerHeroTitle}>Ready to run the room</Text></View><View style={styles.organizerVerified}><Icon name="checkmark" size={13} color={C.teal} /><Text style={styles.organizerVerifiedText}>ACTIVE</Text></View></View>
         <Text style={styles.organizerHeroBody}>Create open play sessions, manage player rotation, monitor every court, and override match scores when needed.</Text>
-        <Pressable onPress={onMonitor} style={styles.organizerMonitorButton}><Text style={styles.organizerMonitorText}>Open court monitor</Text><Icon name="arrow-forward" size={17} /></Pressable>
+        <Pressable onPress={onMonitor} style={styles.organizerMonitorButton}><Text style={styles.organizerMonitorText}>Open court monitor</Text><Icon name="arrow-forward" size={17} color="#0E2321" /></Pressable>
       </View>
 
       <View style={styles.sectionHeader}><View><Text style={styles.eyebrow}>HOSTING SNAPSHOT</Text><Text style={styles.h2}>Your organizer record</Text></View></View>
@@ -314,7 +315,197 @@ function OrganizerSettings({ preferences, setPreference, onAction }) {
   return <View><Text style={styles.settingsLabel}>SESSION OPERATIONS</Text><View style={styles.settingsCard}><SettingRow icon="notifications-outline" title="Court alerts" detail="Match point, finished games, and open courts" value={preferences.squad} onToggle={(value) => setPreference('squad', value)} border={false} /><SettingRow icon="people-outline" title="Check-in alerts" detail="Notify when players join your session" value={preferences.reminders} onToggle={(value) => setPreference('reminders', value)} /></View><Text style={styles.settingsLabel}>ORGANIZER ACCOUNT</Text><View style={styles.settingsCard}><SettingRow icon="person-outline" title="Organizer details" detail="Public host name and home venue" onPress={() => onAction('Edit profile')} border={false} /><SettingRow icon="options-outline" title="Default open play rules" detail="Doubles · First to 11 · Win by 2" onPress={() => onAction('Default open play rules')} /><SettingRow icon="shield-checkmark-outline" title="Staff access" detail="Invite another organizer or court monitor" onPress={() => onAction('Staff access')} /></View><Text style={styles.settingsLabel}>SUPPORT</Text><View style={styles.settingsCard}><SettingRow icon="help-circle-outline" title="Organizer help" onPress={() => onAction('Organizer help')} border={false} /><SettingRow icon="log-out-outline" title="Log out" destructive onPress={() => onAction('Log out')} /></View><Text style={styles.version}>PEAKLE ORGANIZER · VERSION 1.0.0</Text></View>;
 }
 
-function EditProfile({ visible, player, onClose, onSave }) {
+// ─── Philippine cities / municipalities (curated) ───────────────────────────
+// ─── LocationPicker (structured: City · Region · Country) ───────────────────
+function LocationPicker({ value, onChange }) {
+  const [open, setOpen] = useState(false);
+  const [query, setQuery] = useState('');
+  const [gpsLoading, setGpsLoading] = useState(false);
+
+  // Parse the stored value (e.g. "Butuan · Region XIII · Philippines")
+  const parsed = useMemo(() => parseLocation(value), [value]);
+
+  const suggestions = useMemo(() => {
+    const q = query.trim().toLowerCase();
+    if (!q) return PH_LOCATIONS.slice(0, 10);
+    return PH_LOCATIONS.filter((loc) => locationMatchesSearch(loc, q)).slice(0, 8);
+  }, [query]);
+
+  const openSheet = () => { setQuery(''); setOpen(true); };
+  const closeSheet = () => { setOpen(false); setQuery(''); };
+  const selectLoc = (loc) => { onChange(formatLocation(loc)); closeSheet(); };
+
+  const detectLocation = async () => {
+    setGpsLoading(true);
+    try {
+      const { status } = await Location.requestForegroundPermissionsAsync();
+      if (status !== 'granted') { setGpsLoading(false); return; }
+      const pos = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Balanced });
+      const [geo] = await Location.reverseGeocodeAsync({
+        latitude: pos.coords.latitude,
+        longitude: pos.coords.longitude,
+      });
+      if (geo) {
+        const detectedCity = geo.city || geo.subregion || '';
+        const match = PH_LOCATIONS.find(
+          (loc) => loc.city.toLowerCase() === detectedCity.toLowerCase()
+        );
+        if (match) {
+          selectLoc(match);
+        } else {
+          // Fallback: build from GPS data
+          onChange(`${detectedCity} · ${geo.region || ''} · ${geo.country || 'Philippines'}`);
+          closeSheet();
+        }
+      }
+    } catch (_) { /* silently ignore */ }
+    finally { setGpsLoading(false); }
+  };
+
+  return (
+    <>
+      {/* ── Trigger chip ───────────────────────────────────── */}
+      <Pressable
+        accessibilityRole="button"
+        accessibilityLabel={`Change location, currently ${value || 'not set'}`}
+        onPress={openSheet}
+        style={({ pressed }) => [styles.locTrigger, pressed && styles.locTriggerPressed]}
+      >
+        <View style={styles.locTriggerIcon}>
+          <Ionicons name="location" size={17} color={C.teal} />
+        </View>
+        <View style={styles.flex}>
+          <Text style={styles.locTriggerEyebrow}>HOME AREA</Text>
+          {parsed ? (
+            <>
+              <Text numberOfLines={1} style={styles.locTriggerCity}>{parsed.city}</Text>
+              <Text numberOfLines={1} style={styles.locTriggerMeta}>{parsed.region}{parsed.country ? ` · ${parsed.country}` : ''}</Text>
+            </>
+          ) : (
+            <Text style={styles.locTriggerPlaceholder}>Tap to set your location</Text>
+          )}
+        </View>
+        <Ionicons name="chevron-forward" size={16} color={C.teal} />
+      </Pressable>
+
+      {/* ── Bottom-sheet modal ─────────────────────────────── */}
+      <Modal
+        visible={open}
+        transparent
+        animationType="slide"
+        onRequestClose={closeSheet}
+        statusBarTranslucent
+      >
+        <View style={styles.locModalBackdrop}>
+          <Pressable style={styles.locModalDismiss} onPress={closeSheet} />
+          <View style={styles.locSheet}>
+            <View style={styles.locHandle} />
+
+            {/* Header */}
+            <View style={styles.locHeader}>
+              <View style={styles.flex}>
+                <Text style={styles.locHeaderEyebrow}>YOUR SEARCH AREA</Text>
+                <Text style={styles.locHeaderTitle}>Change location</Text>
+              </View>
+              <Pressable onPress={closeSheet} style={styles.locCloseBtn}>
+                <Ionicons name="close" size={20} color="#FFFFFF" />
+              </Pressable>
+            </View>
+
+            {/* Currently using */}
+            {Boolean(parsed) && (
+              <View style={styles.locCurrentCard}>
+                <View style={styles.locCurrentIcon}>
+                  <Ionicons name="location" size={20} color={C.teal} />
+                </View>
+                <View style={styles.flex}>
+                  <Text style={styles.locCurrentLabel}>CURRENTLY USING</Text>
+                  <Text style={styles.locCurrentCity}>{parsed.city}</Text>
+                  <Text style={styles.locCurrentMeta}>{parsed.region}{parsed.country ? ` · ${parsed.country}` : ''}</Text>
+                </View>
+              </View>
+            )}
+
+            {/* GPS button */}
+            <Pressable
+              onPress={detectLocation}
+              disabled={gpsLoading}
+              style={({ pressed }) => [styles.locGpsBtn, pressed && { opacity: 0.85 }]}
+            >
+              {gpsLoading
+                ? <ActivityIndicator color={C.ink} size="small" />
+                : <Ionicons name="navigate" size={20} color={C.ink} />
+              }
+              <View style={styles.flex}>
+                <Text style={styles.locGpsBtnTitle}>Use my exact location</Text>
+                <Text style={styles.locGpsBtnSub}>Uses your device GPS while the app is open.</Text>
+              </View>
+            </Pressable>
+
+            {/* Divider */}
+            <Text style={styles.locOrLabel}>OR SEARCH ANYWHERE</Text>
+
+            {/* Search row */}
+            <View style={styles.locSearchRow}>
+              <Ionicons name="search-outline" size={18} color="rgba(255,255,255,0.45)" style={{ marginLeft: 14 }} />
+              <TextInput
+                value={query}
+                onChangeText={setQuery}
+                placeholder="City or region…"
+                placeholderTextColor="rgba(255,255,255,0.3)"
+                style={styles.locSearchInput}
+                returnKeyType="search"
+                autoFocus
+              />
+              {query.length > 0 && (
+                <Pressable onPress={() => setQuery('')} style={styles.locSearchClear}>
+                  <Ionicons name="close-circle" size={18} color="rgba(255,255,255,0.4)" />
+                </Pressable>
+              )}
+            </View>
+
+            {/* Results */}
+            {suggestions.length > 0 && (
+              <View style={styles.locResults}>
+                {suggestions.map((loc, index) => {
+                  const isActive = parsed?.city === loc.city && parsed?.region === loc.region;
+                  return (
+                    <Pressable
+                      accessibilityRole="radio"
+                      accessibilityState={{ checked: isActive }}
+                      key={`${loc.city}-${loc.region}`}
+                      onPress={() => selectLoc(loc)}
+                      style={({ pressed, hovered }) => [
+                        styles.locResultRow,
+                        index > 0 && styles.locResultBorder,
+                        isActive && styles.locResultActive,
+                        (pressed || hovered) && styles.locResultHovered,
+                      ]}
+                    >
+                      <Ionicons name="location-outline" size={16} color="rgba(255,255,255,0.4)" />
+                      <View style={styles.flex}>
+                        <Text style={styles.locResultCity}>{loc.city}</Text>
+                        <Text style={styles.locResultMeta}>{loc.region} · {loc.country}</Text>
+                      </View>
+                      {isActive && <Ionicons name="checkmark-circle" size={18} color={C.teal} />}
+                    </Pressable>
+                  );
+                })}
+              </View>
+            )}
+
+            <Text style={styles.locPrivacyNote}>
+              Your coordinates stay on this device unless you separately turn on Nearby Player visibility.
+            </Text>
+          </View>
+        </View>
+      </Modal>
+    </>
+  );
+}
+
+
+function EditProfile({ visible, player, onClose, onSave, isDark }) {
   const [name, setName] = useState(player.name);
   const [location, setLocation] = useState(player.location);
   const [avatar, setAvatar] = useState(player.avatar);
@@ -331,6 +522,11 @@ function EditProfile({ visible, player, onClose, onSave }) {
       setIsSaving(false);
     }
   }, [visible, player]);
+  const hasChanges = name.trim() !== player.name
+    || location.trim() !== player.location
+    || (avatar || '') !== (player.avatar || '')
+    || preference !== (player.preference || 'Doubles');
+  const saveDisabled = isSaving || !hasChanges;
   const save = async () => {
     const cleanName = name.trim();
     if (cleanName.length < 2 || cleanName.length > 80) { setError('Display name must be between 2 and 80 characters.'); return; }
@@ -355,31 +551,55 @@ function EditProfile({ visible, player, onClose, onSave }) {
           keyboardShouldPersistTaps="handled"
           keyboardDismissMode="on-drag"
         >
-          <Text style={styles.inputLabel}>DISPLAY NAME</Text><TextInput value={name} onChangeText={setName} style={styles.input} placeholderTextColor={C.ink40} />
-          <Text style={styles.inputLabel}>HOME AREA</Text><TextInput value={location} onChangeText={setLocation} style={styles.input} placeholderTextColor={C.ink40} />
-          <Text style={styles.inputLabel}>CARTOON AVATAR</Text><AvatarBuilder initialAvatar={avatar} onAvatarChange={setAvatar} />
+          <View style={styles.editFieldGroup}>
+            <Text style={styles.inputLabel}>DISPLAY NAME</Text>
+            <TextInput
+              accessibilityLabel="Display name"
+              value={name}
+              onChangeText={(value) => { setName(value); setError(''); }}
+              placeholder="Enter your display name"
+              placeholderTextColor={C.ink40}
+              selectionColor={C.teal}
+              autoCapitalize="words"
+              autoCorrect={false}
+              maxLength={80}
+              returnKeyType="done"
+              style={styles.input}
+            />
+          </View>
+          <View style={styles.editFieldGroup}><LocationPicker value={location} onChange={setLocation} /></View>
+          <View style={styles.editFieldGroup}>
+            <Text style={styles.inputLabel}>PROFILE PHOTO</Text>
+            <ProfilePhotoPicker value={avatar} name={name} onChange={setAvatar} onError={setError} colors={C} dark={isDark} />
+          </View>
           <View style={styles.ratingNotice}><Icon name="analytics-outline" color={C.teal} /><Text style={styles.settingDetail}>Your performance rating is earned from completed match scores and cannot be edited manually.</Text></View>
-          <Text style={styles.inputLabel}>PLAY PREFERENCE</Text><View style={styles.editChoiceRow}>{['Singles', 'Doubles', 'Both'].map((value) => <Pressable key={value} onPress={() => setPreference(value)} style={[styles.editChoice, preference === value && styles.editChoiceActive]}><Text style={[styles.editChoiceText, preference === value && styles.editChoiceTextActive]}>{value}</Text></Pressable>)}</View>
+          <View style={[styles.editFieldGroup, styles.editFieldGroupLast]}>
+            <Text style={styles.inputLabel}>PLAY PREFERENCE</Text>
+            <View style={styles.editChoiceRow}>{['Singles', 'Doubles', 'Both'].map((value) => <Pressable key={value} accessibilityRole="radio" accessibilityState={{ checked: preference === value }} accessibilityLabel={`${value} play preference`} onPress={() => { setPreference(value); setError(''); }} style={({ pressed }) => [styles.editChoice, preference === value && styles.editChoiceActive, pressed && styles.pressed]}><Text style={[styles.editChoiceText, preference === value && styles.editChoiceTextActive]}>{value}</Text></Pressable>)}</View>
+          </View>
+          <View style={styles.editProfileActions}>
+            {error ? <Text style={styles.editError}>{error}</Text> : null}
+            <Pressable accessibilityRole="button" accessibilityLabel={hasChanges ? 'Save profile changes' : 'Save profile changes, currently disabled because nothing changed'} accessibilityState={{ disabled: saveDisabled, busy: isSaving }} disabled={saveDisabled} onPress={save} style={({ pressed }) => [styles.primaryButton, styles.editSaveButton, !hasChanges && styles.editSaveButtonDisabled, isSaving && styles.disabled, pressed && !saveDisabled && styles.pressed]}>{isSaving ? <ActivityIndicator size="small" color="#0E2321" /> : <Icon name="checkmark-circle-outline" color={hasChanges ? '#0E2321' : C.ink40} />}<Text style={[styles.primaryText, !hasChanges && { color: C.ink40 }]}>{isSaving ? 'Saving changes…' : 'Save changes'}</Text></Pressable>
+          </View>
         </ScrollView>
-        <View style={styles.editProfileFooter}>
-          {error ? <Text style={styles.editError}>{error}</Text> : null}
-          <Pressable accessibilityRole="button" accessibilityLabel="Save profile changes" disabled={isSaving} onPress={save} style={({ pressed }) => [styles.primaryButton, styles.editSaveButton, isSaving && styles.disabled, pressed && !isSaving && styles.pressed]}><Text style={styles.primaryText}>{isSaving ? 'Saving…' : 'Save changes'}</Text><Icon name="checkmark" color="#0E2321" /></Pressable>
-        </View>
       </View>
     </Sheet>
   );
 }
 
-export default function ProfileScreen({ navigation, route }) {
+function ProfileScreen({ navigation, route, profileMode }) {
   const { isDark } = useTheme();
   C = isDark ? { ...LIGHT_C, ...DARK_CONTENT_COLORS } : LIGHT_C;
   styles = isDark ? darkStyles : lightStyles;
   const { mode, setMode } = useAppMode();
+  const workspaceMode = profileMode || mode;
   const { user, updateProfile, signOut } = useAuth();
   const { hasOrganizerAccess, passTier } = useOrganizerPass();
-  const { notifications: operationNotifications, unreadCount, readNotification, readAllNotifications, enablePushNotifications, disablePushNotifications } = useOperations();
+  const { notifications: operationNotifications, unreadCount, readNotification, readAllNotifications, removeNotification, clearNotifications, respondFollowRequest, enablePushNotifications, disablePushNotifications } = useOperations();
+  const dataCacheKey = profileScreenCacheKey(user?.id || 'guest');
+  const initialSnapshot = useRef(peekCachedData(dataCacheKey)).current;
   const [tab, setTab] = useState('Overview');
-  const [player, setPlayer] = useState({ name: user?.name || 'Player', location: user?.location || 'Metro Manila', avatar: user?.picture, skill: user?.skill || '—', preference: user?.preference || 'Doubles', presenceStatus: user?.presenceStatus || 'free' });
+  const [player, setPlayer] = useState({ name: user?.name || 'Player', location: user?.location || '', avatar: user?.picture, skill: user?.skill || '—', preference: user?.preference || 'Doubles', presenceStatus: user?.presenceStatus || 'free' });
   const [editOpen, setEditOpen] = useState(false);
   const [presenceOpen, setPresenceOpen] = useState(false);
   const [notificationsOpen, setNotificationsOpen] = useState(false);
@@ -388,9 +608,9 @@ export default function ProfileScreen({ navigation, route }) {
   const [toast, setToast] = useState('');
   const [preferences, setPreferences] = useState(user?.preferences || { squad: true, reminders: true, calendar: false });
   const [pendingMode, setPendingMode] = useState(null);
-  const [recordedMatches, setRecordedMatches] = useState([]);
-  const [joinedTeams, setJoinedTeams] = useState([]);
-  const performanceRating = useMemo(() => calculatePerformanceRating(recordedMatches), [recordedMatches]);
+  const [recordedMatches, setRecordedMatches] = useState(() => initialSnapshot?.recordedMatches || []);
+  const [joinedTeams, setJoinedTeams] = useState(() => initialSnapshot?.joinedTeams || []);
+  const [followCounts, setFollowCounts] = useState(() => initialSnapshot?.followCounts || { followers: 0, following: 0 });
   const notices = useMemo(() => operationNotifications.map(presentNotification), [operationNotifications]);
 
   useEffect(() => {
@@ -398,36 +618,103 @@ export default function ProfileScreen({ navigation, route }) {
   }, [user]);
 
   useEffect(() => {
+    if (!supabase || !user?.id) return undefined;
+    let active = true;
+    let refreshTimer;
+    const refreshCounts = () => {
+      clearTimeout(refreshTimer);
+      refreshTimer = setTimeout(() => {
+        getPlayerFollowCounts()
+          .then((counts) => {
+            if (active) setFollowCounts(counts);
+          })
+          .catch(() => {});
+      }, 80);
+    };
+    const channel = supabase.channel(`profile-follow-counts-${user.id}`)
+      .on('postgres_changes', {
+        event: '*',
+        schema: 'public',
+        table: 'player_follows',
+      }, refreshCounts)
+      .subscribe();
+    return () => {
+      active = false;
+      clearTimeout(refreshTimer);
+      supabase.removeChannel(channel);
+    };
+  }, [user?.id]);
+
+  useEffect(() => {
     const requestedTab = route.params?.openTab;
-    if (mode === 'player' && ['Overview', 'Matches', 'Settings'].includes(requestedTab)) setTab(requestedTab);
-    if (mode === 'organizer' && ['Overview', 'Sessions', 'Settings'].includes(requestedTab)) setTab(requestedTab);
-  }, [route.params?.openTab, route.params?.openTabToken, mode]);
+    if (workspaceMode === 'player' && ['Overview', 'Matches', 'Settings'].includes(requestedTab)) setTab(requestedTab);
+    if (workspaceMode === 'organizer' && ['Overview', 'Sessions', 'Settings'].includes(requestedTab)) setTab(requestedTab);
+  }, [route.params?.openTab, route.params?.openTabToken, workspaceMode]);
 
   const showToast = (message) => { setToast(message); setTimeout(() => setToast(''), 2200); };
+  const handleFollowResponse = async (item, accept) => {
+    const accepted = await respondFollowRequest(item.data?.requesterId, accept, item.id);
+    if (!accepted) return;
+    try {
+      setFollowCounts(await getPlayerFollowCounts());
+    } catch {
+      setFollowCounts((current) => ({ ...current, followers: current.followers + 1 }));
+    }
+  };
   useEffect(() => {
     let active = true;
+    let refreshRunning = false;
+    let cacheApplied = Boolean(initialSnapshot);
     const loadProfileData = async () => {
-      const [matchResult, teamResult] = await Promise.allSettled([listMyMatches(), listTeams()]);
+      if (refreshRunning) return;
+      refreshRunning = true;
+      let cached = peekCachedData(dataCacheKey);
+      if (!cacheApplied) {
+        cached = await readCachedData(dataCacheKey);
+        cacheApplied = true;
+        if (active && cached) {
+          setRecordedMatches(cached.recordedMatches || []);
+          setJoinedTeams(cached.joinedTeams || []);
+          setFollowCounts(cached.followCounts || { followers: 0, following: 0 });
+        }
+      }
+      const [matchResult, teamResult, followResult] = await Promise.allSettled([
+        withTimeout(listMyMatches(), 12000, 'Match history took too long to refresh.'),
+        withTimeout(listTeams(), 12000, 'Teams took too long to refresh.'),
+        withTimeout(getPlayerFollowCounts(), 12000, 'Follow counts took too long to refresh.'),
+      ]);
       if (!active) return;
+      const nextMatches = matchResult.status === 'fulfilled' ? matchResult.value : cached?.recordedMatches || [];
+      const nextTeams = teamResult.status === 'fulfilled'
+        ? teamResult.value.filter((team) => team.role)
+        : cached?.joinedTeams || [];
+      const nextFollowCounts = followResult.status === 'fulfilled'
+        ? followResult.value
+        : cached?.followCounts || { followers: 0, following: 0 };
       if (matchResult.status === 'fulfilled') {
-        setRecordedMatches(matchResult.value);
+        setRecordedMatches(nextMatches);
         const requestedMatch = route.params?.openMatchId;
         if (requestedMatch) {
           setTab('Matches');
-          const match = requestedMatch === 'latest' ? matchResult.value[0] : matchResult.value.find((item) => item.id === requestedMatch);
+          const match = requestedMatch === 'latest' ? nextMatches[0] : nextMatches.find((item) => item.id === requestedMatch);
           if (match) setSelectedMatch(match);
           else showToast('No completed matches recorded yet.');
           navigation.setParams({ openMatchId: undefined });
         }
       }
-      else showToast(matchResult.reason?.message || 'Match history unavailable.');
-      if (teamResult.status === 'fulfilled') setJoinedTeams(teamResult.value.filter((team) => team.role));
-      else setJoinedTeams([]);
+      else if (!cached) showToast(matchResult.reason?.message || 'Match history unavailable.');
+      if (teamResult.status === 'fulfilled') setJoinedTeams(nextTeams);
+      else if (!cached) setJoinedTeams([]);
+      if (followResult.status === 'fulfilled') setFollowCounts(nextFollowCounts);
+      if (matchResult.status === 'fulfilled' || teamResult.status === 'fulfilled' || followResult.status === 'fulfilled') {
+        await writeCachedData(dataCacheKey, { recordedMatches: nextMatches, joinedTeams: nextTeams, followCounts: nextFollowCounts });
+      }
+      refreshRunning = false;
     };
     loadProfileData();
     const unsubscribe = navigation.addListener('focus', loadProfileData);
     return () => { active = false; unsubscribe(); };
-  }, [navigation, route.params?.openMatchId, user?.id]);
+  }, [dataCacheKey, navigation, route.params?.openMatchId, user?.id]);
   const setPreference = async (key, value) => {
     if (value && ['squad', 'reminders'].includes(key)) {
       try { await enablePushNotifications(); } catch (error) { showToast(error.message || 'Push notifications could not be enabled.'); return; }
@@ -436,13 +723,14 @@ export default function ProfileScreen({ navigation, route }) {
     setPreferences(next);
     if (!next.squad && !next.reminders) disablePushNotifications().catch(() => {});
     updateProfile({ preferences: next }).catch((error) => showToast(error.message || 'Could not save preference.'));
-    showToast(`${mode === 'organizer' ? (key === 'squad' ? 'Court alerts' : 'Check-in alerts') : key === 'squad' ? 'Squad notifications' : key === 'reminders' ? 'Match reminders' : 'Calendar sync'} ${value ? 'on' : 'off'}.`);
+    showToast(`${workspaceMode === 'organizer' ? (key === 'squad' ? 'Court alerts' : 'Check-in alerts') : key === 'squad' ? 'Squad notifications' : key === 'reminders' ? 'Match reminders' : 'Calendar sync'} ${value ? 'on' : 'off'}.`);
   };
   const handleSetting = (action) => {
     if (action === 'Edit profile') { setEditOpen(true); return; }
     if (action === 'Staff access') { navigation.navigate('Staff'); return; }
     if (action === 'Performance rating') { navigation.navigate('Pickleball', { openTab: 'Ratings', ownerTab: 'Profile' }); return; }
-    if (action === 'Privacy & matching') { navigation.navigate('Pickleball', { openTab: 'Privacy', ownerTab: 'Profile' }); return; }
+    if (action === 'Privacy & matching') { navigation.navigate('Privacy'); return; }
+    if (action === 'Message notifications') { navigation.navigate('NotificationTest'); return; }
     if (action === 'Log out') { signOut(); return; }
     showToast(`${action} opened.`);
   };
@@ -463,56 +751,64 @@ export default function ProfileScreen({ navigation, route }) {
     <SafeAreaView style={styles.safe}>
       <StatusBar style={isDark ? 'light' : 'dark'} backgroundColor={C.paper} />
       <ScrollView contentContainerStyle={styles.content} showsVerticalScrollIndicator={false}>
-        <View style={styles.topbar}><View><Text style={styles.eyebrow}>{mode === 'organizer' ? 'YOUR ACCOUNT' : 'YOUR GAME'}</Text><Text style={styles.h1}>{mode === 'organizer' ? 'Organizer profile' : 'Player profile'}</Text></View><View style={styles.topActions}><Pressable accessibilityLabel="Notifications" onPress={() => setNotificationsOpen(true)} style={styles.iconButton}><Icon name="notifications-outline" />{unreadCount > 0 && <View style={styles.noticeDot} />}</Pressable></View></View>
+        <View style={styles.topbar}><View><Text style={styles.eyebrow}>{workspaceMode === 'organizer' ? 'YOUR ACCOUNT' : 'YOUR GAME'}</Text><Text style={styles.h1}>{workspaceMode === 'organizer' ? 'Organizer profile' : 'Player profile'}</Text></View><View style={styles.topActions}><Pressable accessibilityLabel="Notifications" onPress={() => setNotificationsOpen(true)} style={styles.iconButton}><Icon name="notifications-outline" />{unreadCount > 0 && <View style={styles.noticeDot} />}</Pressable></View></View>
         <KitchenLine />
         <View style={styles.identity}>
-          <Pressable accessibilityRole="button" accessibilityLabel={`Change player status. Current status ${presenceOption(player.presenceStatus).label}`} accessibilityHint="Opens player availability options" onPress={() => setPresenceOpen(true)} hitSlop={10} style={({ pressed }) => [styles.avatar, pressed && styles.avatarPressed]}><CartoonAvatar avatar={player.avatar} name={player.name} size={67} /><View pointerEvents="none" style={styles.avatarStatusButton}><View style={[styles.avatarStatusDot, { backgroundColor: presenceOption(player.presenceStatus).color }]} /></View></Pressable>
-          <View style={styles.identityCopy}><View style={styles.playerNameRow}><Text numberOfLines={1} style={styles.playerName}>{player.name}</Text><AccountTierBadge tier={passTier} /><Pressable accessibilityLabel={`Edit profile. Status ${presenceOption(player.presenceStatus).label}`} onPress={() => setEditOpen(true)} hitSlop={8} style={styles.editProfileButton}><Icon name="create-outline" size={18} color={C.ink40} /></Pressable></View><View style={styles.location}><Icon name="location-outline" size={13} color={C.ink40} /><Text style={styles.locationText}>{player.location}</Text></View><View style={styles.squad}><Icon name={mode === 'organizer' ? 'key' : 'people'} size={12} color={C.teal} /><Text style={styles.squadText}>{mode === 'organizer' ? 'Open Play Organizer' : joinedTeams.length ? `${joinedTeams[0].name}${joinedTeams.length > 1 ? ` +${joinedTeams.length - 1}` : ''}` : 'No team joined'}</Text></View></View>
-          <View style={styles.rating}><Text style={styles.ratingValue}>{mode === 'organizer' ? '—' : performanceRating ?? '—'}</Text><Text style={styles.ratingTier}>{mode === 'organizer' ? 'SESSIONS' : performanceRating == null ? 'UNRATED' : 'PERFORMANCE'}</Text><Text style={styles.ratingTrend}>{mode === 'organizer' ? 'HOSTED' : `${recordedMatches.length} RECORDED`}</Text></View>
+          <Pressable accessibilityRole="button" accessibilityLabel={`Change player status. Current status ${presenceOption(player.presenceStatus).label}`} accessibilityHint="Opens player availability options" onPress={() => setPresenceOpen(true)} hitSlop={10} style={({ pressed }) => [styles.avatar, pressed && styles.avatarPressed]}><ProfilePhoto photo={player.avatar} name={player.name} size={67} /><View pointerEvents="none" style={styles.avatarStatusButton}><View style={[styles.avatarStatusDot, { backgroundColor: presenceOption(player.presenceStatus).color }]} /></View></Pressable>
+          <View style={styles.identityCopy}>
+            <View style={styles.playerNameRow}><Text numberOfLines={1} style={styles.playerName}>{player.name}</Text><AccountTierBadge tier={passTier} /><Pressable accessibilityLabel={`Edit profile. Status ${presenceOption(player.presenceStatus).label}`} onPress={() => setEditOpen(true)} hitSlop={8} style={styles.editProfileButton}><Icon name="create-outline" size={18} color={C.ink40} /></Pressable></View>
+            <View style={styles.location}><Icon name="location-outline" size={13} color={C.ink40} /><Text numberOfLines={1} style={styles.locationText}>{player.location}</Text></View>
+            <View style={styles.squad}><Icon name={workspaceMode === 'organizer' ? 'key' : 'people'} size={12} color={C.teal} /><Text numberOfLines={1} style={styles.squadText}>{workspaceMode === 'organizer' ? 'Open Play Organizer' : joinedTeams.length ? `${joinedTeams[0].name}${joinedTeams.length > 1 ? ` +${joinedTeams.length - 1}` : ''}` : 'No team joined'}</Text></View>
+            {workspaceMode === 'player' ? <View accessibilityLabel={`${followCounts.followers} followers, following ${followCounts.following}`} style={styles.socialStats}><View style={styles.socialStat}><Text style={styles.socialValue}>{formatSocialCount(followCounts.followers)}</Text><Text style={styles.socialLabel}>Followers</Text></View><View style={styles.socialDivider} /><View style={styles.socialStat}><Text style={styles.socialValue}>{formatSocialCount(followCounts.following)}</Text><Text style={styles.socialLabel}>Following</Text></View></View> : null}
+          </View>
+          {workspaceMode === 'organizer' ? <View style={styles.rating}><Text style={styles.ratingValue}>—</Text><Text style={styles.ratingTier}>SESSIONS</Text><Text style={styles.ratingTrend}>HOSTED</Text></View> : null}
         </View>
         <AppModeSwitch mode={mode} organizerUnlocked={hasOrganizerAccess} onChange={setPendingMode} onOrganizerPass={() => navigation.navigate('Pass')} />
-        <View style={styles.tabs}>{(mode === 'organizer' ? ['Overview', 'Sessions', 'Settings'] : ['Overview', 'Matches', 'Settings']).map((item) => <Pressable key={item} onPress={() => setTab(item)} style={[styles.tab, tab === item && styles.tabActive]}><Text style={[styles.tabText, tab === item && styles.tabTextActive]}>{item}</Text></Pressable>)}</View>
-        {mode === 'player' && tab === 'Overview' && <Overview matches={recordedMatches} onAchievement={setAchievement} onSeeMatches={() => setTab('Matches')} onMatch={setSelectedMatch} onStartFocus={() => {
-          if (mode === 'organizer') { setMode('player'); return; }
+        <View style={styles.tabs}>{(workspaceMode === 'organizer' ? ['Overview', 'Sessions', 'Settings'] : ['Overview', 'Matches', 'Settings']).map((item) => <Pressable key={item} onPress={() => setTab(item)} style={[styles.tab, tab === item && styles.tabActive]}><Text style={[styles.tabText, tab === item && styles.tabTextActive]}>{item}</Text></Pressable>)}</View>
+        {workspaceMode === 'player' && tab === 'Overview' && <Overview matches={recordedMatches} onAchievement={setAchievement} onSeeMatches={() => setTab('Matches')} onMatch={setSelectedMatch} onStartFocus={() => {
           navigation.navigate('Play', { focusChallengeToken: Date.now(), focusChallenge: { id: 'return-depth-7-of-10', title: 'Return depth', instruction: 'Land 7 of your first 10 returns past mid-court.', target: 7, attempts: 10 } });
         }} />}
-        {mode === 'player' && tab === 'Matches' && <History source={recordedMatches} onMatch={setSelectedMatch} />}
-        {mode === 'player' && tab === 'Settings' && <Settings preferences={preferences} setPreference={setPreference} onAction={handleSetting} lastLogin={user?.lastLogin} />}
-        {mode === 'organizer' && tab === 'Overview' && <OrganizerOverview onMonitor={() => navigation.navigate('Monitor')} />}
-        {mode === 'organizer' && tab === 'Sessions' && <OrganizerHistory />}
-        {mode === 'organizer' && tab === 'Settings' && <OrganizerSettings preferences={preferences} setPreference={setPreference} onAction={handleSetting} />}
+        {workspaceMode === 'player' && tab === 'Matches' && <History source={recordedMatches} onMatch={setSelectedMatch} />}
+        {workspaceMode === 'player' && tab === 'Settings' && <Settings preferences={preferences} setPreference={setPreference} onAction={handleSetting} lastLogin={user?.lastLogin} />}
+        {workspaceMode === 'organizer' && tab === 'Overview' && <OrganizerOverview onMonitor={() => navigation.navigate('Monitor')} />}
+        {workspaceMode === 'organizer' && tab === 'Sessions' && <OrganizerHistory />}
+        {workspaceMode === 'organizer' && tab === 'Settings' && <OrganizerSettings preferences={preferences} setPreference={setPreference} onAction={handleSetting} />}
       </ScrollView>
 
-      <EditProfile visible={editOpen} player={player} onClose={() => setEditOpen(false)} onSave={async (value) => { await updateProfile(value); setPlayer((current) => ({ ...current, ...value })); setEditOpen(false); showToast('Profile updated.'); }} />
+      <EditProfile visible={editOpen} player={player} isDark={isDark} onClose={() => setEditOpen(false)} onSave={async (value) => { const saved = await updateProfile(value); setPlayer((current) => ({ ...current, ...saved })); setEditOpen(false); showToast('Profile updated.'); }} />
       <Sheet visible={presenceOpen} title="Player status" eyebrow="AVAILABILITY" onClose={() => setPresenceOpen(false)}>
         <Text style={styles.statusSheetLead}>Choose how you appear to nearby players and match invitations.</Text>
         <View style={styles.statusSheetCard}>{PRESENCE_OPTIONS.map((option, index) => { const selected = (player.presenceStatus || 'free') === option.value; return <Pressable key={option.value} accessibilityRole="radio" accessibilityState={{ checked: selected }} onPress={() => changePresenceStatus(option.value)} style={[styles.statusSheetRow, index > 0 && styles.rowBorder]}><View style={[styles.statusSheetDot, { backgroundColor: option.color }]} /><View style={styles.flex}><Text style={styles.statusSheetTitle}>{option.label}</Text><Text style={styles.statusSheetDetail}>{option.detail}</Text></View>{selected && <Icon name="checkmark-circle" size={20} color={C.teal} />}</Pressable>; })}</View>
       </Sheet>
-      <NotificationSheet visible={notificationsOpen} onClose={() => setNotificationsOpen(false)} items={notices} unreadCount={unreadCount} onRead={(id) => readNotification(id).catch((error) => showToast(error.message || 'This notification could not be marked as read.'))} onReadAll={() => readAllNotifications().catch((error) => showToast(error.message || 'Notifications could not be marked as read.'))} />
+      <NotificationSheet visible={notificationsOpen} onClose={() => setNotificationsOpen(false)} items={notices} unreadCount={unreadCount} onRead={(id) => readNotification(id).catch((error) => showToast(error.message || 'This notification could not be marked as read.'))} onReadAll={() => readAllNotifications().catch((error) => showToast(error.message || 'Notifications could not be marked as read.'))} onDelete={removeNotification} onClearRead={clearNotifications} onFollowResponse={handleFollowResponse} />
       <Sheet visible={Boolean(achievement)} title={achievement?.name || ''} eyebrow={achievement?.earned ? 'ACHIEVEMENT EARNED' : 'IN PROGRESS'} onClose={() => setAchievement(null)}>
         <View style={[styles.achievementDetailIcon, !achievement?.earned && styles.achievementIconLocked]}><Icon name={achievement?.earned ? achievement?.icon : 'lock-closed-outline'} size={31} /></View><Text style={styles.achievementDetail}>{achievement?.detail}</Text><Text style={styles.achievementProgress}>{achievement?.earned ? `Earned ${achievement?.date}` : achievement?.date}</Text><Pressable onPress={() => setAchievement(null)} style={styles.primaryButton}><Text style={styles.primaryText}>{achievement?.earned ? 'Nice work' : 'Keep playing'}</Text></Pressable>
       </Sheet>
       <Sheet fullHeight visible={Boolean(selectedMatch)} title="Box score" eyebrow="COMPLETED MATCH" onClose={() => setSelectedMatch(null)}><BoxScore match={selectedMatch} playerName={player.name} /></Sheet>
-      <ModeChangeModal nextMode={pendingMode} onCancel={() => setPendingMode(null)} onConfirm={() => { const nextMode = pendingMode; setPendingMode(null); setMode(nextMode); }} />
+      <WorkspaceSwitchModal nextMode={pendingMode} onCancel={() => setPendingMode(null)} onConfirm={() => { const nextMode = pendingMode; setPendingMode(null); setMode(nextMode); }} />
       {toast ? <View style={styles.toast}><Icon name="checkmark-circle" size={17} color={C.optic} /><Text style={styles.toastText}>{toast}</Text></View> : null}
     </SafeAreaView>
   );
 }
 
+export default function PlayerProfileScreen(props) {
+  return <ProfileScreen {...props} profileMode="player" />;
+}
+
 const shadow = Platform.select({ ios: { shadowColor: C.ink, shadowOpacity: .08, shadowRadius: 12, shadowOffset: { width: 0, height: 4 } }, android: { elevation: 3 } });
-const lightStyles = StyleSheet.create({
+const lightStyles = createMobileStyleSheet({
   safe: { flex: 1, backgroundColor: C.paper }, content: { paddingHorizontal: 20, paddingTop: 22, paddingBottom: 40 }, flex: { flex: 1 },
   topbar: { minHeight: 52, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }, topActions: { flexDirection: 'row', gap: 8 }, eyebrow: { color: C.ink40, fontSize: 10, lineHeight: 15, fontWeight: '800', letterSpacing: 1 }, h1: { color: C.ink, fontSize: 30, lineHeight: 36, fontWeight: '800', letterSpacing: -.8 }, h2: { color: C.ink, fontSize: 21, lineHeight: 27, fontWeight: '800', letterSpacing: -.4 },
   iconButton: { width: 43, height: 43, borderRadius: 22, borderWidth: 1, borderColor: C.line, backgroundColor: C.surface, alignItems: 'center', justifyContent: 'center' }, noticeDot: { position: 'absolute', right: 9, top: 8, width: 7, height: 7, borderRadius: 4, borderWidth: 1, borderColor: C.surface, backgroundColor: C.brick },
   kitchen: { height: 7, marginTop: 18, marginBottom: 22 }, solid: { height: 2, backgroundColor: C.ink }, dashed: { marginTop: 4, borderTopWidth: 1, borderStyle: 'dashed', borderColor: C.ink40 }, solidQuiet: { backgroundColor: C.line }, dashedQuiet: { borderColor: C.line },
-  identity: { flexDirection: 'row', alignItems: 'center' }, avatar: { width: 67, height: 67, borderRadius: 34, backgroundColor: C.paper, alignItems: 'center', justifyContent: 'center' }, avatarPressed: { opacity: .72, transform: [{ scale: .97 }] }, avatarText: { color: C.surface, fontSize: 17, fontWeight: '900' }, avatarStatusButton: { position: 'absolute', right: -5, bottom: -3, width: 32, height: 32, alignItems: 'center', justifyContent: 'center', borderRadius: 16, backgroundColor: C.surface }, avatarStatusDot: { width: 18, height: 18, borderRadius: 9, borderWidth: 3, borderColor: C.paper }, identityCopy: { flex: 1, marginLeft: 13 }, playerNameRow: { flexDirection: 'row', alignItems: 'center', gap: 5 }, playerName: { maxWidth: 145, flexShrink: 1, color: C.ink, fontSize: 21, fontWeight: '800' }, accountTierBadge: { minWidth: 40, height: 19, paddingHorizontal: 6, alignItems: 'center', justifyContent: 'center', borderRadius: 6, borderWidth: 1, borderColor: '#B58B2A', backgroundColor: '#FBF5E4' }, accountTierBadgePro: { borderColor: '#8C98A3', backgroundColor: '#EEF1F3' }, accountTierBadgeAdmin: { borderColor: '#B94235', backgroundColor: '#FBEDEA' }, accountTierText: { color: '#7A5A08', fontSize: 5.5, fontWeight: '900', letterSpacing: .65 }, accountTierTextPro: { color: '#46515B' }, accountTierTextAdmin: { color: '#9F2F25' }, editProfileButton: { width: 27, height: 27, alignItems: 'center', justifyContent: 'center' }, location: { marginTop: 4, flexDirection: 'row', alignItems: 'center', gap: 3 }, locationText: { color: C.ink40, fontSize: 10 }, squad: { marginTop: 5, flexDirection: 'row', alignItems: 'center', gap: 4 }, squadText: { color: C.teal, fontSize: 10, fontWeight: '800' }, rating: { alignItems: 'flex-end' }, ratingValue: { color: C.ink, fontSize: 30, lineHeight: 32, fontWeight: '900' }, ratingTier: { marginTop: 2, color: C.teal, fontSize: 7, fontWeight: '900', letterSpacing: .6 }, ratingTrend: { marginTop: 3, color: C.teal, fontSize: 9, fontWeight: '800' },
+  identity: { flexDirection: 'row', alignItems: 'center' }, avatar: { width: 67, height: 67, borderRadius: 34, backgroundColor: C.paper, alignItems: 'center', justifyContent: 'center' }, avatarPressed: { opacity: .72, transform: [{ scale: .97 }] }, avatarText: { color: C.surface, fontSize: 17, fontWeight: '900' }, avatarStatusButton: { position: 'absolute', right: 0, bottom: 0, width: 20, height: 20, alignItems: 'center', justifyContent: 'center', borderRadius: 10, backgroundColor: C.paper }, avatarStatusDot: { width: 14, height: 14, borderRadius: 7, borderWidth: 2.5, borderColor: C.paper }, identityCopy: { minWidth: 0, flex: 1, marginLeft: 13 }, playerNameRow: { minWidth: 0, flexDirection: 'row', alignItems: 'center', gap: 5 }, playerName: { minWidth: 0, flex: 1, color: C.ink, fontSize: 21, fontWeight: '800' }, accountTierBadge: { minWidth: 40, height: 19, paddingHorizontal: 6, alignItems: 'center', justifyContent: 'center', borderRadius: 6, borderWidth: 1, borderColor: '#B58B2A', backgroundColor: '#FBF5E4' }, accountTierBadgePro: { borderColor: '#8C98A3', backgroundColor: '#EEF1F3' }, accountTierBadgeAdmin: { borderColor: '#B94235', backgroundColor: '#FBEDEA' }, accountTierText: { color: '#7A5A08', fontSize: 5.5, fontWeight: '900', letterSpacing: .65 }, accountTierTextPro: { color: '#46515B' }, accountTierTextAdmin: { color: '#9F2F25' }, editProfileButton: { width: 27, height: 27, alignItems: 'center', justifyContent: 'center' }, location: { marginTop: 3, flexDirection: 'row', alignItems: 'center', gap: 3 }, locationText: { minWidth: 0, flex: 1, color: C.ink40, fontSize: 10 }, squad: { marginTop: 3, flexDirection: 'row', alignItems: 'center', gap: 4 }, squadText: { minWidth: 0, flex: 1, color: C.teal, fontSize: 10, fontWeight: '800' }, rating: { alignItems: 'flex-end' }, ratingValue: { color: C.ink, fontSize: 30, lineHeight: 32, fontWeight: '900' }, ratingTier: { marginTop: 2, color: C.teal, fontSize: 7, fontWeight: '900', letterSpacing: .6 }, ratingTrend: { marginTop: 3, color: C.teal, fontSize: 9, fontWeight: '800' }, socialStats: { marginTop: 6, flexDirection: 'row', alignItems: 'center', gap: 5 }, socialStat: { flexDirection: 'row', alignItems: 'baseline', gap: 3 }, socialValue: { color: C.ink, fontSize: 11, fontWeight: '900', fontVariant: ['tabular-nums'] }, socialLabel: { color: C.ink40, fontSize: 8, fontWeight: '800' }, socialDivider: { width: 3, height: 3, marginHorizontal: 2, borderRadius: 2, backgroundColor: C.line },
   appModeCard: { marginTop: 18, padding: 13, borderRadius: 18, borderBottomLeftRadius: 8, borderBottomRightRadius: 8, borderWidth: 1, borderColor: C.line, backgroundColor: C.surface }, appModeHead: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }, appModeEyebrow: { color: C.teal, fontSize: 7, fontWeight: '900', letterSpacing: .8 }, appModeTitle: { marginTop: 2, color: C.ink, fontSize: 11, fontWeight: '900' }, capabilityPill: { minHeight: 23, paddingHorizontal: 7, alignItems: 'center', justifyContent: 'center', borderRadius: 12, backgroundColor: C.tealWash }, capabilityText: { color: C.teal, fontSize: 6, fontWeight: '900' }, appModeControl: { marginTop: 11, padding: 4, flexDirection: 'row', gap: 4, borderRadius: 14, backgroundColor: '#E5E9E3' }, appModeOption: { minHeight: 43, flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6, borderRadius: 10 }, appModeOptionActive: { backgroundColor: C.optic, ...shadow }, appModeOptionLocked: { opacity: .72 }, appModeOptionText: { color: C.ink40, fontSize: 10, fontWeight: '800' }, appModeOptionTextActive: { color: C.ink, fontWeight: '900' }, appModeActiveDot: { width: 6, height: 6, borderRadius: 3, backgroundColor: C.teal }, appModeHelp: { marginTop: 9, color: C.ink40, fontSize: 8, lineHeight: 12 },
   modeModalBackdrop: { flex: 1, padding: 24, alignItems: 'center', justifyContent: 'center', backgroundColor: 'rgba(14,35,33,.58)' }, modeDialog: { width: '100%', maxWidth: 370, padding: 20, borderRadius: 23, backgroundColor: C.paper, ...shadow }, modeDialogIcon: { width: 54, height: 54, marginBottom: 14, borderRadius: 17, alignItems: 'center', justifyContent: 'center', backgroundColor: C.optic }, modeDialogEyebrow: { color: C.teal, fontSize: 8, fontWeight: '900', letterSpacing: .9 }, modeDialogTitle: { marginTop: 4, color: C.ink, fontSize: 22, lineHeight: 28, fontWeight: '900' }, modeDialogBody: { marginTop: 7, color: C.ink70, fontSize: 10, lineHeight: 16 }, modeDialogNote: { minHeight: 56, marginTop: 14, padding: 10, flexDirection: 'row', alignItems: 'center', gap: 7, borderRadius: 13, backgroundColor: C.tealWash }, modeDialogNoteText: { flex: 1, color: C.ink70, fontSize: 8, lineHeight: 12 }, modeDialogActions: { marginTop: 16, flexDirection: 'row', gap: 9 }, modeCancelButton: { minHeight: 48, flex: 1, alignItems: 'center', justifyContent: 'center', borderRadius: 13, borderWidth: 1, borderColor: C.line, backgroundColor: C.surface }, modeCancelText: { color: C.ink40, fontSize: 9, fontWeight: '900' }, modeConfirmButton: { minHeight: 48, flex: 1.35, alignItems: 'center', justifyContent: 'center', borderRadius: 13, backgroundColor: C.ink }, modeConfirmText: { color: C.surface, fontSize: 9, fontWeight: '900' },
   organizerHero: { padding: 16, borderRadius: 20, borderBottomLeftRadius: 9, borderBottomRightRadius: 9, backgroundColor: C.ink }, organizerHeroHead: { flexDirection: 'row', alignItems: 'center', gap: 10 }, organizerHeroIcon: { width: 40, height: 40, borderRadius: 12, alignItems: 'center', justifyContent: 'center', backgroundColor: C.optic }, organizerHeroEyebrow: { color: '#9FB3AC', fontSize: 7, fontWeight: '900', letterSpacing: .8 }, organizerHeroTitle: { marginTop: 2, color: C.surface, fontSize: 15, fontWeight: '900' }, organizerVerified: { minHeight: 25, paddingHorizontal: 7, flexDirection: 'row', alignItems: 'center', gap: 3, borderRadius: 13, backgroundColor: C.tealWash }, organizerVerifiedText: { color: C.teal, fontSize: 6, fontWeight: '900' }, organizerHeroBody: { marginTop: 13, color: '#CBD7D2', fontSize: 9, lineHeight: 14 }, organizerMonitorButton: { minHeight: 48, marginTop: 13, paddingHorizontal: 13, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', borderRadius: 12, backgroundColor: C.optic }, organizerMonitorText: { color: C.ink, fontSize: 10, fontWeight: '900' }, organizerStats: { paddingVertical: 16, flexDirection: 'row', borderRadius: 18, borderWidth: 1, borderColor: C.line, backgroundColor: C.surface }, organizerStat: { flex: 1, alignItems: 'center', borderRightWidth: StyleSheet.hairlineWidth, borderColor: C.line }, organizerStatValue: { color: C.ink, fontSize: 24, fontWeight: '900' }, organizerStatLabel: { marginTop: 3, color: C.teal, fontSize: 6, fontWeight: '900', letterSpacing: .5 }, organizerStatMeta: { marginTop: 3, color: C.ink40, fontSize: 7 }, capabilitiesCard: { paddingHorizontal: 13, borderRadius: 18, borderWidth: 1, borderColor: C.line, backgroundColor: C.surface }, capabilityRow: { minHeight: 72, flexDirection: 'row', alignItems: 'center', gap: 10 }, capabilityIcon: { width: 39, height: 39, borderRadius: 12, alignItems: 'center', justifyContent: 'center', backgroundColor: C.tealWash }, capabilityTitle: { color: C.ink, fontSize: 11, fontWeight: '900' }, capabilityDetail: { marginTop: 3, color: C.ink40, fontSize: 8, lineHeight: 12 },
   organizerHistorySummary: { minHeight: 100, padding: 15, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', borderRadius: 18, backgroundColor: C.ink }, organizerHistoryTitle: { marginTop: 3, color: C.surface, fontSize: 16, fontWeight: '900' }, organizerHistoryBadge: { alignItems: 'flex-end' }, organizerHistoryBadgeValue: { color: C.optic, fontSize: 25, fontWeight: '900' }, organizerHistoryBadgeLabel: { marginTop: 2, color: '#9FB3AC', fontSize: 6, fontWeight: '900' }, organizerSessionsCard: { paddingHorizontal: 12, borderRadius: 18, borderWidth: 1, borderColor: C.line, backgroundColor: C.surface }, organizerSessionRow: { minHeight: 76, flexDirection: 'row', alignItems: 'center', gap: 9 }, organizerDate: { width: 45, minHeight: 38, alignItems: 'center', justifyContent: 'center', borderRadius: 11, backgroundColor: C.tealWash }, organizerDateText: { color: C.teal, fontSize: 7, fontWeight: '900' }, organizerSessionTitle: { color: C.ink, fontSize: 10, fontWeight: '900' }, organizerSessionMeta: { marginTop: 4, color: C.ink40, fontSize: 8 }, organizerMatchCount: { alignItems: 'flex-end' }, organizerMatchValue: { color: C.ink, fontSize: 16, fontWeight: '900' }, organizerMatchLabel: { color: C.ink40, fontSize: 5, fontWeight: '900' },
   tabs: { marginTop: 20, marginBottom: 18, padding: 4, flexDirection: 'row', borderRadius: 13, backgroundColor: '#E5E9E3' }, tab: { flex: 1, minHeight: 41, alignItems: 'center', justifyContent: 'center', borderRadius: 10 }, tabActive: { backgroundColor: C.optic, ...shadow }, tabText: { color: C.ink40, fontSize: 11, fontWeight: '800' }, tabTextActive: { color: C.ink },
   focusCard: { marginBottom: 13, padding: 16, borderRadius: 20, borderBottomLeftRadius: 9, borderBottomRightRadius: 9, backgroundColor: C.ink, ...shadow }, focusTop: { flexDirection: 'row', alignItems: 'center', gap: 10 }, focusIcon: { width: 38, height: 38, borderRadius: 12, backgroundColor: C.optic, alignItems: 'center', justifyContent: 'center' }, focusEyebrow: { color: '#9FB3AC', fontSize: 8, fontWeight: '900', letterSpacing: .9 }, focusTitle: { marginTop: 2, color: C.surface, fontSize: 17, fontWeight: '900' }, priorityBadge: { paddingHorizontal: 7, paddingVertical: 5, borderRadius: 7, backgroundColor: 'rgba(214,233,74,.14)' }, priorityText: { color: C.optic, fontSize: 6, fontWeight: '900', letterSpacing: .5 }, focusWhy: { marginTop: 13, color: '#D9E1DD', fontSize: 10, lineHeight: 15 }, focusStrong: { color: C.surface, fontWeight: '900' }, progressTrack: { height: 7, marginTop: 13, overflow: 'hidden', borderRadius: 4, backgroundColor: '#334946' }, progressFill: { width: '48%', height: '100%', borderRadius: 4, backgroundColor: C.optic }, progressLabels: { marginTop: 5, flexDirection: 'row', justifyContent: 'space-between' }, progressCurrent: { color: C.optic, fontSize: 7, fontWeight: '900' }, progressGoal: { color: '#9FB3AC', fontSize: 7, fontWeight: '900' }, nextAction: { minHeight: 65, marginTop: 13, padding: 10, flexDirection: 'row', alignItems: 'center', gap: 9, borderRadius: 11, backgroundColor: C.surface }, nextActionPressed: { opacity: .82, transform: [{ scale: .985 }] }, nextActionIcon: { width: 30, height: 30, borderRadius: 15, alignItems: 'center', justifyContent: 'center', backgroundColor: C.teal }, nextActionCopy: { flex: 1 }, nextActionText: { color: C.ink70, fontSize: 9, lineHeight: 13 }, nextActionStrong: { color: C.ink, fontWeight: '900' }, nextActionCta: { marginTop: 4, color: C.teal, fontSize: 7, fontWeight: '900', letterSpacing: .65 },
-  statCard: { padding: 15, flexDirection: 'row', alignItems: 'center', borderRadius: 24, borderBottomLeftRadius: 10, borderBottomRightRadius: 10, borderWidth: 1, borderColor: C.line, backgroundColor: C.surface, ...shadow }, ring: { width: 82, height: 82, alignItems: 'center', justifyContent: 'center' }, ringInner: { alignItems: 'center' }, ringValue: { color: C.ink, fontSize: 22, fontWeight: '900' }, ringPercent: { fontSize: 11 }, statLabel: { color: C.ink40, fontSize: 7, fontWeight: '900', letterSpacing: .7 }, statBlock: { flex: 1, marginLeft: 15 }, statValue: { color: C.ink, fontSize: 23, fontWeight: '900' }, statMeta: { marginTop: 4, color: C.ink40, fontSize: 8 }, streakMeta: { marginTop: 4, color: C.brick, fontSize: 7, fontWeight: '800' }, statDivider: { width: 1, height: 42, backgroundColor: C.line },
+  statCard: { padding: 15, flexDirection: 'row', alignItems: 'center', borderRadius: 24, borderBottomLeftRadius: 10, borderBottomRightRadius: 10, borderWidth: 1, borderColor: C.line, backgroundColor: C.surface, ...shadow }, ring: { width: 96, height: 96, alignItems: 'center', justifyContent: 'center' }, ringInner: { alignItems: 'center' }, ringValue: { color: C.ink, fontSize: 20, fontWeight: '900' }, ringPercent: { fontSize: 10 }, statLabel: { color: C.ink40, fontSize: 7, fontWeight: '900', letterSpacing: .7 }, statBlock: { flex: 1, marginLeft: 15 }, statValue: { color: C.ink, fontSize: 23, fontWeight: '900' }, statMeta: { marginTop: 4, color: C.ink40, fontSize: 8 }, streakMeta: { marginTop: 4, color: C.brick, fontSize: 7, fontWeight: '800' }, statDivider: { width: 1, height: 42, backgroundColor: C.line },
   chartCard: { marginTop: 13, padding: 16, borderRadius: 20, borderBottomLeftRadius: 9, borderBottomRightRadius: 9, borderWidth: 1, borderColor: C.line, backgroundColor: C.surface }, chartHead: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-start' }, cardTitle: { marginTop: 2, color: C.ink, fontSize: 15, fontWeight: '800' }, changeBadge: { paddingHorizontal: 8, paddingVertical: 5, flexDirection: 'row', alignItems: 'center', gap: 3, borderRadius: 8, backgroundColor: C.tealWash }, changeText: { color: C.teal, fontSize: 10, fontWeight: '900' }, chart: { height: 96, marginTop: 12, overflow: 'hidden' }, gridLine: { position: 'absolute', left: 0, right: 0, height: 1, backgroundColor: C.line }, chartBars: { position: 'absolute', left: 0, right: 0, bottom: 1, height: 80, flexDirection: 'row', alignItems: 'flex-end' }, barSlot: { flex: 1, height: 80, alignItems: 'center', justifyContent: 'flex-end' }, bar: { width: 8, minHeight: 9, borderRadius: 4, backgroundColor: '#A6C6C0' }, barCurrent: { width: 10, backgroundColor: C.teal }, chartLabels: { flexDirection: 'row', justifyContent: 'space-between' }, chartLabel: { color: C.ink40, fontSize: 7, fontWeight: '800' },
   sectionHeader: { marginTop: 24, marginBottom: 11, flexDirection: 'row', alignItems: 'flex-end', justifyContent: 'space-between' }, sectionMeta: { color: C.ink40, fontSize: 8, fontWeight: '800' }, link: { paddingVertical: 4, color: C.teal, fontSize: 11, fontWeight: '800' }, insightGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 9 }, insight: { width: '48.5%', minHeight: 105, padding: 13, borderRadius: 15, borderWidth: 1, borderColor: C.line, backgroundColor: C.surface }, insightValue: { marginTop: 9, color: C.ink, fontSize: 23, fontWeight: '900' }, insightValueSmall: { marginTop: 10, color: C.ink, fontSize: 14, fontWeight: '900' }, insightLabel: { marginTop: 3, color: C.ink40, fontSize: 9 },
   achievementRow: { gap: 9, paddingRight: 20 }, achievement: { width: 116, minHeight: 133, padding: 12, borderRadius: 17, borderBottomLeftRadius: 8, borderBottomRightRadius: 8, borderWidth: 1, borderColor: C.line, backgroundColor: C.surface }, achievementLocked: { opacity: .62, backgroundColor: '#ECEFEA' }, achievementIcon: { width: 38, height: 38, borderRadius: 12, backgroundColor: C.optic, alignItems: 'center', justifyContent: 'center' }, achievementIconLocked: { backgroundColor: C.line }, achievementName: { marginTop: 10, minHeight: 30, color: C.ink, fontSize: 11, lineHeight: 15, fontWeight: '800' }, achievementDate: { color: C.ink40, fontSize: 8 },
@@ -520,7 +816,54 @@ const lightStyles = StyleSheet.create({
   historySummary: { padding: 16, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', borderRadius: 18, backgroundColor: C.ink }, record: { alignItems: 'flex-end' }, recordValue: { color: C.optic, fontSize: 23, fontWeight: '900' }, patternCard: { marginTop: 12, padding: 15, borderRadius: 18, borderWidth: 1, borderColor: C.line, backgroundColor: C.surface }, patternHead: { flexDirection: 'row', alignItems: 'flex-start', justifyContent: 'space-between' }, patternTitle: { marginTop: 2, color: C.ink, fontSize: 14, fontWeight: '900' }, formRecord: { color: C.teal, fontSize: 19, fontWeight: '900' }, recentForm: { marginTop: 14, flexDirection: 'row', gap: 7 }, patternMetrics: { marginTop: 14, flexDirection: 'row' }, patternMetric: { flex: 1, alignItems: 'center' }, patternDivider: { width: 1, backgroundColor: C.line }, patternValue: { color: C.ink, fontSize: 18, fontWeight: '900' }, patternLabel: { marginTop: 2, color: C.ink40, fontSize: 6, fontWeight: '900', letterSpacing: .3 }, patternStatus: { marginTop: 4, color: C.teal, fontSize: 7, fontWeight: '800' }, patternNeeds: { marginTop: 4, color: C.brick, fontSize: 7, fontWeight: '800' }, patternCopy: { marginTop: 13, paddingTop: 11, borderTopWidth: 1, borderColor: C.line, color: C.ink70, fontSize: 9, lineHeight: 13 }, filters: { marginVertical: 13, flexDirection: 'row', gap: 8 }, filter: { minHeight: 36, paddingHorizontal: 16, alignItems: 'center', justifyContent: 'center', borderRadius: 18, borderWidth: 1, borderColor: C.line, backgroundColor: C.surface }, filterActive: { borderColor: C.ink, backgroundColor: C.ink }, filterText: { color: C.ink70, fontSize: 10, fontWeight: '800' }, filterTextActive: { color: C.paper }, endNote: { paddingVertical: 18, textAlign: 'center', color: C.ink40, fontSize: 9 },
   settingsLabel: { marginTop: 5, marginBottom: 8, color: C.ink40, fontSize: 9, fontWeight: '900', letterSpacing: .8 }, settingsCard: { marginBottom: 21, paddingHorizontal: 13, overflow: 'hidden', borderRadius: 17, borderWidth: 1, borderColor: C.line, backgroundColor: C.surface }, settingRow: { minHeight: 70, flexDirection: 'row', alignItems: 'center', gap: 10 }, settingIcon: { width: 36, height: 36, borderRadius: 11, alignItems: 'center', justifyContent: 'center', backgroundColor: C.tealWash }, settingIconDanger: { backgroundColor: '#F7E7E4' }, settingCopy: { flex: 1 }, settingTitle: { color: C.ink, fontSize: 11, fontWeight: '800' }, settingDetail: { marginTop: 3, color: C.ink40, fontSize: 8, lineHeight: 12 }, danger: { color: C.error }, toggle: { width: 43, height: 25, padding: 3, borderRadius: 13, backgroundColor: C.line }, toggleOn: { backgroundColor: C.optic }, toggleKnob: { width: 19, height: 19, borderRadius: 10, backgroundColor: C.surface, ...shadow }, toggleKnobOn: { transform: [{ translateX: 18 }] }, version: { marginTop: 2, textAlign: 'center', color: C.ink40, fontSize: 7, fontWeight: '800', letterSpacing: .7 },
   backdrop: { flex: 1, justifyContent: 'flex-end', backgroundColor: 'rgba(14,35,33,.42)' }, backdropDismiss: { ...StyleSheet.absoluteFillObject }, sheet: { maxHeight: '84%', paddingHorizontal: 20, paddingTop: 9, paddingBottom: 30, borderTopLeftRadius: 25, borderTopRightRadius: 25, backgroundColor: C.paper }, sheetTall: { height: '92%', maxHeight: '92%', paddingBottom: 12 }, sheetBody: { flexShrink: 1 }, sheetBodyScrollable: { flex: 1, minHeight: 0, overflow: 'hidden' }, handle: { width: 38, height: 4, marginBottom: 15, alignSelf: 'center', borderRadius: 2, backgroundColor: C.line }, sheetHeader: { flexDirection: 'row', alignItems: 'center' }, sheetTitle: { color: C.ink, fontSize: 25, fontWeight: '800' }, sheetLine: { marginTop: 15, marginBottom: 13 },
-  inputLabel: { marginTop: 10, marginBottom: 6, color: C.ink40, fontSize: 8, fontWeight: '900', letterSpacing: .8 }, input: { height: 50, paddingHorizontal: 14, borderRadius: 13, borderWidth: 1, borderColor: C.line, backgroundColor: C.surface, color: C.ink, fontSize: 13 }, ratingNotice: { marginTop: 14, padding: 12, flexDirection: 'row', alignItems: 'center', gap: 9, borderRadius: 12, backgroundColor: C.tealWash }, profileAvatarPicker: { gap: 9, paddingVertical: 2, paddingRight: 15 }, profileAvatarChoice: { width: 58, height: 58, borderRadius: 18, borderWidth: 2, borderColor: C.line, alignItems: 'center', justifyContent: 'center', backgroundColor: C.surface }, profileAvatarChoiceActive: { borderColor: C.ink, backgroundColor: C.optic }, editProfileLayout: { flex: 1, minHeight: 0 }, editProfileScroll: { flex: 1, minHeight: 0 }, editProfileContent: { paddingBottom: 14 }, editProfileFooter: { paddingTop: 8, borderTopWidth: 1, borderColor: C.line, backgroundColor: C.paper }, editChoiceRow: { flexDirection: 'row', gap: 6 }, editChoice: { minHeight: 38, flex: 1, alignItems: 'center', justifyContent: 'center', borderWidth: 1, borderColor: C.line, borderRadius: 10, backgroundColor: C.surface }, editChoiceActive: { borderColor: C.ink, backgroundColor: C.optic }, editChoiceText: { color: C.ink40, fontSize: 8, fontWeight: '900' }, editChoiceTextActive: { color: C.ink }, editError: { marginTop: 4, color: C.error, fontSize: 9 }, primaryButton: { minHeight: 52, marginTop: 20, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 7, borderRadius: 14, backgroundColor: C.optic }, editSaveButton: { marginTop: 8 }, primaryText: { color: C.ink, fontSize: 12, fontWeight: '900' }, disabled: { opacity: .4 },
+  inputLabel: { marginBottom: 7, color: C.ink40, fontSize: 8, fontWeight: '900', letterSpacing: .8 }, input: { minHeight: 54, paddingHorizontal: 16, paddingVertical: 0, borderRadius: 14, borderWidth: 1, borderColor: C.line, backgroundColor: C.surface, color: C.ink, fontSize: 13, textAlignVertical: 'center' },
+  // Location picker trigger chip
+  locTrigger: { minHeight: 64, paddingHorizontal: 14, flexDirection: 'row', alignItems: 'center', gap: 12, borderRadius: 14, borderWidth: 1, borderColor: C.line, backgroundColor: C.surface },
+  locTriggerPressed: { opacity: 0.76, transform: [{ scale: 0.985 }] },
+  locTriggerIcon: { width: 38, height: 38, borderRadius: 12, alignItems: 'center', justifyContent: 'center', backgroundColor: C.tealWash },
+  locTriggerEyebrow: { color: C.ink40, fontSize: 7.5, fontWeight: '900', letterSpacing: .7 },
+  locTriggerCity: { marginTop: 1, color: C.ink, fontSize: 14, fontWeight: '800' },
+  locTriggerMeta: { marginTop: 1, color: C.ink40, fontSize: 9 },
+  locTriggerPlaceholder: { marginTop: 2, color: C.ink40, fontSize: 12 },
+  locTriggerChevron: { width: 28, height: 28, borderRadius: 14, alignItems: 'center', justifyContent: 'center', backgroundColor: C.tealWash },
+  // Modal backdrop + sheet
+  locModalBackdrop: { flex: 1, justifyContent: 'flex-end', backgroundColor: 'rgba(14,35,33,.55)' },
+  locModalDismiss: { ...StyleSheet.absoluteFillObject },
+  locSheet: { paddingHorizontal: 20, paddingTop: 10, paddingBottom: 28, borderTopLeftRadius: 26, borderTopRightRadius: 26, backgroundColor: '#0F2421' },
+  locHandle: { width: 38, height: 4, marginBottom: 18, alignSelf: 'center', borderRadius: 2, backgroundColor: 'rgba(255,255,255,.2)' },
+  locHeader: { flexDirection: 'row', alignItems: 'center', marginBottom: 18 },
+  locHeaderEyebrow: { color: 'rgba(255,255,255,.45)', fontSize: 9, fontWeight: '900', letterSpacing: 1 },
+  locHeaderTitle: { marginTop: 3, color: '#FFFFFF', fontSize: 26, fontWeight: '800', letterSpacing: -.5 },
+  locCloseBtn: { width: 44, height: 44, borderRadius: 22, alignItems: 'center', justifyContent: 'center', backgroundColor: 'rgba(255,255,255,.12)' },
+  // Currently using card
+  locCurrentCard: { flexDirection: 'row', alignItems: 'center', gap: 12, minHeight: 72, paddingHorizontal: 14, marginBottom: 14, borderRadius: 15, backgroundColor: 'rgba(255,255,255,.09)' },
+  locCurrentIcon: { width: 40, height: 40, borderRadius: 12, alignItems: 'center', justifyContent: 'center', backgroundColor: 'rgba(28,107,102,.35)' },
+  locCurrentLabel: { color: 'rgba(255,255,255,.45)', fontSize: 8, fontWeight: '900', letterSpacing: .8 },
+  locCurrentCity: { marginTop: 2, color: '#FFFFFF', fontSize: 15, fontWeight: '800' },
+  locCurrentMeta: { marginTop: 1, color: 'rgba(255,255,255,.5)', fontSize: 9 },
+  // GPS button (optic / lime-yellow)
+  locGpsBtn: { minHeight: 68, flexDirection: 'row', alignItems: 'center', gap: 13, paddingHorizontal: 16, borderRadius: 16, backgroundColor: C.optic, marginBottom: 18 },
+  locGpsBtnTitle: { color: C.ink, fontSize: 13, fontWeight: '900' },
+  locGpsBtnSub: { marginTop: 2, color: 'rgba(14,35,33,.55)', fontSize: 9 },
+  // OR divider label
+  locOrLabel: { color: 'rgba(255,255,255,.4)', fontSize: 9, fontWeight: '900', letterSpacing: 1.1, marginBottom: 10 },
+  // Search row
+  locSearchRow: { flexDirection: 'row', alignItems: 'center', borderRadius: 14, backgroundColor: 'rgba(255,255,255,.1)', marginBottom: 10 },
+  locSearchInput: { flex: 1, height: 52, paddingHorizontal: 10, color: '#FFFFFF', fontSize: 13 },
+  locSearchClear: { width: 42, height: 42, alignItems: 'center', justifyContent: 'center' },
+  locSearchArrow: { width: 42, height: 42, marginRight: 5, borderRadius: 11, alignItems: 'center', justifyContent: 'center', backgroundColor: C.optic },
+  // Results list
+  locResults: { borderRadius: 14, backgroundColor: 'rgba(255,255,255,.09)', marginBottom: 10, overflow: 'hidden' },
+  locResultRow: { minHeight: 56, flexDirection: 'row', alignItems: 'center', gap: 10, paddingHorizontal: 14 },
+  locResultBorder: { borderTopWidth: StyleSheet.hairlineWidth, borderColor: 'rgba(255,255,255,.12)' },
+  locResultActive: { backgroundColor: 'rgba(214,233,74,.14)' },
+  locResultHovered: { backgroundColor: 'rgba(114,199,190,.2)' },
+  locResultCity: { color: '#FFFFFF', fontSize: 13, fontWeight: '700' },
+  locResultMeta: { marginTop: 1, color: 'rgba(255,255,255,.45)', fontSize: 9 },
+  locResultText: { flex: 1, color: '#FFFFFF', fontSize: 12, fontWeight: '600' },
+  // Privacy note
+  locPrivacyNote: { marginTop: 6, color: 'rgba(255,255,255,.35)', fontSize: 8.5, textAlign: 'center', lineHeight: 13 },
+  ratingNotice: { marginBottom: 16, padding: 12, flexDirection: 'row', alignItems: 'center', gap: 9, borderRadius: 12, backgroundColor: C.tealWash }, profileAvatarPicker: { gap: 9, paddingVertical: 2, paddingRight: 15 }, profileAvatarChoice: { width: 58, height: 58, borderRadius: 18, borderWidth: 2, borderColor: C.line, alignItems: 'center', justifyContent: 'center', backgroundColor: C.surface }, profileAvatarChoiceActive: { borderColor: C.ink, backgroundColor: C.optic }, editProfileLayout: { flex: 1, minHeight: 0 }, editProfileScroll: { flex: 1, minHeight: 0 }, editProfileContent: { paddingTop: 2, paddingBottom: 34 }, editFieldGroup: { marginBottom: 16 }, editFieldGroupLast: { marginBottom: 0 }, editProfileActions: { marginTop: 20, paddingTop: 16, borderTopWidth: 1, borderColor: C.line }, editChoiceRow: { flexDirection: 'row', gap: 8 }, editChoice: { minHeight: 48, flex: 1, alignItems: 'center', justifyContent: 'center', borderWidth: 1, borderColor: C.line, borderRadius: 12, backgroundColor: C.surface }, editChoiceActive: { borderColor: C.ink, backgroundColor: C.optic }, editChoiceText: { color: C.ink40, fontSize: 9, fontWeight: '900' }, editChoiceTextActive: { color: C.ink }, editError: { marginBottom: 8, color: C.error, fontSize: 9 }, primaryButton: { minHeight: 54, marginTop: 20, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8, borderRadius: 15, backgroundColor: C.optic }, editSaveButton: { marginTop: 0 }, editSaveButtonDisabled: { borderWidth: 1, borderColor: C.line, backgroundColor: C.surface }, primaryText: { color: C.ink, fontSize: 12, fontWeight: '900' }, disabled: { opacity: .55 },
   statusSheetLead: { marginBottom: 12, color: C.ink40, fontSize: 9, lineHeight: 14 }, statusSheetCard: { paddingHorizontal: 13, borderRadius: 17, borderWidth: 1, borderColor: C.line, backgroundColor: C.surface }, statusSheetRow: { minHeight: 68, flexDirection: 'row', alignItems: 'center', gap: 10 }, statusSheetDot: { width: 12, height: 12, borderRadius: 6 }, statusSheetTitle: { color: C.ink, fontSize: 11, fontWeight: '900' }, statusSheetDetail: { marginTop: 3, color: C.ink40, fontSize: 8 },
   empty: { paddingVertical: 55, alignItems: 'center' }, emptyTitle: { marginTop: 11, marginBottom: 3, color: C.ink, fontSize: 16, fontWeight: '800' },
   achievementDetailIcon: { width: 70, height: 70, marginTop: 7, marginBottom: 15, alignSelf: 'center', borderRadius: 23, backgroundColor: C.optic, alignItems: 'center', justifyContent: 'center' }, achievementDetail: { color: C.ink70, textAlign: 'center', fontSize: 13, lineHeight: 19 }, achievementProgress: { marginTop: 7, color: C.teal, textAlign: 'center', fontSize: 10, fontWeight: '800' },

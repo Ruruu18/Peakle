@@ -1,5 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
+  ActivityIndicator,
   Animated,
   Alert,
   Image,
@@ -17,6 +18,7 @@ import Ionicons from '@expo/vector-icons/Ionicons';
 import { useFocusEffect, useNavigation } from '@react-navigation/native';
 import LocationPicker from '../components/LocationPicker';
 import NotificationSheet from '../components/NotificationSheet';
+import ProfilePhoto from '../components/ProfilePhoto';
 import ScrollView from '../components/FocusResetScrollView';
 import { useAuth } from '../context/AuthContext';
 import { distanceInKm, formatDistance, useUserLocation } from '../context/LocationContext';
@@ -24,6 +26,13 @@ import { useOperations } from '../context/OperationsContext';
 import { useTheme } from '../context/ThemeContext';
 import { calculatePerformanceRating, extendBooking, listMyBookings, listMyMatches, listVenues } from '../services/database';
 import { presentNotification } from '../utils/notifications';
+import { createMobileStyleSheet } from '../utils/mobileStyles';
+import { peekCachedData, readCachedData, withTimeout, writeCachedData } from '../lib/asyncData';
+import { requireSupabase } from '../lib/supabase';
+import { HOME_VENUES_CACHE_KEY, homeDashboardCacheKey, playerActivitiesCacheKey } from '../lib/cacheKeys';
+import { skillCategoryForRating } from '../utils/skillCategories';
+import { listDiscoverablePlayerActivities } from '../services/playerActivities';
+import { followPlayer, listPlayerSuggestions } from '../services/directMessages';
 
 const C = {
   ink: '#0E2321', paper: '#F3F5EF', surface: '#FFFFFF', optic: '#D6E94A',
@@ -124,7 +133,7 @@ function KitchenLine({ dark = false, style }) {
 
 function Eyebrow({ children, light = false, numberOfLines }) {
   const { isDark } = useTheme();
-  return <Text numberOfLines={numberOfLines} style={[styles.eyebrow, isDark && darkStyles.mutedText, light && styles.eyebrowLight]}>{children}</Text>;
+  return <Text numberOfLines={numberOfLines} style={[styles.eyebrow, isDark && darkStyles.eyebrowDark, light && styles.eyebrowLight]}>{children}</Text>;
 }
 
 function SectionTitle({ eyebrow, title, right }) {
@@ -232,13 +241,38 @@ function HeaderAction({ active = false, icon, label, onPress, showBadge = false 
   );
 }
 
-function WeekCard({ matches, rating }) {
+function WeekCard({ matches, rating, onRecordMatch }) {
   const { isDark } = useTheme();
   const wins = matches.filter((match) => match.result === 'W').length;
   const winRate = matches.length ? Math.round((wins / matches.length) * 100) : 0;
   const recentForm = matches.slice(0, 4);
   const numericRating = Number.parseFloat(rating);
+  const ratingCategory = skillCategoryForRating(numericRating);
   const ratingProgress = Number.isFinite(numericRating) ? Math.min(100, Math.max(0, (numericRating / 5.5) * 100)) : 0;
+
+  if (!matches.length) {
+    return (
+      <View style={[styles.weekEmptyCard, isDark && darkStyles.card]}>
+        <View pointerEvents="none" style={styles.weekEmptyGlow} />
+        <View style={styles.weekEmptyHead}>
+          <View style={[styles.weekEmptyMark, isDark && styles.weekEmptyMarkDark]}>
+            <Image source={require('../../public/images/ball.png')} style={styles.weekEmptyBall} resizeMode="contain" />
+          </View>
+          <View style={[styles.weekEmptyStatus, isDark && styles.weekEmptyStatusDark]}>
+            <View style={styles.weekEmptyStatusDot} />
+            <Text style={[styles.weekEmptyStatusText, isDark && styles.weekEmptyStatusTextDark]}>WEEKLY RECORD</Text>
+          </View>
+        </View>
+        <Text style={[styles.weekEmptyTitle, isDark && darkStyles.text]}>Your record starts here</Text>
+        <Text style={[styles.weekEmptyBody, isDark && darkStyles.bodyText]}>Play and save your first match this week. Your win rate, recent form, and rating progress will appear automatically.</Text>
+        <MotionPressable accessibilityLabel="Record your first match this week" accessibilityRole="button" onPress={onRecordMatch} style={styles.weekEmptyButton}>
+          <Text style={styles.weekEmptyButtonText}>Record a match</Text>
+          <Icon name="arrow-forward" size={17} color={C.ink} />
+        </MotionPressable>
+      </View>
+    );
+  }
+
   return (
     <View style={[styles.statCard, isDark && darkStyles.card]}>
       <View style={styles.statFormHeader}>
@@ -250,7 +284,7 @@ function WeekCard({ matches, rating }) {
         <View style={styles.rateCopy}><Text style={[styles.rateLead, isDark && darkStyles.text]}>{wins} {wins === 1 ? 'win' : 'wins'}</Text><Text style={[styles.rateBody, isDark && darkStyles.bodyText]}>from {matches.length} {matches.length === 1 ? 'match' : 'matches'}</Text><Text style={styles.rateUp}>{matches.length ? 'Based on recorded matches this week' : 'Play and save a match to build your record'}</Text></View>
       </View>
       <KitchenLine style={styles.statDivider} />
-      <View style={styles.ratingRow}><View style={styles.ratingInline}><Eyebrow>PERFORMANCE RATING</Eyebrow><Text style={[styles.ratingNumber, isDark && darkStyles.text]}>{rating ?? 'Unrated'}</Text></View></View>
+      <View style={styles.ratingRow}><View style={styles.ratingInline}><Eyebrow>PERFORMANCE RATING</Eyebrow><Text style={[styles.ratingNumber, isDark && darkStyles.text]}>{rating ?? 'Unrated'}</Text></View>{ratingCategory ? <View style={styles.ratingCategory}><Text style={styles.ratingCategoryText}>{ratingCategory.label.toUpperCase()}</Text></View> : null}</View>
       <View style={[styles.track, isDark && darkStyles.track]}><View style={[styles.trackFill, { width: `${ratingProgress}%` }]} /></View>
       <View style={styles.trackLabels}><Text style={[styles.trackLabel, isDark && darkStyles.mutedText]}>1.0</Text><Text style={[styles.trackLabel, isDark && darkStyles.mutedText]}>5.5</Text></View>
     </View>
@@ -271,16 +305,47 @@ function CompetitiveHubCard({ rating, matches, onOpen, onFindPlay }) {
   );
 }
 
-function CourtCard({ court, onPress, wide }) {
+function CourtCard({ court, onPress, wide, single }) {
   const { isDark } = useTheme();
   return (
-    <Pressable onPress={onPress} style={({ pressed }) => [styles.courtCard, isDark && darkStyles.card, wide && styles.courtCardWide, pressed && styles.pressed]}>
+    <Pressable onPress={onPress} style={({ pressed }) => [styles.courtCard, isDark && darkStyles.card, wide && styles.courtCardWide, single && styles.courtCardSingle, pressed && styles.pressed]}>
       <View><CourtGraphic compact color={court.color} /><View style={styles.distance}><Text style={styles.distanceText}>{court.distance}</Text></View></View>
       <View style={styles.courtInfo}>
-        <View style={styles.courtInfoMain}><Text numberOfLines={1} style={[styles.courtName, isDark && darkStyles.text]}>{court.name}</Text><View style={styles.locationRow}><Icon name="location-outline" size={13} color={isDark ? '#8FA39C' : C.ink40} /><Text style={[styles.courtLocation, isDark && darkStyles.mutedText]}>{court.location}</Text></View></View>
+        <View style={styles.courtInfoMain}><Text numberOfLines={1} style={[styles.courtName, isDark && darkStyles.text]}>{court.name}</Text><View style={styles.locationRow}><Icon name="location-outline" size={13} color={isDark ? '#D5DFDB' : C.teal} /><Text style={[styles.courtLocation, isDark && darkStyles.locationText]}>{court.location}</Text></View></View>
         <Text style={styles.price}>{court.price}{court.hourlyPrice ? <Text style={[styles.perHour, isDark && darkStyles.mutedText]}>/hr</Text> : null}</Text>
       </View>
       <View style={styles.chips}>{[...new Set([court.indoor, ...court.amenities].filter(Boolean))].slice(0, 3).map((label) => <Text key={label} style={[styles.chip, isDark && darkStyles.chip]}>{label}</Text>)}</View>
+    </Pressable>
+  );
+}
+
+function PublicActivityCard({ activity, userLocation, onPress, wide, single }) {
+  const { isDark } = useTheme();
+  const startsAt = new Date(activity.startsAt);
+  const date = startsAt.toLocaleDateString('en-PH', { weekday: 'short', month: 'short', day: 'numeric', timeZone: 'Asia/Manila' });
+  const time = startsAt.toLocaleTimeString('en-PH', { hour: 'numeric', minute: '2-digit', timeZone: 'Asia/Manila' });
+  const distance = formatDistance(distanceInKm(userLocation, activity.venue));
+  const fee = activity.feeAmount == null ? activity.typeLabel : Number(activity.feeAmount) > 0 ? `₱${Number(activity.feeAmount).toLocaleString('en-PH')}` : 'Free';
+  const isWaitlist = activity.availability === 'WAITLIST';
+  const typeIcon = activity.type === 'open_play' ? 'people' : activity.type === 'competition' ? 'trophy' : 'school';
+  return (
+    <Pressable
+      accessibilityRole="button"
+      accessibilityLabel={`${activity.typeLabel}, ${activity.title}, ${activity.venue?.name || 'public activity'}`}
+      onPress={onPress}
+      style={({ pressed }) => [styles.homeOpenPlayCard, isDark && darkStyles.card, wide && styles.homeOpenPlayCardWide, single && styles.homeOpenPlayCardSingle, pressed && styles.pressed]}
+    >
+      <View style={styles.homeOpenPlayTop}>
+        <View style={styles.homeOpenPlayVerified}><Icon name={typeIcon} size={12} color={C.teal} /><Text style={styles.homeOpenPlayVerifiedText}>{activity.typeLabel.toUpperCase()}</Text></View>
+        <Text style={[styles.homeOpenPlayFee, isDark && darkStyles.text]}>{fee}</Text>
+      </View>
+      <Text numberOfLines={1} style={[styles.homeOpenPlayName, isDark && darkStyles.text]}>{activity.title}</Text>
+      <Text numberOfLines={1} style={styles.homeOpenPlayVenue}>{activity.venue?.name || 'Peakle venue'} · {activity.venue?.area || distance}</Text>
+      <View style={styles.homeOpenPlayMeta}><Icon name="calendar-outline" size={14} color={isDark ? '#8FA39C' : C.ink40} /><Text numberOfLines={1} style={[styles.homeOpenPlayMetaText, isDark && darkStyles.mutedText]}>{date} · {time}</Text></View>
+      <View style={styles.homeOpenPlayFoot}>
+        <Text style={[styles.homeOpenPlayDistance, isDark && darkStyles.mutedText]}>{distance}</Text>
+        <View style={[styles.homeOpenPlaySpots, isWaitlist && styles.homeOpenPlayWaitlist]}><Text style={[styles.homeOpenPlaySpotsText, isWaitlist && styles.homeOpenPlayWaitlistText]}>{activity.availability}</Text></View>
+      </View>
     </Pressable>
   );
 }
@@ -291,7 +356,7 @@ function ActivityList({ matches, now }) {
 
   return (
     <View style={[styles.activityCard, isDark && darkStyles.card]}>
-      {matches.slice(0, 3).map((match, index) => {
+      {matches.slice(0, 2).map((match, index) => {
         const won = match.result === 'W';
         return (
         <React.Fragment key={match.id}>
@@ -351,7 +416,7 @@ function Leaderboard({ visible, onClose, user, matches, performanceRating }) {
           <View style={[styles.sheetHandle, isDark && darkStyles.track]} />
           <View style={styles.sheetHead}><View style={styles.leaderHeading}><Eyebrow>{userLocation.label.toUpperCase()}</Eyebrow><Text style={[styles.sheetTitle, isDark && darkStyles.text]}>Your record</Text><Text style={[styles.leaderSubtitle, isDark && darkStyles.mutedText]}>Calculated from completed matches saved to your account</Text></View><Pressable onPress={onClose} hitSlop={12} style={[styles.closeButton, isDark && darkStyles.card]}><Icon name="close" size={23} /></Pressable></View>
           <View style={[styles.recordCard, isDark && darkStyles.card]}>
-            <View style={styles.recordIdentity}><View style={styles.recordAvatar}><Text style={styles.avatarText}>{playerInitials(user?.name || 'Player')}</Text></View><View style={styles.recordCopy}><Text style={[styles.recordName, isDark && darkStyles.text]}>{user?.name || 'Player'}</Text><Text style={[styles.recordMeta, isDark && darkStyles.mutedText]}>Performance rating · {performanceRating ?? 'Unrated'}</Text></View></View>
+            <View style={styles.recordIdentity}><ProfilePhoto photo={user?.picture} name={user?.name} size={48} style={styles.recordAvatar} /><View style={styles.recordCopy}><Text style={[styles.recordName, isDark && darkStyles.text]}>{user?.name || 'Player'}</Text><Text style={[styles.recordMeta, isDark && darkStyles.mutedText]}>Performance rating · {performanceRating ?? 'Unrated'}</Text></View></View>
             <View style={styles.recordStats}><View style={styles.recordStat}><Text style={[styles.recordValue, isDark && darkStyles.text]}>{wins}–{losses}</Text><Text style={[styles.recordLabel, isDark && darkStyles.mutedText]}>RECORD</Text></View><View style={styles.recordStat}><Text style={[styles.recordValue, isDark && darkStyles.text]}>{winRate}%</Text><Text style={[styles.recordLabel, isDark && darkStyles.mutedText]}>WIN RATE</Text></View><View style={styles.recordStat}><Text style={[styles.recordValue, isDark && darkStyles.text]}>{matches.length}</Text><Text style={[styles.recordLabel, isDark && darkStyles.mutedText]}>MATCHES</Text></View></View>
           </View>
           <Text style={[styles.recordNote, isDark && darkStyles.mutedText]}>Public rankings are hidden until the app has a real ranking calculation. No sample players or fabricated standings are shown.</Text>
@@ -361,10 +426,42 @@ function Leaderboard({ visible, onClose, user, matches, performanceRating }) {
   );
 }
 
+function SuggestedPlayerCard({ player, onFollow, onPress, busy, wide }) {
+  const { isDark } = useTheme();
+  const requested = player.followRequestPending;
+  return (
+    <Pressable onPress={onPress} style={({ pressed }) => [styles.suggestedPlayerCard, wide && styles.suggestedPlayerCardWide, isDark && darkStyles.card, pressed && { opacity: 0.9 }]}>
+      {player.mutuals > 0 && <Text style={[styles.suggestedPlayerMutuals, isDark && darkStyles.mutedText]}>{player.mutuals} mutuals</Text>}
+      <View style={styles.suggestedPlayerTop}>
+        <ProfilePhoto photo={player.avatar} name={player.name} size={58} />
+      </View>
+      <Text numberOfLines={1} style={[styles.suggestedPlayerFollowers, isDark && darkStyles.mutedText]}>
+        <Text style={[styles.suggestedPlayerFollowersStrong, isDark && darkStyles.text]}>{player.followers}</Text> followers · <Text style={[styles.suggestedPlayerFollowersStrong, isDark && darkStyles.text]}>{player.following}</Text> following
+      </Text>
+      <Text numberOfLines={1} style={[styles.suggestedPlayerName, isDark && darkStyles.text]}>{player.name}</Text>
+      <Text numberOfLines={1} style={[styles.suggestedPlayerReason, isDark && darkStyles.mutedText]}>{player.reason}</Text>
+      <Text numberOfLines={1} style={[styles.suggestedPlayerMeta, isDark && darkStyles.mutedText]}>
+        {[player.area, player.rating ? `${player.rating.toFixed(1)} rating` : null].filter(Boolean).join(' · ') || 'Ready to connect'}
+      </Text>
+      <Pressable
+        accessibilityRole="button"
+        accessibilityLabel={requested ? `Follow request sent to ${player.name}` : `Follow ${player.name}`}
+        accessibilityState={{ disabled: requested || busy }}
+        disabled={requested || busy}
+        onPress={() => onFollow(player)}
+        style={({ pressed }) => [styles.suggestedFollowButton, requested && styles.suggestedFollowButtonPending, pressed && styles.pressed]}
+      >
+        {busy ? <ActivityIndicator size="small" color={C.ink} /> : <Icon name={requested ? 'checkmark' : 'person-add-outline'} size={16} color={requested ? C.teal : C.ink} />}
+        {!busy ? <Text style={[styles.suggestedFollowText, requested && styles.suggestedFollowTextPending]}>{requested ? 'Requested' : 'Follow'}</Text> : null}
+      </Pressable>
+    </Pressable>
+  );
+}
+
 export default function HomeScreen() {
   const navigation = useNavigation();
   const { user } = useAuth();
-  const { notifications: operationNotifications, unreadCount, readNotification, readAllNotifications } = useOperations();
+  const { notifications: operationNotifications, unreadCount, readNotification, readAllNotifications, removeNotification, clearNotifications, respondFollowRequest, reportRealtime } = useOperations();
   const { isDark, toggleColorMode } = useTheme();
   const { userLocation } = useUserLocation();
   const { width } = useWindowDimensions();
@@ -372,10 +469,19 @@ export default function HomeScreen() {
   const [notifications, setNotifications] = useState(false);
   const [leaderboard, setLeaderboard] = useState(false);
   const [locationOpen, setLocationOpen] = useState(false);
-  const [bookings, setBookings] = useState([]);
-  const [matches, setMatches] = useState([]);
-  const [venues, setVenues] = useState([]);
+  const dashboardCacheKey = homeDashboardCacheKey(user?.id || 'guest');
+  const activitiesCacheKey = playerActivitiesCacheKey(user?.id || 'guest');
+  const cachedDashboard = peekCachedData(dashboardCacheKey);
+  const [bookings, setBookings] = useState(() => cachedDashboard?.bookings || []);
+  const [matches, setMatches] = useState(() => cachedDashboard?.matches || []);
+  const [venues, setVenues] = useState(() => peekCachedData(HOME_VENUES_CACHE_KEY) || []);
+  const [publicActivities, setPublicActivities] = useState(() => peekCachedData(activitiesCacheKey) || []);
+  const [activitiesLoading, setActivitiesLoading] = useState(() => peekCachedData(activitiesCacheKey) === null);
+  const [suggestedPlayers, setSuggestedPlayers] = useState([]);
+  const [suggestionsLoading, setSuggestionsLoading] = useState(true);
+  const [followingPlayerId, setFollowingPlayerId] = useState(null);
   const [dashboardError, setDashboardError] = useState('');
+  const [dashboardRequest, setDashboardRequest] = useState(0);
   const [now, setNow] = useState(() => new Date());
   const [toast, setToast] = useState('');
   const [extendingBookingId, setExtendingBookingId] = useState(null);
@@ -392,27 +498,77 @@ export default function HomeScreen() {
     let active = true;
     setNow(new Date());
     setDashboardError('');
-    Promise.all([listMyBookings(), listMyMatches()])
-      .then(([bookingRows, matchRows]) => {
+    (async () => {
+      const cached = await readCachedData(dashboardCacheKey);
+      if (!active) return;
+      if (cached) {
+        setBookings(cached.bookings || []);
+        setMatches(cached.matches || []);
+      }
+      try {
+        const [bookingRows, matchRows] = await withTimeout(
+          Promise.all([listMyBookings(), listMyMatches({ limit: 50 })]),
+          20000,
+          'Dashboard data took too long to refresh.',
+        );
         if (!active) return;
         setBookings(bookingRows);
         setMatches(matchRows);
-      })
-      .catch((error) => {
+        writeCachedData(dashboardCacheKey, { bookings: bookingRows, matches: matchRows });
+      } catch (error) {
         if (!active) return;
-        setDashboardError(error.message || 'Dashboard data could not be loaded.');
-        setBookings([]);
-        setMatches([]);
-      });
+        setDashboardError(`${error.message || 'Dashboard data could not be loaded.'}${cached ? ' Showing your last saved activity.' : ''}`);
+      }
+    })();
     return () => { active = false; };
-  }, [user?.id]));
+  }, [dashboardCacheKey, dashboardRequest, user?.id]));
 
   useFocusEffect(useCallback(() => {
     let active = true;
-    listVenues()
-      .then((rows) => {
+    (async () => {
+      const cached = await readCachedData(activitiesCacheKey);
+      if (!active) return;
+      if (cached !== null) {
+        setPublicActivities(cached);
+        setActivitiesLoading(false);
+      }
+      try {
+        const rows = await withTimeout(
+          listDiscoverablePlayerActivities(),
+          12000,
+          'Public activities took too long to refresh.',
+        );
         if (!active) return;
-        setVenues(rows.map((venue) => {
+        setPublicActivities(rows);
+        setActivitiesLoading(false);
+        writeCachedData(activitiesCacheKey, rows);
+      } catch {
+        if (active) setActivitiesLoading(false);
+      }
+    })();
+    return () => { active = false; };
+  }, [activitiesCacheKey, dashboardRequest]));
+
+  useFocusEffect(useCallback(() => {
+    let active = true;
+    setSuggestionsLoading(true);
+    withTimeout(listPlayerSuggestions(tablet ? 8 : 6), 12000, 'Player suggestions took too long to refresh.')
+      .then((rows) => { if (active) setSuggestedPlayers(rows); })
+      .catch(() => { if (active) setSuggestedPlayers([]); })
+      .finally(() => { if (active) setSuggestionsLoading(false); });
+    return () => { active = false; };
+  }, [dashboardRequest, tablet, user?.id]));
+
+  useFocusEffect(useCallback(() => {
+    let active = true;
+    (async () => {
+      const cached = await readCachedData(HOME_VENUES_CACHE_KEY);
+      if (!active) return;
+      if (cached) setVenues(cached);
+      try {
+        const rows = await withTimeout(listVenues(), 12000, 'Venues took too long to refresh.');
+        if (!active) return;
+        const nextVenues = rows.map((venue) => {
           const activeCourts = venue.courts || [];
           const prices = activeCourts.map((court) => Number(court.hourly_price)).filter(Number.isFinite);
           const lowestPrice = prices.length ? Math.min(...prices) : null;
@@ -428,11 +584,37 @@ export default function HomeScreen() {
             indoor: venue.venue_type,
             amenities: venue.amenities || [],
           };
-        }));
-      })
-      .catch(() => { if (active) setVenues([]); });
+        });
+        setVenues(nextVenues);
+        writeCachedData(HOME_VENUES_CACHE_KEY, nextVenues);
+      } catch {
+        // Keep the last successful venue list visible.
+      }
+    })();
     return () => { active = false; };
   }, []));
+
+  useEffect(() => {
+    const client = requireSupabase();
+    let refreshTimer = null;
+    const refresh = () => {
+      clearTimeout(refreshTimer);
+      refreshTimer = setTimeout(() => setDashboardRequest((value) => value + 1), 180);
+    };
+    const channel = client.channel(`home-activity-${user.id}`)
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'bookings', filter: `user_id=eq.${user.id}` }, refresh)
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'matches' }, refresh)
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'open_play_sessions' }, refresh)
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'open_play_players' }, refresh)
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'competitions' }, refresh)
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'venue_programs' }, refresh)
+      .subscribe((status) => reportRealtime(`home-activity-${user.id}`, status));
+    return () => {
+      clearTimeout(refreshTimer);
+      client.removeChannel(channel);
+      reportRealtime(`home-activity-${user.id}`, 'REMOVE');
+    };
+  }, [reportRealtime, user.id]);
 
   const showToast = (message) => {
     setToast(message);
@@ -474,10 +656,35 @@ export default function HomeScreen() {
       ],
     );
   };
+  const requestSuggestedFollow = async (player) => {
+    if (!player?.id || followingPlayerId) return;
+    setFollowingPlayerId(player.id);
+    try {
+      await followPlayer(player.id);
+      setSuggestedPlayers((current) => current.map((item) => item.id === player.id ? { ...item, followRequestPending: true } : item));
+      showToast(`Follow request sent to ${player.name}.`);
+    } catch (error) {
+      Alert.alert('Follow request not sent', error.message || 'Please try again.');
+    } finally {
+      setFollowingPlayerId(null);
+    }
+  };
   const nearbyCourts = useMemo(() => venues.map((court) => {
     const distanceKm = distanceInKm(userLocation, court);
-    return { ...court, distanceKm, distance: formatDistance(distanceKm).toUpperCase() };
-  }).sort((a, b) => a.distanceKm - b.distanceKm), [userLocation, venues]);
+    return {
+      ...court,
+      distanceKm,
+      distance: formatDistance(distanceKm).toUpperCase(),
+    };
+  }).sort((a, b) => (a.distanceKm ?? Number.MAX_VALUE) - (b.distanceKm ?? Number.MAX_VALUE)), [userLocation, venues]);
+  const nearbyPreview = nearbyCourts.slice(0, tablet ? 6 : 3);
+  const activityPreview = useMemo(() => [...publicActivities]
+    .sort((a, b) => {
+      const distanceA = distanceInKm(userLocation, a.venue) ?? Number.MAX_VALUE;
+      const distanceB = distanceInKm(userLocation, b.venue) ?? Number.MAX_VALUE;
+      return distanceA - distanceB || new Date(a.startsAt) - new Date(b.startsAt);
+    })
+    .slice(0, tablet ? 6 : 4), [publicActivities, tablet, userLocation]);
   const upcomingBooking = useMemo(() => bookings
     .filter((booking) => ['pending', 'confirmed'].includes(booking.status) && new Date(booking.ends_at) > now)
     .sort((a, b) => new Date(a.starts_at) - new Date(b.starts_at))[0] || null, [bookings, now]);
@@ -500,13 +707,71 @@ export default function HomeScreen() {
     </View>
   );
 
-  const weekly = <View style={styles.section}><SectionTitle eyebrow={weekLabel(now)} title="This week" /><WeekCard matches={weeklyMatches} rating={performanceRating} /></View>;
-  const competitive = <View style={styles.section}><SectionTitle eyebrow="YOUR COMPETITIVE GAME" title="Compete" /><CompetitiveHubCard rating={performanceRating} matches={matches} onOpen={() => navigation.navigate('Pickleball', { openTab: 'Ratings', ownerTab: 'Home' })} onFindPlay={() => navigation.navigate('Pickleball', { openTab: 'Find play', ownerTab: 'Home' })} /></View>;
+  const openActivity = (activity) => {
+    if (activity.type === 'open_play') {
+      navigation.navigate('OpenPlayActivity', { token: Date.now(), sessionId: activity.sourceId, direct: true, returnTo: 'Home' });
+      return;
+    }
+    navigation.navigate('ActivityDetails', { activity, returnTo: 'Home' });
+  };
+  const discovery = (
+    <View style={styles.section}>
+      <SectionTitle
+        eyebrow="PUBLIC ACTIVITIES"
+        title="Happening near you"
+        right={<Pressable accessibilityRole="button" accessibilityLabel="See all public activities" onPress={() => navigation.navigate('Activities')} style={styles.openPlayMore}><Text style={styles.openPlayMoreText}>More</Text><Icon name="arrow-forward" size={14} color={C.ink} /></Pressable>}
+      />
+      {activitiesLoading && !activityPreview.length
+        ? <View style={[styles.openPlayLoadingCard, isDark && darkStyles.card]}><ActivityIndicator color={C.teal} /><Text style={[styles.openPlayLoadingText, isDark && darkStyles.mutedText]}>Finding activities near you…</Text></View>
+        : activityPreview.length
+          ? <ScrollView horizontal={activityPreview.length > 1} showsHorizontalScrollIndicator={false} contentContainerStyle={[styles.openPlayScroll, activityPreview.length === 1 && styles.openPlayScrollSingle]}>
+              {activityPreview.map((activity) => <PublicActivityCard key={activity.id} activity={activity} userLocation={userLocation} wide={tablet} single={activityPreview.length === 1} onPress={() => openActivity(activity)} />)}
+            </ScrollView>
+          : <View style={[styles.emptyDataCard, isDark && darkStyles.card]}><Icon name="compass-outline" size={25} color={C.teal} /><Text style={[styles.emptyDataTitle, isDark && darkStyles.text]}>No public activities yet</Text><Text style={[styles.emptyDataText, isDark && darkStyles.mutedText]}>Public open play, competitions, clinics, coaching, and camps will appear here.</Text></View>}
+    </View>
+  );
+  const peopleYouMayKnow = (
+    <View style={styles.section}>
+      <SectionTitle eyebrow="FIND YOUR PEOPLE" title="People you may know" />
+      {suggestionsLoading ? (
+        <View style={[styles.suggestionsLoadingCard, isDark && darkStyles.card]}><ActivityIndicator color={C.teal} /><Text style={[styles.openPlayLoadingText, isDark && darkStyles.mutedText]}>Finding players for you…</Text></View>
+      ) : suggestedPlayers.length ? (
+        <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.suggestionsScroll}>
+          {suggestedPlayers.map((player) => <SuggestedPlayerCard key={player.id} player={player} wide={tablet} busy={followingPlayerId === player.id} onFollow={requestSuggestedFollow} onPress={() => navigation.navigate('PublicProfile', { player })} />)}
+        </ScrollView>
+      ) : (
+        <View style={[styles.emptyDataCard, isDark && darkStyles.card]}><Icon name="people-outline" size={25} color={C.teal} /><Text style={[styles.emptyDataTitle, isDark && darkStyles.text]}>You’re all caught up</Text><Text style={[styles.emptyDataText, isDark && darkStyles.mutedText]}>New player suggestions will appear here as the Peakle community grows.</Text></View>
+      )}
+    </View>
+  );
+
+  const weekWins = weeklyMatches.filter((match) => match.result === 'W').length;
+  const weekLosses = weeklyMatches.filter((match) => match.result === 'L').length;
+  const gameOverview = (
+    <View style={styles.section}>
+      <SectionTitle eyebrow="PROGRESS & EVENTS" title="Your game" right={<Pressable accessibilityRole="button" accessibilityLabel="Open ratings and insights" onPress={() => navigation.navigate('Pickleball', { openTab: 'Ratings', ownerTab: 'Home' })} style={[styles.moreButton, isDark && darkStyles.card]}><Icon name="arrow-forward" size={18} /></Pressable>} />
+      <View style={styles.gameOverviewGrid}>
+        <Pressable accessibilityRole="button" accessibilityLabel="View this week's matches" onPress={() => navigation.navigate('Profile', { openTab: 'Matches', openTabToken: Date.now() })} style={({ pressed }) => [styles.gameOverviewCard, isDark && darkStyles.card, pressed && styles.pressed]}>
+          <View style={[styles.gameOverviewIcon, isDark && darkStyles.subtle]}><Icon name="pulse-outline" size={20} color={C.teal} /></View>
+          <Text style={[styles.gameOverviewEyebrow, isDark && darkStyles.mutedText]}>{weekLabel(now)}</Text>
+          <Text style={[styles.gameOverviewTitle, isDark && darkStyles.text]}>{weeklyMatches.length ? `${weekWins}–${weekLosses}` : 'No matches'}</Text>
+          <Text style={[styles.gameOverviewMeta, isDark && darkStyles.mutedText]}>{performanceRating ? `${performanceRating} rating` : 'Record a match to start'}</Text>
+        </Pressable>
+        <Pressable accessibilityRole="button" accessibilityLabel="Explore competitions and programs" onPress={() => navigation.navigate('Pickleball', { openTab: 'Compete', ownerTab: 'Home' })} style={({ pressed }) => [styles.gameOverviewCard, styles.gameOverviewCardAccent, pressed && styles.pressed]}>
+          <View style={styles.gameOverviewIconAccent}><Icon name="trophy-outline" size={20} color={C.ink} /></View>
+          <Text style={styles.gameOverviewEyebrowAccent}>COMPETE & LEARN</Text>
+          <Text style={styles.gameOverviewTitleAccent}>Events</Text>
+          <Text style={styles.gameOverviewMetaAccent}>Competitions, clinics and programs</Text>
+        </Pressable>
+      </View>
+    </View>
+  );
+  const shortLocation = userLocation.label.split('·')[0].trim();
   const nearby = (
     <View style={styles.section}>
-      <SectionTitle eyebrow={`AROUND ${userLocation.label.toUpperCase()}`} title="Nearby courts" right={<Pressable accessibilityLabel="Change search location" onPress={() => setLocationOpen(true)} style={styles.seeAll}><Icon name="location-outline" size={15} color={C.teal} /><Text numberOfLines={1} style={styles.seeAllText}>{userLocation.label}</Text><Icon name="chevron-down" size={14} color={C.teal} /></Pressable>} />
-      {nearbyCourts.length ? <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.courtScroll}>
-        {nearbyCourts.map((court) => <CourtCard key={court.id} court={court} wide={tablet} onPress={() => navigation.navigate('Book', { courtId: court.id, from: 'Home' })} />)}
+      <SectionTitle eyebrow="COURT LOCATIONS" title="Nearby courts" right={<View style={styles.nearbyHeaderActions}>{nearbyCourts.length > nearbyPreview.length && <Pressable accessibilityLabel="See all nearby courts" onPress={() => navigation.navigate('Book')} style={styles.nearbySeeAll}><Text style={styles.nearbySeeAllText}>See all</Text></Pressable>}<Pressable accessibilityLabel="Change search location" onPress={() => setLocationOpen(true)} style={[styles.seeAll, isDark && darkStyles.locationPill]}><Icon name="location-outline" size={13} color={isDark ? '#D5DFDB' : C.teal} /><Text numberOfLines={1} style={[styles.seeAllText, isDark && darkStyles.locationPillText]}>{shortLocation}</Text><Icon name="chevron-down" size={12} color={isDark ? '#D5DFDB' : C.teal} /></Pressable></View>} />
+      {nearbyCourts.length ? <ScrollView horizontal={nearbyPreview.length > 1} showsHorizontalScrollIndicator={false} contentContainerStyle={[styles.courtScroll, nearbyPreview.length === 1 && styles.courtScrollSingle]}>
+        {nearbyPreview.map((court) => <CourtCard key={court.id} court={court} wide={tablet} single={nearbyPreview.length === 1} onPress={() => navigation.navigate('Book', { courtId: court.id, from: 'Home' })} />)}
       </ScrollView> : <View style={[styles.emptyDataCard, isDark && darkStyles.card]}><Icon name="location-outline" size={25} color={C.teal} /><Text style={[styles.emptyDataTitle, isDark && darkStyles.text]}>No bookable courts yet</Text><Text style={[styles.emptyDataText, isDark && darkStyles.mutedText]}>Active venues will appear here when they are added.</Text></View>}
     </View>
   );
@@ -527,9 +792,9 @@ export default function HomeScreen() {
           </View>
         </View>
         <KitchenLine style={styles.headerLine} />
-        {tablet ? <View style={styles.tabletGrid}><View style={styles.primaryColumn}>{schedule}{competitive}{nearby}</View><View style={styles.secondaryColumn}>{weekly}{feed}</View></View> : <>{schedule}{competitive}{weekly}{nearby}{feed}</>}
+        {tablet ? <View style={styles.tabletGrid}><View style={styles.primaryColumn}>{schedule}{discovery}{peopleYouMayKnow}{nearby}</View><View style={styles.secondaryColumn}>{gameOverview}{feed}</View></View> : <>{schedule}{discovery}{peopleYouMayKnow}{gameOverview}{nearby}{feed}</>}
       </ScrollView>
-      <NotificationSheet visible={notifications} onClose={() => setNotifications(false)} items={notices} unreadCount={unreadCount} onRead={(id) => readNotification(id).catch((error) => Alert.alert('Notifications', error.message || 'This notification could not be marked as read.'))} onReadAll={() => readAllNotifications().catch((error) => Alert.alert('Notifications', error.message || 'Notifications could not be marked as read.'))} />
+      <NotificationSheet visible={notifications} onClose={() => setNotifications(false)} items={notices} unreadCount={unreadCount} onRead={(id) => readNotification(id).catch((error) => Alert.alert('Notifications', error.message || 'This notification could not be marked as read.'))} onReadAll={() => readAllNotifications().catch((error) => Alert.alert('Notifications', error.message || 'Notifications could not be marked as read.'))} onDelete={removeNotification} onClearRead={clearNotifications} onFollowResponse={(item, accept) => respondFollowRequest(item.data?.requesterId, accept, item.id)} onOpen={(item) => { if (!item.read_at) readNotification(item.id).catch(() => {}); setNotifications(false); if (item.data?.conversationId) navigation.navigate('DirectChat', { conversationId: item.data.conversationId, player: item.data?.playerId ? { id: item.data.playerId } : undefined, ownerTab: 'Team' }); else if (item.data?.sessionId) navigation.navigate('OpenPlayActivity', { token: Date.now(), sessionId: item.data.sessionId, direct: true, returnTo: 'Home' }); }} />
       <Leaderboard visible={leaderboard} onClose={() => setLeaderboard(false)} user={user} matches={matches} performanceRating={performanceRating} />
       <LocationPicker visible={locationOpen} onClose={() => setLocationOpen(false)} />
       {!!toast && <Animated.View style={[styles.toast, { opacity: toastAnim, transform: [{ translateY: toastAnim.interpolate({ inputRange: [0, 1], outputRange: [18, 0] }) }] }]}><Text style={styles.toastText}>{toast}</Text></Animated.View>}
@@ -538,13 +803,38 @@ export default function HomeScreen() {
 }
 
 const shadow = Platform.select({ ios: { shadowColor: C.ink, shadowOpacity: 0.08, shadowRadius: 12, shadowOffset: { width: 0, height: 4 } }, android: { elevation: 3 } });
-const styles = StyleSheet.create({
+const styles = createMobileStyleSheet({
   safe: { flex: 1, backgroundColor: C.paper },
   scroll: { flex: 1 }, content: { paddingHorizontal: 20, paddingTop: 22, paddingBottom: 126 }, contentTablet: { paddingHorizontal: 34, maxWidth: 1200, width: '100%', alignSelf: 'center' },
   header: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }, greeting: { flex: 1, minWidth: 0, paddingRight: 10 }, eyebrow: { color: C.ink40, fontSize: 10, lineHeight: 15, fontWeight: '700', letterSpacing: 1.05 }, eyebrowLight: { color: 'rgba(243,245,239,0.52)' },
   h1: { color: C.ink, fontSize: 29, lineHeight: 37, fontWeight: '700', letterSpacing: -0.8 }, greetingName: { color: C.teal }, h2: { color: C.ink, fontSize: 23, lineHeight: 29, fontWeight: '700', letterSpacing: -0.5 },
   headerActions: { height: 48, padding: 4, flexDirection: 'row', alignItems: 'center', flexShrink: 0, borderWidth: 1, borderColor: C.line, borderRadius: 18, backgroundColor: C.surface, ...shadow }, headerAction: { width: 38, height: 38, borderRadius: 13, alignItems: 'center', justifyContent: 'center' }, headerActionActive: { backgroundColor: C.optic }, headerActionActiveDark: { backgroundColor: C.optic }, headerActionDivider: { width: 1, height: 21, backgroundColor: C.line }, unreadDot: { position: 'absolute', top: 6, right: 6, width: 8, height: 8, borderRadius: 4, borderWidth: 2, borderColor: C.surface, backgroundColor: C.brick },
   kitchen: { height: 7, marginVertical: 18 }, solid: { height: 2, backgroundColor: C.ink }, dashed: { marginTop: 4, borderTopWidth: 1, borderStyle: 'dashed', borderColor: C.ink40 }, headerLine: { marginTop: 22, marginBottom: 27 },
+  openPlayMore: { minHeight: 40, paddingHorizontal: 12, flexDirection: 'row', alignItems: 'center', gap: 6, borderRadius: 13, backgroundColor: C.optic }, openPlayMoreText: { color: C.ink, fontSize: 9, fontWeight: '900' },
+  openPlayScroll: { paddingRight: 20, gap: 12 }, openPlayScrollSingle: { width: '100%', paddingRight: 0 },
+  homeOpenPlayCard: { width: 252, minHeight: 166, padding: 13, borderWidth: 1, borderColor: C.line, borderRadius: 20, borderBottomLeftRadius: 9, borderBottomRightRadius: 9, backgroundColor: C.surface, ...shadow }, homeOpenPlayCardWide: { width: 280 }, homeOpenPlayCardSingle: { width: '100%', flex: 1, minWidth: '100%' },
+  homeOpenPlayTop: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }, homeOpenPlayVerified: { minHeight: 25, paddingHorizontal: 8, flexDirection: 'row', alignItems: 'center', gap: 4, borderRadius: 13, backgroundColor: '#E5F0ED' }, homeOpenPlayVerifiedText: { color: C.teal, fontSize: 6, fontWeight: '900', letterSpacing: .45 }, homeOpenPlayFee: { color: C.ink, fontSize: 11, fontWeight: '900' },
+  homeOpenPlayName: { marginTop: 10, color: C.ink, fontSize: 15, lineHeight: 19, fontWeight: '900' }, homeOpenPlayVenue: { marginTop: 3, color: C.teal, fontSize: 8, fontWeight: '800' }, homeOpenPlayMeta: { marginTop: 9, flexDirection: 'row', alignItems: 'center', gap: 6 }, homeOpenPlayMetaText: { flex: 1, color: C.ink70, fontSize: 8 },
+  homeOpenPlayFoot: { marginTop: 9, paddingTop: 9, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', borderTopWidth: 1, borderColor: C.line }, homeOpenPlayDistance: { color: C.ink40, fontSize: 8, fontWeight: '800' }, homeOpenPlaySpots: { minHeight: 23, paddingHorizontal: 8, justifyContent: 'center', borderRadius: 12, backgroundColor: C.optic }, homeOpenPlaySpotsText: { color: C.ink, fontSize: 6, fontWeight: '900' }, homeOpenPlayWaitlist: { backgroundColor: '#F7EAE6' }, homeOpenPlayWaitlistText: { color: C.brick },
+  openPlayLoadingCard: { minHeight: 150, alignItems: 'center', justifyContent: 'center', borderWidth: 1, borderColor: C.line, borderRadius: 24, backgroundColor: C.surface }, openPlayLoadingText: { marginTop: 9, color: C.ink40, fontSize: 9, fontWeight: '800' },
+  suggestionsLoadingCard: { minHeight: 196, alignItems: 'center', justifyContent: 'center', borderWidth: 1, borderColor: C.line, borderRadius: 24, backgroundColor: C.surface },
+  suggestionsScroll: { paddingRight: 20, gap: 12 },
+  suggestedPlayerCard: { width: 190, minHeight: 225, padding: 15, borderWidth: 1, borderColor: C.line, borderRadius: 22, borderBottomLeftRadius: 9, borderBottomRightRadius: 9, backgroundColor: C.surface, ...shadow },
+  suggestedPlayerCardWide: { width: 210 },
+  suggestedPlayerTop: { alignItems: 'center' },
+  suggestedPlayerMutuals: { textAlign: 'center', marginBottom: 10, color: C.ink40, fontSize: 9, fontWeight: '800' },
+  suggestedPlayerFollowers: { textAlign: 'center', marginTop: 10, color: C.ink40, fontSize: 9, fontWeight: '700' },
+  suggestedPlayerFollowersStrong: { color: C.ink, fontWeight: '900' },
+  suggestedPlayerName: { textAlign: 'center', marginTop: 6, color: C.ink, fontSize: 15, lineHeight: 20, fontWeight: '900' },
+  suggestedPlayerReason: { textAlign: 'center', marginTop: 2, color: C.teal, fontSize: 9, lineHeight: 13, fontWeight: '800' },
+  suggestedPlayerMeta: { textAlign: 'center', minHeight: 16, marginTop: 5, color: C.ink40, fontSize: 8, lineHeight: 12 },
+  suggestedFollowButton: { minHeight: 42, marginTop: 'auto', paddingHorizontal: 12, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6, borderRadius: 13, backgroundColor: C.optic },
+  suggestedFollowButtonPending: { borderWidth: 1, borderColor: C.line, backgroundColor: C.paper },
+  suggestedFollowText: { color: C.ink, fontSize: 10, fontWeight: '900' },
+  suggestedFollowTextPending: { color: C.teal },
+  gameOverviewGrid: { flexDirection: 'row', gap: 10 }, gameOverviewCard: { flex: 1, minWidth: 0, minHeight: 138, padding: 14, borderWidth: 1, borderColor: C.line, borderRadius: 20, borderBottomLeftRadius: 9, borderBottomRightRadius: 9, backgroundColor: C.surface, ...shadow }, gameOverviewCardAccent: { borderColor: C.optic, backgroundColor: C.optic },
+  gameOverviewIcon: { width: 38, height: 38, marginBottom: 13, alignItems: 'center', justifyContent: 'center', borderRadius: 12, backgroundColor: '#E5F0ED' }, gameOverviewIconAccent: { width: 38, height: 38, marginBottom: 13, alignItems: 'center', justifyContent: 'center', borderRadius: 12, backgroundColor: 'rgba(255,255,255,.5)' },
+  gameOverviewEyebrow: { color: C.ink40, fontSize: 6, fontWeight: '900', letterSpacing: .55 }, gameOverviewEyebrowAccent: { color: C.ink70, fontSize: 6, fontWeight: '900', letterSpacing: .55 }, gameOverviewTitle: { marginTop: 3, color: C.ink, fontSize: 17, fontWeight: '900' }, gameOverviewTitleAccent: { marginTop: 3, color: C.ink, fontSize: 17, fontWeight: '900' }, gameOverviewMeta: { marginTop: 3, color: C.ink40, fontSize: 8, lineHeight: 11 }, gameOverviewMetaAccent: { marginTop: 3, color: C.ink70, fontSize: 8, lineHeight: 11 },
   tabletGrid: { flexDirection: 'row', gap: 30 }, primaryColumn: { flex: 1.55, minWidth: 0 }, secondaryColumn: { flex: 1, minWidth: 310 }, section: { marginBottom: 34 }, sectionTitle: { minHeight: 48, marginBottom: 13, flexDirection: 'row', alignItems: 'flex-end', justifyContent: 'space-between' }, sectionTitleMain: { flex: 1, minWidth: 0, paddingRight: 10 },
   competitiveCard: { overflow: 'hidden', padding: 18, borderRadius: 24, borderBottomLeftRadius: 10, borderBottomRightRadius: 10, backgroundColor: C.ink, ...shadow }, competitiveGlow: { position: 'absolute', width: 190, height: 190, right: -95, top: -105, borderRadius: 95, backgroundColor: 'rgba(214,233,74,.12)' }, competitiveHead: { flexDirection: 'row', alignItems: 'center', gap: 10 }, competitiveIcon: { width: 43, height: 43, alignItems: 'center', justifyContent: 'center', borderRadius: 14, backgroundColor: C.optic }, competitiveBallImage: { width: 27, height: 27 }, competitiveHeadCopy: { flex: 1, minWidth: 0 }, competitiveEyebrow: { color: 'rgba(243,245,239,.5)', fontSize: 7, fontWeight: '900', letterSpacing: .85 }, competitiveTitle: { marginTop: 3, color: C.paper, fontSize: 21, fontWeight: '900', letterSpacing: -.45 }, competitiveLive: { paddingHorizontal: 7, minHeight: 24, flexDirection: 'row', alignItems: 'center', gap: 4, borderRadius: 8, backgroundColor: 'rgba(255,255,255,.08)' }, competitiveLiveDot: { width: 6, height: 6, borderRadius: 3, backgroundColor: C.optic }, competitiveLiveText: { color: C.paper, fontSize: 6, fontWeight: '900', letterSpacing: .45 }, competitiveBody: { maxWidth: 390, marginTop: 14, color: 'rgba(243,245,239,.68)', fontSize: 11, lineHeight: 17 }, competitiveMetrics: { minHeight: 70, marginTop: 16, paddingHorizontal: 9, flexDirection: 'row', alignItems: 'center', borderTopWidth: 1, borderBottomWidth: 1, borderColor: 'rgba(243,245,239,.12)' }, competitiveMetric: { flex: 1, alignItems: 'center' }, competitiveMetricValue: { color: C.paper, fontSize: 20, fontWeight: '900', fontVariant: ['tabular-nums'] }, competitiveMetricLabel: { marginTop: 3, color: 'rgba(243,245,239,.42)', fontSize: 6, fontWeight: '900', letterSpacing: .65 }, competitiveMetricDivider: { width: 1, height: 31, backgroundColor: 'rgba(243,245,239,.12)' }, competitiveActions: { marginTop: 15, flexDirection: 'row', gap: 8 }, competitivePrimary: { minHeight: 45, flex: 1.15, paddingHorizontal: 13, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', borderRadius: 13, backgroundColor: C.optic }, competitivePrimaryText: { color: C.ink, fontSize: 10, fontWeight: '900' }, competitiveSecondary: { minHeight: 45, flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6, borderWidth: 1, borderColor: 'rgba(243,245,239,.2)', borderRadius: 13 }, competitiveSecondaryText: { color: C.paper, fontSize: 10, fontWeight: '900' },
   todayChip: { flexDirection: 'row', alignItems: 'center', gap: 6, borderWidth: 1, borderColor: C.line, backgroundColor: C.surface, borderRadius: 8, paddingHorizontal: 9, paddingVertical: 6 }, liveDot: { width: 7, height: 7, borderRadius: 4, backgroundColor: C.optic }, todayText: { color: C.ink, fontSize: 9, fontWeight: '800', letterSpacing: 0.8 },
@@ -553,8 +843,23 @@ const styles = StyleSheet.create({
   nextBody: { padding: 20 }, nextTitle: { marginTop: 5, marginBottom: 13, color: C.paper, fontSize: 23, lineHeight: 29, fontWeight: '700', letterSpacing: -0.5 }, metaRow: { flexDirection: 'row', alignItems: 'center', gap: 7, marginBottom: 5 }, metaText: { color: 'rgba(243,245,239,0.7)', fontSize: 12 }, nextDivider: { marginTop: 14, marginBottom: 14 }, opponentRow: { flexDirection: 'row', alignItems: 'center' }, avatarRow: { flexDirection: 'row' }, avatar: { width: 34, height: 34, borderRadius: 17, borderWidth: 2, borderColor: C.paper, alignItems: 'center', justifyContent: 'center' }, avatarOffset: { marginLeft: -9 }, avatarText: { color: '#fff', fontSize: 9, fontWeight: '800' }, vs: { marginHorizontal: 8, color: 'rgba(243,245,239,0.4)', fontSize: 9, fontWeight: '800' }, opponentName: { flex: 1, marginLeft: 9 }, tinyLight: { color: 'rgba(243,245,239,0.43)', fontSize: 8, fontWeight: '700', letterSpacing: 0.8 }, opponentText: { color: C.paper, fontSize: 12, fontWeight: '700' }, countdown: { alignItems: 'flex-end', marginLeft: 8 }, countdownText: { color: C.optic, fontSize: 16, lineHeight: 21, fontWeight: '800', fontVariant: ['tabular-nums'] },
   timeWarning: { marginTop: 15, paddingTop: 13, flexDirection: 'row', alignItems: 'center', gap: 9, borderTopWidth: 1, borderColor: 'rgba(243,245,239,.13)' }, timeWarningCopy: { flex: 1 }, timeWarningTitle: { color: C.optic, fontSize: 10, fontWeight: '900' }, timeWarningText: { marginTop: 2, color: 'rgba(243,245,239,.66)', fontSize: 9, lineHeight: 13 }, extendButton: { minHeight: 46, marginTop: 12, paddingHorizontal: 14, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 7, borderRadius: 13, backgroundColor: C.optic }, extendButtonDisabled: { opacity: .58 }, extendButtonText: { color: C.ink, fontSize: 10, fontWeight: '900' },
   actions: { minHeight: 96, marginTop: 12, padding: 6, flexDirection: 'row', alignItems: 'center', borderWidth: 1, borderColor: C.line, borderRadius: 22, backgroundColor: C.surface, ...shadow }, actionButton: { flex: 1, minWidth: 0, minHeight: 82, paddingHorizontal: 4, paddingVertical: 8, borderRadius: 16, alignItems: 'center', justifyContent: 'center' }, actionIcon: { width: 38, height: 38, marginBottom: 7, borderRadius: 13, alignItems: 'center', justifyContent: 'center' }, actionDivider: { width: 1, height: 54, backgroundColor: C.line }, actionCopy: { width: '100%', alignItems: 'center' }, actionOverline: { width: '100%', color: C.ink40, textAlign: 'center', fontSize: 6, fontWeight: '900', letterSpacing: 0.55 }, actionLabel: { width: '100%', marginTop: 2, color: C.ink, textAlign: 'center', fontSize: 10.5, lineHeight: 15, fontWeight: '800' }, pressed: { opacity: 0.78, transform: [{ scale: 0.985 }] },
-  weekFormContainer: { flexDirection: 'row', gap: 5 }, weekFormChip: { width: 25, height: 25, borderRadius: 13, backgroundColor: '#E5F0ED', alignItems: 'center', justifyContent: 'center' }, weekFormChipLoss: { backgroundColor: '#F7EAE6' }, weekFormText: { color: C.teal, fontSize: 10, fontWeight: '800' }, weekFormTextLoss: { color: C.brick }, statCard: { padding: 19, borderWidth: 1, borderColor: C.line, borderRadius: 24, borderBottomLeftRadius: 10, borderBottomRightRadius: 10, backgroundColor: C.surface, ...shadow }, statFormHeader: { marginBottom: 15, paddingBottom: 12, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', borderBottomWidth: 1, borderColor: C.line }, statTop: { flexDirection: 'row', alignItems: 'center', gap: 15 }, rateRing: { width: 92, height: 92, borderRadius: 46, borderWidth: 9, borderColor: C.teal, borderRightColor: C.line, alignItems: 'center', justifyContent: 'center', transform: [{ rotate: '-18deg' }] }, rateRingInner: { alignItems: 'center', transform: [{ rotate: '18deg' }] }, rateNumber: { color: C.ink, fontSize: 27, lineHeight: 29, fontWeight: '800', fontVariant: ['tabular-nums'] }, ratePercent: { fontSize: 12 }, ringLabel: { color: C.ink40, fontSize: 7, fontWeight: '800', letterSpacing: 0.7 }, rateLead: { color: C.ink, fontSize: 17, fontWeight: '700' }, rateBody: { color: C.ink70, fontSize: 13 }, rateUp: { marginTop: 4, color: C.teal, fontSize: 10, fontWeight: '600' }, statDivider: { marginVertical: 18 }, ratingRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }, ratingInline: { flexDirection: 'row', alignItems: 'baseline', gap: 10 }, ratingNumber: { color: C.ink, fontSize: 34, lineHeight: 38, fontWeight: '800', fontVariant: ['tabular-nums'] }, trendChip: { paddingHorizontal: 8, paddingVertical: 5, borderRadius: 7, overflow: 'hidden', backgroundColor: '#E5F0ED', color: C.teal, fontSize: 10, fontWeight: '800' }, track: { height: 5, marginTop: 10, borderRadius: 3, overflow: 'hidden', backgroundColor: C.line }, trackFill: { width: '72%', height: '100%', backgroundColor: C.teal }, trackLabels: { marginTop: 5, flexDirection: 'row', justifyContent: 'space-between' }, trackLabel: { color: C.ink40, fontSize: 9 },
-  seeAll: { maxWidth: '48%', flexDirection: 'row', alignItems: 'center', gap: 3, paddingVertical: 7, flexShrink: 1 }, seeAllText: { flexShrink: 1, color: C.teal, fontSize: 10, fontWeight: '800' }, courtScroll: { paddingRight: 20, gap: 12 }, courtCard: { width: 280, borderWidth: 1, borderColor: C.line, borderRadius: 24, borderBottomLeftRadius: 10, borderBottomRightRadius: 10, overflow: 'hidden', backgroundColor: C.surface, ...shadow }, courtCardWide: { width: 290 }, courtGraphicCompact: { height: 125 }, courtBoundsCompact: { top: 11, bottom: -40 }, distance: { position: 'absolute', top: 10, right: 10, paddingHorizontal: 7, paddingVertical: 4, borderRadius: 6, backgroundColor: 'rgba(14,35,33,0.82)' }, distanceText: { color: '#fff', fontSize: 8, fontWeight: '800', letterSpacing: 0.8 }, courtInfo: { flexDirection: 'row', gap: 8, paddingHorizontal: 13, paddingTop: 12, paddingBottom: 8 }, courtInfoMain: { flex: 1 }, courtName: { color: C.ink, fontSize: 15, lineHeight: 20, fontWeight: '700' }, locationRow: { flexDirection: 'row', alignItems: 'center', marginTop: 2 }, courtLocation: { color: C.ink40, fontSize: 10 }, price: { color: C.teal, fontSize: 14, fontWeight: '800' }, perHour: { color: C.ink40, fontSize: 9, fontWeight: '400' }, chips: { flexDirection: 'row', gap: 5, paddingHorizontal: 13, paddingBottom: 13 }, chip: { paddingHorizontal: 7, paddingVertical: 4, borderRadius: 6, overflow: 'hidden', backgroundColor: C.paper, color: C.ink70, fontSize: 8, fontWeight: '800' }, ratingChip: { color: C.teal },
+  weekFormContainer: { flexDirection: 'row', gap: 5 }, weekFormChip: { width: 25, height: 25, borderRadius: 13, backgroundColor: '#E5F0ED', alignItems: 'center', justifyContent: 'center' }, weekFormChipLoss: { backgroundColor: '#F7EAE6' }, weekFormText: { color: C.teal, fontSize: 10, fontWeight: '800' }, weekFormTextLoss: { color: C.brick }, statCard: { padding: 19, borderWidth: 1, borderColor: C.line, borderRadius: 24, borderBottomLeftRadius: 10, borderBottomRightRadius: 10, backgroundColor: C.surface, ...shadow }, statFormHeader: { marginBottom: 15, paddingBottom: 12, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', borderBottomWidth: 1, borderColor: C.line }, statTop: { flexDirection: 'row', alignItems: 'center', gap: 15 }, rateRing: { width: 100, height: 100, borderRadius: 50, borderWidth: 9, borderColor: C.teal, borderRightColor: C.line, alignItems: 'center', justifyContent: 'center', transform: [{ rotate: '-18deg' }] }, rateRingInner: { alignItems: 'center', transform: [{ rotate: '18deg' }] }, rateNumber: { color: C.ink, fontSize: 24, lineHeight: 26, fontWeight: '800', fontVariant: ['tabular-nums'] }, ratePercent: { fontSize: 11 }, ringLabel: { color: C.ink40, fontSize: 6.5, fontWeight: '800', letterSpacing: 0.6 }, rateLead: { color: C.ink, fontSize: 17, fontWeight: '700' }, rateBody: { color: C.ink70, fontSize: 13 }, rateUp: { marginTop: 4, color: C.teal, fontSize: 10, fontWeight: '600' }, statDivider: { marginVertical: 18 }, ratingRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }, ratingInline: { flexDirection: 'row', alignItems: 'baseline', gap: 10 }, ratingNumber: { color: C.ink, fontSize: 34, lineHeight: 38, fontWeight: '800', fontVariant: ['tabular-nums'] }, ratingCategory: { minHeight: 27, paddingHorizontal: 8, alignItems: 'center', justifyContent: 'center', borderRadius: 14, backgroundColor: '#E5F0ED' }, ratingCategoryText: { color: C.teal, fontSize: 7, fontWeight: '900', letterSpacing: .45 }, trendChip: { paddingHorizontal: 8, paddingVertical: 5, borderRadius: 7, overflow: 'hidden', backgroundColor: '#E5F0ED', color: C.teal, fontSize: 10, fontWeight: '800' }, track: { height: 5, marginTop: 10, borderRadius: 3, overflow: 'hidden', backgroundColor: C.line }, trackFill: { width: '72%', height: '100%', backgroundColor: C.teal }, trackLabels: { marginTop: 5, flexDirection: 'row', justifyContent: 'space-between' }, trackLabel: { color: C.ink40, fontSize: 9 },
+  weekEmptyCard: { minHeight: 252, padding: 22, overflow: 'hidden', borderWidth: 1, borderColor: C.line, borderRadius: 24, borderBottomLeftRadius: 10, borderBottomRightRadius: 10, backgroundColor: C.surface, ...shadow },
+  weekEmptyGlow: { position: 'absolute', width: 170, height: 170, top: -105, right: -62, borderRadius: 85, backgroundColor: 'rgba(214,233,74,.12)' },
+  weekEmptyHead: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
+  weekEmptyMark: { width: 52, height: 52, borderRadius: 17, alignItems: 'center', justifyContent: 'center', backgroundColor: '#EAF3F0' },
+  weekEmptyMarkDark: { backgroundColor: 'rgba(214,233,74,.1)' },
+  weekEmptyBall: { width: 30, height: 30 },
+  weekEmptyStatus: { minHeight: 29, paddingHorizontal: 10, flexDirection: 'row', alignItems: 'center', gap: 6, borderWidth: 1, borderColor: '#C8D5CF', borderRadius: 10, backgroundColor: 'rgba(255,255,255,.76)' },
+  weekEmptyStatusDark: { borderColor: '#3B5550', backgroundColor: '#203B37' },
+  weekEmptyStatusDot: { width: 6, height: 6, borderRadius: 3, backgroundColor: C.optic },
+  weekEmptyStatusText: { color: C.teal, fontSize: 7, fontWeight: '900', letterSpacing: .75 },
+  weekEmptyStatusTextDark: { color: '#B7CAC4' },
+  weekEmptyTitle: { marginTop: 20, color: C.ink, fontSize: 24, lineHeight: 29, fontWeight: '800', letterSpacing: -.55 },
+  weekEmptyBody: { maxWidth: 330, marginTop: 7, color: C.ink70, fontSize: 11, lineHeight: 17 },
+  weekEmptyButton: { minHeight: 48, marginTop: 21, paddingHorizontal: 16, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8, borderRadius: 14, backgroundColor: C.optic },
+  weekEmptyButtonText: { color: C.ink, fontSize: 11, fontWeight: '900' },
+  nearbyHeaderActions: { flexDirection: 'row', alignItems: 'center', justifyContent: 'flex-end', gap: 6 }, nearbySeeAll: { minHeight: 40, paddingHorizontal: 9, alignItems: 'center', justifyContent: 'center', borderRadius: 12, backgroundColor: C.optic }, nearbySeeAllText: { color: '#0E2321', fontSize: 9, fontWeight: '900' }, seeAll: { maxWidth: 160, minHeight: 34, paddingHorizontal: 10, paddingVertical: 5, flexDirection: 'row', alignItems: 'center', gap: 4, borderRadius: 11, borderWidth: 1, borderColor: C.line, backgroundColor: C.surface }, seeAllText: { flexShrink: 1, color: C.teal, fontSize: 11, fontWeight: '800' }, courtScroll: { paddingRight: 20, gap: 12 }, courtScrollSingle: { width: '100%', paddingRight: 0 }, courtCard: { width: 300, borderWidth: 1, borderColor: C.line, borderRadius: 24, borderBottomLeftRadius: 10, borderBottomRightRadius: 10, overflow: 'hidden', backgroundColor: C.surface, ...shadow }, courtCardWide: { width: 320 }, courtCardSingle: { width: '100%', flex: 1, minWidth: '100%' }, courtGraphicCompact: { height: 125 }, courtBoundsCompact: { top: 11, bottom: -40 }, distance: { position: 'absolute', top: 10, right: 10, paddingHorizontal: 7, paddingVertical: 4, borderRadius: 6, backgroundColor: 'rgba(14,35,33,0.82)' }, distanceText: { color: '#fff', fontSize: 8, fontWeight: '800', letterSpacing: 0.8 }, courtInfo: { flexDirection: 'row', gap: 8, paddingHorizontal: 13, paddingTop: 12, paddingBottom: 8 }, courtInfoMain: { flex: 1 }, courtName: { color: C.ink, fontSize: 15, lineHeight: 20, fontWeight: '700' }, locationRow: { flexDirection: 'row', alignItems: 'center', marginTop: 2 }, courtLocation: { color: C.ink40, fontSize: 10 }, price: { color: C.teal, fontSize: 14, fontWeight: '800' }, perHour: { color: C.ink40, fontSize: 9, fontWeight: '400' }, chips: { flexDirection: 'row', gap: 5, paddingHorizontal: 13, paddingBottom: 13 }, chip: { paddingHorizontal: 7, paddingVertical: 4, borderRadius: 6, overflow: 'hidden', backgroundColor: C.paper, color: C.ink70, fontSize: 8, fontWeight: '800' }, ratingChip: { color: C.teal },
   moreButton: { width: 38, height: 38, borderRadius: 19, alignItems: 'center', justifyContent: 'center', backgroundColor: C.surface }, activityCard: { borderWidth: 1, borderColor: C.line, borderRadius: 24, borderBottomLeftRadius: 10, borderBottomRightRadius: 10, overflow: 'hidden', backgroundColor: C.surface, ...shadow }, activityItem: { minHeight: 78, paddingHorizontal: 14, paddingVertical: 12, flexDirection: 'row', alignItems: 'center', gap: 10 }, activityDivider: { height: 5, marginHorizontal: 14 }, activityIcon: { width: 36, height: 36, borderRadius: 10, alignItems: 'center', justifyContent: 'center' }, activityCopy: { flex: 1 }, activityText: { color: C.ink70, fontSize: 12, lineHeight: 17 }, bold: { color: C.ink, fontWeight: '800' }, activityMeta: { marginTop: 2, color: C.ink40, fontSize: 9 }, activityTail: { minWidth: 25, alignItems: 'flex-end' }, activityTailMuted: { width: 27, height: 27, borderRadius: 7, alignItems: 'center', justifyContent: 'center', backgroundColor: C.paper }, tailText: { color: C.teal, fontSize: 11, fontWeight: '800' }, tailMuted: { color: C.ink40 }, tailBrick: { color: C.brick },
   bottomNav: { position: 'absolute', left: 12, right: 12, bottom: Platform.OS === 'ios' ? 9 : 12, height: 76, paddingHorizontal: 5, borderWidth: 1, borderColor: C.line, borderRadius: 20, flexDirection: 'row', backgroundColor: C.surface, ...Platform.select({ ios: { shadowColor: C.ink, shadowOpacity: 0.14, shadowRadius: 20, shadowOffset: { width: 0, height: 8 } }, android: { elevation: 9 } }) }, navItem: { flex: 1, alignItems: 'center', justifyContent: 'center', gap: 2 }, navLabel: { color: C.ink40, fontSize: 9, fontWeight: '700' }, navLabelActive: { color: C.ink }, activeTick: { position: 'absolute', top: -4, width: 24 }, playButton: { width: 52, height: 52, marginTop: -28, borderRadius: 26, borderWidth: 5, borderColor: C.surface, alignItems: 'center', justifyContent: 'center', backgroundColor: C.optic },
   modalBackdrop: { flex: 1, justifyContent: 'flex-end', backgroundColor: 'rgba(14,35,33,0.46)' }, leaderSheet: { height: '84%', paddingHorizontal: 16, paddingTop: 10, paddingBottom: 18, borderTopLeftRadius: 30, borderTopRightRadius: 30, backgroundColor: C.paper }, sheetHandle: { alignSelf: 'center', width: 40, height: 4, marginBottom: 14, borderRadius: 2, backgroundColor: C.line }, sheetHead: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }, leaderHeading: { flex: 1, paddingRight: 10 }, sheetTitle: { color: C.ink, fontSize: 27, lineHeight: 32, fontWeight: '800', letterSpacing: -.7 }, leaderSubtitle: { marginTop: 1, color: C.ink40, fontSize: 9 }, closeButton: { width: 40, height: 40, borderRadius: 20, borderWidth: 1, borderColor: C.line, alignItems: 'center', justifyContent: 'center', backgroundColor: C.surface },
@@ -567,7 +872,7 @@ const styles = StyleSheet.create({
   toast: { position: 'absolute', left: 20, right: 20, bottom: 100, minHeight: 48, paddingHorizontal: 17, borderRadius: 11, alignItems: 'center', justifyContent: 'center', backgroundColor: C.ink, ...shadow }, toastText: { color: C.paper, textAlign: 'center', fontSize: 12, fontWeight: '700' },
 });
 
-const darkStyles = StyleSheet.create({
+const darkStyles = createMobileStyleSheet({
   safe: { backgroundColor: C.ink },
   sheet: { backgroundColor: '#102825' },
   card: { backgroundColor: '#17302D', borderColor: '#304743' },
@@ -586,5 +891,9 @@ const darkStyles = StyleSheet.create({
   text: { color: C.paper },
   bodyText: { color: '#C1CECA' },
   mutedText: { color: '#8FA39C' },
+  eyebrowDark: { color: '#B2C5C0' },
+  locationText: { color: '#D5DFDB' },
+  locationPill: { backgroundColor: '#17302D', borderColor: '#304743' },
+  locationPillText: { color: '#D5DFDB', fontWeight: '800' },
   accentText: { color: C.optic },
 });

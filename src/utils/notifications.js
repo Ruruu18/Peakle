@@ -11,6 +11,15 @@ const ICONS_BY_KIND = {
   booking_reminder: 'calendar-outline',
   court_waitlist: 'hourglass-outline',
   booking_changed: 'calendar-outline',
+  match_invite: 'people-circle-outline',
+  match_invite_response: 'checkmark-circle-outline',
+  match_found: 'search-circle-outline',
+  organizer_match: 'pulse-outline',
+  direct_message: 'chatbubble-outline',
+  direct_message_request: 'person-add-outline',
+  direct_message_accepted: 'chatbubbles-outline',
+  follow_request: 'person-add-outline',
+  follow_accepted: 'people-outline',
 };
 
 export function presentNotification(notice) {

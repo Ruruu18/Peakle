@@ -1,5 +1,6 @@
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
+  ActivityIndicator,
   Animated,
   Image,
   KeyboardAvoidingView,
@@ -14,6 +15,7 @@ import {
   LayoutAnimation,
   UIManager
 } from 'react-native';
+import * as Location from 'expo-location';
 
 if (Platform.OS === 'android' && UIManager.setLayoutAnimationEnabledExperimental) {
   UIManager.setLayoutAnimationEnabledExperimental(true);
@@ -25,8 +27,11 @@ import Ionicons from '@expo/vector-icons/Ionicons';
 import * as Google from 'expo-auth-session/providers/google';
 import * as WebBrowser from 'expo-web-browser';
 import { useAuth } from '../context/AuthContext';
-import AvatarBuilder from '../components/AvatarBuilder';
+import ProfilePhotoPicker from '../components/ProfilePhotoPicker';
+import ResilientImage from '../components/ResilientImage';
 import { LEGAL_DOCUMENTS } from '../content/legalDocuments';
+import { PH_LOCATIONS, formatLocation, locationMatchesSearch, parseLocation } from '../data/phLocations';
+import { createMobileStyleSheet } from '../utils/mobileStyles';
 
 WebBrowser.maybeCompleteAuthSession();
 
@@ -209,9 +214,12 @@ function FeaturePreview({ item, index }) {
             return (
               <Animated.View key={member.id} style={[styles.playerAvatar, styles.playerAvatarCenter, { backgroundColor: member.color, padding: 0 }, animStyles.style]}>
                 <View style={{ flex: 1, width: '100%', height: '100%', borderRadius: 31, overflow: 'hidden' }}>
-                  <Image 
-                    source={{ uri: `https://api.dicebear.com/9.x/notionists/png?seed=${member.seed}&backgroundColor=transparent&scale=170&translateY=12` }} 
-                    style={{ width: '100%', height: '100%' }} 
+                  <ResilientImage
+                    uri={`https://api.dicebear.com/9.x/notionists/png?seed=${member.seed}&backgroundColor=transparent&scale=170&translateY=12`}
+                    fallback={<Icon name="person" size={25} color={C.surface} />}
+                    fallbackColor={member.color}
+                    showLoadingIndicator={false}
+                    style={{ width: '100%', height: '100%' }}
                   />
                 </View>
                 <Animated.View style={[styles.playerCrown, { opacity: animStyles.crownOpacity }]}>
@@ -638,13 +646,170 @@ function DeviceIntro({ onComplete }) {
   );
 }
 
+function LocationPicker({ value, onChange }) {
+  const [open, setOpen] = useState(false);
+  const [query, setQuery] = useState('');
+  const [gpsLoading, setGpsLoading] = useState(false);
+
+  const parsed = useMemo(() => parseLocation(value), [value]);
+
+  const suggestions = useMemo(() => {
+    const q = query.trim().toLowerCase();
+    if (!q) return PH_LOCATIONS.slice(0, 10);
+    return PH_LOCATIONS.filter((loc) => locationMatchesSearch(loc, q)).slice(0, 8);
+  }, [query]);
+
+  const openSheet = () => { setQuery(''); setOpen(true); };
+  const closeSheet = () => { setOpen(false); setQuery(''); };
+  const selectLoc = (loc) => { onChange(formatLocation(loc)); closeSheet(); };
+
+  const detectLocation = async () => {
+    setGpsLoading(true);
+    try {
+      const { status } = await Location.requestForegroundPermissionsAsync();
+      if (status !== 'granted') { setGpsLoading(false); return; }
+      const pos = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Balanced });
+      const [geo] = await Location.reverseGeocodeAsync({ latitude: pos.coords.latitude, longitude: pos.coords.longitude });
+      if (geo) {
+        const detectedCity = geo.city || geo.subregion || '';
+        const match = PH_LOCATIONS.find((loc) => loc.city.toLowerCase() === detectedCity.toLowerCase());
+        if (match) { selectLoc(match); }
+        else { onChange(`${detectedCity} · ${geo.region || ''} · ${geo.country || 'Philippines'}`); closeSheet(); }
+      }
+    } catch (_) { /* ignore */ }
+    finally { setGpsLoading(false); }
+  };
+
+  return (
+    <>
+      <Pressable
+        accessibilityRole="button"
+        onPress={openSheet}
+        style={({ pressed }) => [styles.locTrigger, pressed && styles.locTriggerPressed]}
+      >
+        <View style={styles.locTriggerIcon}>
+          <Ionicons name="location" size={17} color={C.teal} />
+        </View>
+        <View style={{ flex: 1 }}>
+          <Text style={styles.locTriggerEyebrow}>HOME AREA</Text>
+          {parsed ? (
+            <>
+              <Text numberOfLines={1} style={styles.locTriggerCity}>{parsed.city}</Text>
+              <Text numberOfLines={1} style={styles.locTriggerMeta}>{parsed.region}{parsed.country ? ` · ${parsed.country}` : ''}</Text>
+            </>
+          ) : (
+            <Text style={styles.locTriggerPlaceholder}>Tap to set your location</Text>
+          )}
+        </View>
+        <Ionicons name="chevron-forward" size={16} color={C.teal} />
+      </Pressable>
+
+      <Modal visible={open} transparent animationType="slide" onRequestClose={closeSheet} statusBarTranslucent>
+        <View style={styles.locModalBackdrop}>
+          <Pressable style={StyleSheet.absoluteFillObject} onPress={closeSheet} />
+          <View style={styles.locSheet}>
+            <View style={styles.locHandle} />
+            <View style={styles.locHeader}>
+              <View style={{ flex: 1 }}>
+                <Text style={styles.locHeaderEyebrow}>YOUR SEARCH AREA</Text>
+                <Text style={styles.locHeaderTitle}>Change location</Text>
+              </View>
+              <Pressable onPress={closeSheet} style={styles.locCloseBtn}>
+                <Ionicons name="close" size={20} color="#FFFFFF" />
+              </Pressable>
+            </View>
+
+            {Boolean(parsed) && (
+              <View style={styles.locCurrentCard}>
+                <View style={styles.locCurrentIcon}>
+                  <Ionicons name="location" size={20} color={C.teal} />
+                </View>
+                <View style={{ flex: 1 }}>
+                  <Text style={styles.locCurrentLabel}>CURRENTLY USING</Text>
+                  <Text style={styles.locCurrentCity}>{parsed.city}</Text>
+                  <Text style={styles.locCurrentMeta}>{parsed.region}{parsed.country ? ` · ${parsed.country}` : ''}</Text>
+                </View>
+              </View>
+            )}
+
+            <Pressable
+              onPress={detectLocation}
+              disabled={gpsLoading}
+              style={({ pressed }) => [styles.locGpsBtn, pressed && { opacity: 0.85 }]}
+            >
+              {gpsLoading ? <ActivityIndicator color={C.ink} size="small" /> : <Ionicons name="navigate" size={20} color={C.ink} />}
+              <View style={{ flex: 1 }}>
+                <Text style={styles.locGpsBtnTitle}>Use my exact location</Text>
+                <Text style={styles.locGpsBtnSub}>Uses your device GPS while the app is open.</Text>
+              </View>
+            </Pressable>
+
+            <Text style={styles.locOrLabel}>OR SEARCH ANYWHERE</Text>
+
+            <View style={styles.locSearchRow}>
+              <Ionicons name="search-outline" size={18} color="rgba(255,255,255,0.45)" style={{ marginLeft: 14 }} />
+              <TextInput
+                value={query}
+                onChangeText={setQuery}
+                placeholder="City or region…"
+                placeholderTextColor="rgba(255,255,255,0.3)"
+                style={styles.locSearchInput}
+                returnKeyType="search"
+                autoFocus
+              />
+              {query.length > 0 && (
+                <Pressable onPress={() => setQuery('')} style={styles.locSearchClear}>
+                  <Ionicons name="close-circle" size={18} color="rgba(255,255,255,0.4)" />
+                </Pressable>
+              )}
+            </View>
+
+            {suggestions.length > 0 && (
+              <View style={styles.locResults}>
+                {suggestions.map((loc, index) => {
+                  const isActive = parsed?.city === loc.city && parsed?.region === loc.region;
+                  return (
+                    <Pressable
+                      accessibilityRole="radio"
+                      accessibilityState={{ checked: isActive }}
+                      key={`${loc.city}-${loc.region}`}
+                      onPress={() => selectLoc(loc)}
+                      style={({ pressed, hovered }) => [
+                        styles.locResultRow,
+                        index > 0 && styles.locResultBorder,
+                        isActive && styles.locResultActive,
+                        (pressed || hovered) && styles.locResultHovered,
+                      ]}
+                    >
+                      <Ionicons name="location-outline" size={16} color="rgba(255,255,255,0.4)" />
+                      <View style={{ flex: 1 }}>
+                        <Text style={styles.locResultCity}>{loc.city}</Text>
+                        <Text style={styles.locResultMeta}>{loc.region} · {loc.country}</Text>
+                      </View>
+                      {isActive && <Ionicons name="checkmark-circle" size={18} color={C.teal} />}
+                    </Pressable>
+                  );
+                })}
+              </View>
+            )}
+
+            <Text style={styles.locPrivacyNote}>
+              Your coordinates stay on this device unless you separately turn on Nearby Player visibility.
+            </Text>
+          </View>
+        </View>
+      </Modal>
+    </>
+  );
+}
+
 function Personalize({ profile, onBack }) {
   const { completeOnboarding } = useAuth();
   const [stage, setStage] = useState('name');
   const [name, setName] = useState(profile.name || '');
   const [avatar, setAvatar] = useState(profile.picture || '');
   const [preference, setPreference] = useState(profile.preference || 'Doubles');
-  const [location, setLocation] = useState(profile.location || 'Metro Manila');
+  const [location, setLocation] = useState(profile.location || '');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   const continueFromName = () => {
@@ -671,26 +836,27 @@ function Personalize({ profile, onBack }) {
     <SafeAreaView style={styles.safe}>
       <StatusBar style="dark" backgroundColor={C.paper} />
       <ScrollView keyboardShouldPersistTaps="handled" contentContainerStyle={styles.personalContent}>
-        <View style={styles.formTop}><Pressable accessibilityLabel="Back" onPress={goBack} style={styles.back}><Icon name="arrow-back" /></Pressable><Text style={styles.stepText}>{stage === 'name' ? 'YOUR NAME' : stage === 'avatar' ? 'YOUR CHARACTER' : 'YOUR GAME'}</Text></View>
+        <View style={styles.formTop}><Pressable accessibilityLabel="Back" onPress={goBack} style={styles.back}><Icon name="arrow-back" /></Pressable><Text style={styles.stepText}>{stage === 'name' ? 'YOUR NAME' : stage === 'avatar' ? 'YOUR PHOTO' : 'YOUR GAME'}</Text></View>
         <Progress step={stage === 'name' ? 0 : stage === 'avatar' ? 1 : 2} total={3} />
 
         {stage === 'name' ? <>
           <View style={styles.personalHead}><Text style={styles.eyebrow}>LET’S MEET</Text><Text style={styles.h1}>What should we{`\n`}call you?</Text><Text style={styles.subtitle}>This is the name other players will see on games, teams, and match results.</Text></View>
           <View style={styles.nameSpotlight}><View style={styles.nameIcon}><Icon name="person-outline" size={24} color={C.teal} /></View><Field label="DISPLAY NAME" icon="create-outline" value={name} onChangeText={(value) => { setName(value); setError(''); }} placeholder="Your name" autoCapitalize="words" autoFocus returnKeyType="next" onSubmitEditing={continueFromName} /></View>
           {error ? <Text style={styles.error}>{error}</Text> : null}
-          <Pressable onPress={continueFromName} style={({ pressed }) => [styles.accentButton, styles.stageButton, pressed && styles.pressed]}><Text style={styles.accentText}>Create my character</Text><Icon name="arrow-forward" /></Pressable>
+          <Pressable onPress={continueFromName} style={({ pressed }) => [styles.accentButton, styles.stageButton, pressed && styles.pressed]}><Text style={styles.accentText}>Add my profile photo</Text><Icon name="arrow-forward" /></Pressable>
         </> : null}
 
         {stage === 'avatar' ? <>
-          <View style={styles.personalHead}><Text style={styles.eyebrow}>MAKE IT YOURS</Text><Text style={styles.h1}>Hi, {name.split(' ')[0]}.{`\n`}Pick your look.</Text><Text style={styles.subtitle}>Build a playful black-and-white character. Every tile is a visual choice—no numbered options.</Text></View>
-          <AvatarBuilder initialAvatar={avatar} onAvatarChange={setAvatar} />
-          <Pressable onPress={() => { setError(''); setStage('game'); }} style={({ pressed }) => [styles.accentButton, pressed && styles.pressed]}><Text style={styles.accentText}>That looks like me</Text><Icon name="arrow-forward" /></Pressable>
+          <View style={styles.personalHead}><Text style={styles.eyebrow}>MAKE IT YOURS</Text><Text style={styles.h1}>Hi, {name.split(' ')[0]}.{`\n`}Show up as you.</Text><Text style={styles.subtitle}>Add a clear profile photo so teammates can recognize you at games. It’s optional, and you can change it later.</Text></View>
+          <ProfilePhotoPicker value={avatar} name={name} onChange={setAvatar} onError={setError} colors={C} />
+          {error ? <Text style={styles.error}>{error}</Text> : null}
+          <Pressable onPress={() => { setError(''); setStage('game'); }} style={({ pressed }) => [styles.accentButton, pressed && styles.pressed]}><Text style={styles.accentText}>{avatar ? 'Use this photo' : 'Continue without photo'}</Text><Icon name="arrow-forward" /></Pressable>
         </> : null}
 
         {stage === 'game' ? <>
           <View style={styles.personalHead}><Text style={styles.eyebrow}>LAST STEP</Text><Text style={styles.h1}>Find your kind{`\n`}of game.</Text><Text style={styles.subtitle}>Two quick details help Peakle recommend nearby games and players.</Text></View>
           <Text style={[styles.label, styles.sectionLabel]}>I PLAY MOSTLY</Text><View style={styles.choiceRow}>{['Doubles', 'Singles', 'Both'].map((value) => <Pressable key={value} onPress={() => setPreference(value)} style={[styles.choice, preference === value && styles.optionActive]}><Icon name={value === 'Doubles' ? 'people-outline' : value === 'Singles' ? 'person-outline' : 'swap-horizontal-outline'} color={preference === value ? C.ink : C.ink40} /><Text style={[styles.choiceText, preference === value && styles.optionActiveText]}>{value}</Text></Pressable>)}</View>
-          <Field label="HOME AREA" icon="location-outline" value={location} onChangeText={setLocation} placeholder="Metro Manila" />
+          <LocationPicker value={location} onChange={setLocation} />
           <View style={styles.permissionNote}><View style={styles.noteIcon}><Icon name="notifications-outline" size={18} color={C.teal} /></View><Text style={styles.noteText}><Text style={styles.noteStrong}>You’re in control.</Text> We’ll ask before using location or sending match reminders.</Text></View>
           {error ? <Text style={styles.error}>{error}</Text> : null}
           <Pressable disabled={busy} onPress={finish} style={({ pressed }) => [styles.accentButton, (pressed || busy) && styles.pressed]}><Text style={styles.accentText}>{busy ? 'Setting up…' : 'Enter Peakle'}</Text><Icon name="arrow-forward" /></Pressable>
@@ -717,7 +883,7 @@ export default function AuthFlowScreen({ initialScreen = 'welcome' }) {
 }
 
 const shadow = Platform.select({ ios: { shadowColor: C.ink, shadowOpacity: .12, shadowRadius: 20, shadowOffset: { width: 0, height: 8 } }, android: { elevation: 5 } });
-const styles = StyleSheet.create({
+const styles = createMobileStyleSheet({
   flex: { flex: 1 }, safe: { flex: 1, backgroundColor: C.paper }, authSafe: { flex: 1, backgroundColor: C.ink }, pressed: { opacity: .78, transform: [{ scale: .99 }] },
   wordmark: { flexDirection: 'row', alignItems: 'center', gap: 9 }, wordmarkOffset: { marginTop: 8 }, mark: { width: 28, height: 32, borderRadius: 11, borderBottomLeftRadius: 5, borderBottomRightRadius: 5, backgroundColor: C.ink, overflow: 'hidden' }, markLight: { backgroundColor: C.surface }, markBall: { position: 'absolute', right: 4, top: 4, width: 8, height: 8, borderRadius: 4, backgroundColor: C.optic }, markLine: { position: 'absolute', left: 0, right: 0, bottom: 8, height: 2, backgroundColor: C.optic }, markLineLight: { backgroundColor: C.ink }, word: { color: C.ink, fontSize: 23, fontWeight: '900', letterSpacing: -.8 }, wordLight: { color: C.surface },
   welcome: { flex: 1, backgroundColor: C.ink }, welcomeTop: { paddingHorizontal: 24, paddingTop: Platform.OS === 'ios' ? 62 : 44 }, welcomeEyebrow: { marginTop: 30, color: '#8FA39C', fontSize: 9, fontWeight: '900', letterSpacing: 1.45 }, welcomeTitle: { marginTop: 8, color: C.surface, fontSize: 49, lineHeight: 49, fontWeight: '900', letterSpacing: -2.2 }, welcomeTitleAccent: { color: C.optic }, welcomeBody: { maxWidth: 340, marginTop: 13, color: '#B8C6C1', fontSize: 14, lineHeight: 20 },
@@ -769,4 +935,39 @@ const styles = StyleSheet.create({
   legalModalDone: { minHeight: 52, paddingHorizontal: 18, borderRadius: 15, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', backgroundColor: C.optic },
   legalModalDoneDisabled: { opacity: .45, backgroundColor: C.line },
   legalModalDoneText: { color: C.ink, fontSize: 13, fontWeight: '900' },
+  // Location picker
+  locTrigger: { minHeight: 64, paddingHorizontal: 14, flexDirection: 'row', alignItems: 'center', gap: 12, borderRadius: 14, borderWidth: 1, borderColor: C.line, backgroundColor: C.surface },
+  locTriggerPressed: { opacity: 0.76, transform: [{ scale: 0.985 }] },
+  locTriggerIcon: { width: 38, height: 38, borderRadius: 12, alignItems: 'center', justifyContent: 'center', backgroundColor: C.tealWash },
+  locTriggerEyebrow: { color: C.ink40, fontSize: 7.5, fontWeight: '900', letterSpacing: .7 },
+  locTriggerCity: { marginTop: 1, color: C.ink, fontSize: 14, fontWeight: '800' },
+  locTriggerMeta: { marginTop: 1, color: C.ink40, fontSize: 9 },
+  locTriggerPlaceholder: { marginTop: 2, color: C.ink40, fontSize: 12 },
+  locModalBackdrop: { flex: 1, justifyContent: 'flex-end', backgroundColor: 'rgba(14,35,33,.55)' },
+  locSheet: { paddingHorizontal: 20, paddingTop: 10, paddingBottom: 28, borderTopLeftRadius: 26, borderTopRightRadius: 26, backgroundColor: '#0F2421' },
+  locHandle: { width: 38, height: 4, marginBottom: 18, alignSelf: 'center', borderRadius: 2, backgroundColor: 'rgba(255,255,255,.2)' },
+  locHeader: { flexDirection: 'row', alignItems: 'center', marginBottom: 18 },
+  locHeaderEyebrow: { color: 'rgba(255,255,255,.45)', fontSize: 9, fontWeight: '900', letterSpacing: 1 },
+  locHeaderTitle: { marginTop: 3, color: '#FFFFFF', fontSize: 26, fontWeight: '800', letterSpacing: -.5 },
+  locCloseBtn: { width: 44, height: 44, borderRadius: 22, alignItems: 'center', justifyContent: 'center', backgroundColor: 'rgba(255,255,255,.12)' },
+  locCurrentCard: { flexDirection: 'row', alignItems: 'center', gap: 12, minHeight: 72, paddingHorizontal: 14, marginBottom: 14, borderRadius: 15, backgroundColor: 'rgba(255,255,255,.09)' },
+  locCurrentIcon: { width: 40, height: 40, borderRadius: 12, alignItems: 'center', justifyContent: 'center', backgroundColor: 'rgba(28,107,102,.35)' },
+  locCurrentLabel: { color: 'rgba(255,255,255,.45)', fontSize: 8, fontWeight: '900', letterSpacing: .8 },
+  locCurrentCity: { marginTop: 2, color: '#FFFFFF', fontSize: 15, fontWeight: '800' },
+  locCurrentMeta: { marginTop: 1, color: 'rgba(255,255,255,.5)', fontSize: 9 },
+  locGpsBtn: { minHeight: 68, flexDirection: 'row', alignItems: 'center', gap: 13, paddingHorizontal: 16, borderRadius: 16, backgroundColor: C.optic, marginBottom: 18 },
+  locGpsBtnTitle: { color: C.ink, fontSize: 13, fontWeight: '900' },
+  locGpsBtnSub: { marginTop: 2, color: 'rgba(14,35,33,.55)', fontSize: 9 },
+  locOrLabel: { color: 'rgba(255,255,255,.4)', fontSize: 9, fontWeight: '900', letterSpacing: 1.1, marginBottom: 10 },
+  locSearchRow: { flexDirection: 'row', alignItems: 'center', borderRadius: 14, backgroundColor: 'rgba(255,255,255,.1)', marginBottom: 10 },
+  locSearchInput: { flex: 1, height: 52, paddingHorizontal: 10, color: '#FFFFFF', fontSize: 13 },
+  locSearchClear: { width: 42, height: 42, alignItems: 'center', justifyContent: 'center' },
+  locResults: { borderRadius: 14, backgroundColor: 'rgba(255,255,255,.09)', marginBottom: 10, overflow: 'hidden' },
+  locResultRow: { minHeight: 56, flexDirection: 'row', alignItems: 'center', gap: 10, paddingHorizontal: 14 },
+  locResultBorder: { borderTopWidth: StyleSheet.hairlineWidth, borderColor: 'rgba(255,255,255,.12)' },
+  locResultActive: { backgroundColor: 'rgba(214,233,74,.14)' },
+  locResultHovered: { backgroundColor: 'rgba(114,199,190,.2)' },
+  locResultCity: { color: '#FFFFFF', fontSize: 13, fontWeight: '700' },
+  locResultMeta: { marginTop: 1, color: 'rgba(255,255,255,.45)', fontSize: 9 },
+  locPrivacyNote: { marginTop: 6, color: 'rgba(255,255,255,.35)', fontSize: 8.5, textAlign: 'center', lineHeight: 13 },
 });

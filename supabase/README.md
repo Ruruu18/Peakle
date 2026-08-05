@@ -9,6 +9,20 @@
 
 The first migration creates the normalized model, automatic user profiles, storage policies, and row-level security. Venues and courts are added by platform administrators rather than seeded with demo records.
 
+### Free driving distances
+
+Court discovery uses the free openrouteservice Matrix API through the `route-distances` Edge Function. The API key stays server-side and must never be added to the Expo `.env` file.
+
+1. Create a free Standard API key at [HeiGIT Accounts](https://account.heigit.org/).
+2. Store and deploy it:
+
+```bash
+supabase secrets set OPENROUTESERVICE_API_KEY=your_free_key
+supabase functions deploy route-distances
+```
+
+The app batches up to 25 destinations per request, asks openrouteservice for road-network driving distances and estimated durations, and keeps a short in-memory cache to reduce quota usage. If the function or API is unavailable, the UI explicitly labels the fallback as `direct` rather than presenting it as a driving distance. The free service does not include live traffic, so ETAs are estimates; the road distance follows the routable OpenStreetMap road network.
+
 `migrations/202607160009_server_organizer_entitlements.sql` makes Organizer Pass access server-authoritative. Apply it before testing Organizer mode: the demo checkout writes an account-scoped entitlement through protected RPCs, and the database rejects new open-play sessions when that entitlement is missing or expired. Existing owned sessions remain accessible so organizers can recover or finish live operations. The demo lifecycle RPCs must be removed when verified App Store or Play Billing webhooks replace the sandbox.
 
 `migrations/202607160010_player_open_play_registration.sql` completes the player-to-organizer open-play registration loop. It adds public, private, and invite-only sessions; six-character codes; schedules, skill ranges, capacity, fees, approval mode, rules, invitations, registration status, waitlisting, and check-in. Capacity decisions lock the session row and are enforced by a trigger as well as protected RPCs. Apply migrations 009 and 010 together before testing this flow.
@@ -25,18 +39,45 @@ The first migration creates the normalized model, automatic user profiles, stora
 
 `migrations/202607170009_team_conversation_reads.sql` adds per-member team conversation read state, secure conversation summaries, and unread counts for the Teams inbox and bottom-tab badge. Apply it after the earlier Priority 6 migrations before testing communication-first Teams navigation.
 
+`migrations/202607210001_team_chat_features.sql` completes production team chat. It adds paginated media-aware messages, seen state visibility, reactions, sender-only edits and unsend, per-user deletion, message rate and length limits, and a private team-scoped `team-chat-media` bucket. Apply it after migration 009 before testing the updated Teams chat screen. Chat photos are resized to 1,600 px and limited to 2 MB, and videos to 15 MB.
+
+`migrations/202607230001_safe_court_availability_realtime.sql` adds privacy-safe Realtime cache invalidation for court availability and public open-play discovery. Apply it before testing cross-device updates. Booking and registration rows stay protected by row-level security; clients receive only a timestamped “data changed” event and then refresh through the existing authorized RPCs.
+
+`migrations/202607240001_complete_match_push_notifications.sql` completes account-scoped match alerts. Nearby invitations notify the recipient and notify the sender after acceptance; Competitive Hub claims notify both players; and open-play session owners receive match-start and match-finished alerts when they are hosting but not in the lineup. Player and Organizer workspaces share the same notification inbox, while device-token registration safely follows the currently signed-in account on a shared phone.
+
+`migrations/202608030006_host_remove_joined_player.sql` lets the nearby-match host remove an accepted invitee through a host-only RPC. The removal is sent through Realtime, clears the host’s lineup spot, and tells the removed player that a new invitation is required to rejoin.
+
+`migrations/202608030007_realtime_nearby_match_scoring.sql` adds server-authorized connected scoring for nearby matches. The host scores by default, may assign or hand scoring to an accepted signed-in player, and remains the only account allowed to hand off control. Match members watch the same Realtime score, ranked scoring cannot be assigned to a guest, and an active scorer must hand control back before leaving.
+
+`migrations/202607260003_profile_photos.sql` adds the public `profile-photos` bucket with account-scoped upload and deletion policies. Apply it before testing profile photo changes. The app crops photos to a square, resizes them to 720 px, converts them to JPEG, and enforces a 2 MB upload limit.
+
+`migrations/202607260004_remove_legacy_cartoon_avatars.sql` retires the old DiceBear character URLs for existing profiles. Those accounts show their initials until they upload a real profile photo.
+
+`migrations/202607260008_team_chat_safety.sql` adds the adult-only chat acknowledgement, server-side spam and language controls, private blocks, message reporting, automated safety flags, moderator removals, platform suspensions, and protected report queues. Apply it before opening team chat with this app version. Existing users will be asked to confirm they are at least 18 when they first open chat; users who do not confirm remain able to use non-chat features.
+
+`migrations/202607260009_organizer_media.sql` adds organizer-controlled venue brand images, individual court photos, and competition cover photos. Apply it before testing the image controls in **Organizer → Venue** or **Organizer → More → Competition**. Images are resized to 1,600 px, converted to JPEG, limited to 4 MB, and stored in the public `organizer-media` bucket with venue/competition manager-only write policies.
+
+### Team chat safety test
+
+1. Open a joined team from an existing account and confirm chat stays locked until the adult acknowledgement is accepted.
+2. Send six messages quickly, repeat the same message three times, and try a configured prohibited term. Confirm the server rejects each threshold violation.
+3. From a second team member, report a message and confirm it disappears only for the reporter while an open `chat_reports` row contains the reason, priority, and limited snapshot.
+4. Block that sender and confirm their messages disappear across shared team chats. Open **Chat info → Blocked players**, unblock them, and confirm messages become visible again.
+5. As a team manager, remove another member’s message and confirm every member sees “Message unsent,” a `chat_moderation_actions` row is created, and any removed media path can no longer be read.
+6. As a platform admin, review a report or automated flag and add a temporary or permanent `chat_suspensions` row. Confirm the affected account cannot read, send, react, pin, or upload chat media.
+
 ### Priority 6 verification
 
 1. Record a ranked singles or doubles match with registered Peakle accounts, then have every participant confirm it in **Profile → Performance rating**. Confirm the result becomes verified exactly once and only the matching format rating changes.
 2. Dispute another result and confirm no rating history row is created for it.
 3. Publish availability and a partner or substitute request from one player; claim it from another and confirm the post closes atomically.
-4. From **Organizer → More → Programs & insights**, create a recurring clinic, competition, and package. Register from a player account and confirm a full program returns a waitlist registration.
+4. From the dedicated **Organizer → More → Programs**, **Competition**, and **Memberships & packages** screens, create a recurring clinic, competition, and package. Register from a player account and confirm a full program returns a waitlist registration.
 5. Compare the 30-day venue metrics with booking/open-play/program source rows, then export the CSV and confirm the same totals are present.
 6. Publish a matching request, then turn off **Allow player matching** under **Profile → Settings → Privacy & matching**. Confirm the request closes immediately, availability is hidden, and neither publishing nor claiming another request succeeds until matching is turned back on.
 
 ### Priority 4 booking operations
 
-1. Apply migration 003 and reload the PostgREST schema cache if your project does not do so automatically.
+1. Apply migration 003 and migration `202607230001`, then reload the PostgREST schema cache if your project does not do so automatically.
 2. In **Organizer → Venue**, add at least one peak/off-peak price rule and one future maintenance blackout. Long-press an existing rule to remove it.
 3. In Supabase **Integrations → Cron**, run `select public.queue_booking_reminders();` every five minutes. The existing push-dispatch Cron job sends the generated reminder and court-waitlist notifications.
 4. Keep venue `time_zone` values as valid IANA names. Philippine venues default to `Asia/Manila`; do not store a device offset as a time zone.
@@ -62,6 +103,12 @@ Push notifications require a development or production build on a physical iOS o
 5. In a physical build, open **Profile → Settings** and enable court alerts or match reminders. Confirm a row appears in `device_push_tokens`.
 
 The dispatcher claims at most 100 pending notifications per run, batches them through Expo Push Service, records delivery tickets, skips users without an enabled device, and retries transient failures up to five times. Database triggers populate the outbox for approval, waitlist promotion, court assignment, match point, result, cancellation, and venue announcements; the first Cron job creates check-in reminders.
+
+After applying migration `202607240001`, also verify match coverage with two physical-device accounts:
+
+1. Send and accept a nearby match invitation. The recipient receives the invitation push and the sender receives the accepted push.
+2. Claim a Competitive Hub partner, opponent, or substitute request. Both accounts receive a match-found notification.
+3. Start and finish an open-play match while the session owner is not in the lineup. The players receive their existing court/result pushes and the owner receives match-start/match-finished pushes without duplicates.
 
 ### Priority 3 operations test
 
@@ -103,13 +150,18 @@ Replace the venue ID, email, and role (`owner` or `manager`) as needed. The assi
 
 Apply `migrations/202607150004_nearby_player_presence.sql` before testing nearby players. It creates opt-in foreground presence, a distance-only discovery RPC, expiring match invitations, and the required row-level security policies.
 
+Also apply `migrations/202607200001_improve_nearby_distance_accuracy.sql` and `migrations/202608030001_fix_nearby_players_visibility.sql` when testing this app version. The latter removes a discovery query dependency on the viewing player's database row, gives foreground presence a five-minute grace period during brief mobile interruptions, and refreshes the PostgREST schema cache.
+
 1. Start Peakle with `npx expo start --clear` and open it on two devices or simulators.
 2. Sign in with a different completed player account on each client.
 3. Open **Play**, select **Public**, and tap **Go visible** on both clients. Grant foreground location access when prompted. Simulators can use their configured location; a profile or manually selected area is used when GPS coordinates are already available in the app.
-4. Keep both apps in the foreground. Each player should appear on the other client within 20 seconds if they are within 25 km.
+4. Keep both apps in the foreground for the quickest result. Each player should appear on the other client within 20 seconds if they are within 25 km.
 5. Tap **Invite**. The other client receives a match invitation and can decline or join. The sender's lineup is filled only after acceptance.
+6. After the player joins, tap **Remove** on the host device and confirm. Verify the host’s lineup spot clears immediately and the invited player is told that the host removed them.
+7. Invite the player again, assign **Player scores**, and start the match. Verify scoring controls appear only on that player’s device while the host sees live updates and can use **Change** to take scoring back.
+8. Start a ranked match and verify only the host or an accepted signed-in lineup player can be assigned. While an invited player is the scorer, confirm leaving is blocked until the host hands scoring to someone else.
 
-Presence heartbeats run every 20 seconds and expire after two minutes. Backgrounding the app or signing out marks the player offline immediately on a best-effort basis. Other users receive only a rounded distance from the database function, never the stored coordinates.
+Presence heartbeats run every 20 seconds and expire after five minutes. Briefly backgrounding the app stops heartbeats but uses that grace period; turning visibility off or signing out marks the player offline immediately on a best-effort basis. Other users receive only a rounded distance from the database function, never the stored coordinates.
 
 ## 2. Configure email and reset links
 
@@ -160,3 +212,29 @@ npx expo start --clear
 ```
 
 Google sign-in uses an OAuth ID token from the platform-specific Google client and exchanges it for a Supabase session. Do not add a Google client secret to `.env`.
+
+## Private player messages
+
+Apply `migrations/202607300001_private_player_messages.sql` before testing the Messages inbox. It adds consent-based player conversations, one-message requests, read receipts, realtime delivery, push notifications, and private-message reports. Existing chat age eligibility, suspensions, and user blocks also apply to private conversations.
+
+Apply `migrations/202608030002_fix_teammate_message_permissions.sql` with this app version so teammate permission checks use the same chat-safety and block rules as message sending.
+
+### Interactive chat notifications
+
+Apply `migrations/202607300007_notification_chat_replies.sql`, redeploy
+`send-push-notifications`, and make a new native build after installing this app
+version. The migration adds the `messages` notification preference and an
+exactly-once receipt for replies submitted from Android or iOS notification
+actions.
+
+1. Open **Profile → Settings → Message notifications** on a physical device.
+2. Turn on **Message alerts**, allow the OS permission, and run the 10-second closed-app test.
+3. Lock the phone or swipe Peakle away. Expand the test alert, tap **Reply**, and confirm the acknowledgement arrives once.
+4. For the server test, sign in as two connected players on separate devices and open an accepted private conversation.
+5. Close the recipient app, send a message from the other device, and expand the recipient's push alert.
+6. Submit a reply from the alert. Confirm it appears once in both chat histories and the original notification is marked read.
+
+Remote delivery still requires the push-dispatch Cron job and valid FCM/APNs
+credentials in the EAS project. Android users should swipe the app from recents
+for the terminated-app test; **Force stop** in Android system settings prevents
+the OS from delivering app notifications until the app is opened again.

@@ -7,6 +7,8 @@ import * as Notifications from 'expo-notifications';
 import { useAuth } from './AuthContext';
 import { isSupabaseConfigured, requireSupabase } from '../lib/supabase';
 import {
+  clearReadNotifications,
+  deleteNotification,
   disablePushToken,
   flushOpenPlayOperations,
   getPendingOpenPlayOperations,
@@ -16,6 +18,8 @@ import {
   queueOpenPlayOperation,
   savePushToken,
 } from '../services/realtimeOperations';
+import { respondFollowRequest as respondToFollowRequest } from '../services/directMessages';
+import { configureInteractiveNotifications } from '../services/notificationActions';
 
 const OperationsContext = createContext(null);
 
@@ -61,9 +65,14 @@ export function OperationsProvider({ children }) {
 
   useEffect(() => { flush().catch(() => {}); }, [flush]);
   useEffect(() => {
-    const subscription = AppState.addEventListener('change', (state) => { if (state === 'active') flush().catch(() => {}); });
+    const subscription = AppState.addEventListener('change', (state) => {
+      if (state === 'active') {
+        flush().catch(() => {});
+        refreshNotifications().catch(() => {});
+      }
+    });
     return () => subscription.remove();
-  }, [flush]);
+  }, [flush, refreshNotifications]);
 
   useEffect(() => {
     if (!user?.id || !isSupabaseConfigured) return undefined;
@@ -96,6 +105,7 @@ export function OperationsProvider({ children }) {
 
   const enablePushNotifications = useCallback(async () => {
     if (Platform.OS === 'web' || !Device.isDevice) throw new Error('Push notifications require a physical iOS or Android device.');
+    await configureInteractiveNotifications();
     let permission = await Notifications.getPermissionsAsync();
     if (permission.status !== 'granted') permission = await Notifications.requestPermissionsAsync();
     if (permission.status !== 'granted') throw new Error('Notification permission was not granted.');
@@ -109,6 +119,31 @@ export function OperationsProvider({ children }) {
   }, [user?.id]);
 
   const disablePushNotifications = useCallback(() => disablePushToken(user?.id), [user?.id]);
+  useEffect(() => {
+    if (!user?.id || Platform.OS === 'web' || !Device.isDevice) return;
+    const preferences = user.preferences || {};
+    const hasEnabledPreference = preferences.messages !== false
+      || preferences.squad !== false
+      || preferences.reminders !== false
+      || preferences.organizerCourtAlerts === true
+      || preferences.organizerCheckInAlerts === true;
+    if (!hasEnabledPreference) return;
+    Notifications.getPermissionsAsync()
+      .then((permission) => {
+        if (permission.status === 'granted') return enablePushNotifications();
+        return null;
+      })
+      .catch(() => {});
+  }, [
+    enablePushNotifications,
+    user?.id,
+    user?.preferences?.organizerCheckInAlerts,
+    user?.preferences?.organizerCourtAlerts,
+    user?.preferences?.messages,
+    user?.preferences?.reminders,
+    user?.preferences?.squad,
+  ]);
+
   const readNotification = useCallback(async (id) => {
     await markNotificationRead(id);
     setNotifications((current) => current.map((notice) => notice.id === id ? { ...notice, read_at: new Date().toISOString() } : notice));
@@ -118,13 +153,26 @@ export function OperationsProvider({ children }) {
     const readAt = new Date().toISOString();
     setNotifications((current) => current.map((notice) => notice.read_at ? notice : { ...notice, read_at: readAt }));
   }, []);
+  const removeNotification = useCallback(async (id) => {
+    await deleteNotification(id);
+    setNotifications((current) => current.filter((notice) => notice.id !== id));
+  }, []);
+  const clearNotifications = useCallback(async () => {
+    await clearReadNotifications();
+    setNotifications((current) => current.filter((notice) => !notice.read_at || notice.kind === 'follow_request'));
+  }, []);
+  const respondFollowRequest = useCallback(async (requesterId, accept, notificationId) => {
+    const accepted = await respondToFollowRequest(requesterId, accept);
+    setNotifications((current) => current.filter((notice) => notice.id !== notificationId));
+    return accepted;
+  }, []);
   const online = network.isConnected !== false && network.isInternetReachable !== false;
   const connectionState = !online ? 'offline' : realtime;
   const value = useMemo(() => ({
     connectionState, online, pendingOperations, reportRealtime, enqueueOperation, flush,
     notifications, unreadCount: notifications.filter((notice) => !notice.read_at).length,
-    refreshNotifications, readNotification, readAllNotifications, enablePushNotifications, disablePushNotifications,
-  }), [connectionState, disablePushNotifications, enablePushNotifications, enqueueOperation, flush, notifications, online, pendingOperations, readAllNotifications, readNotification, refreshNotifications, reportRealtime]);
+    refreshNotifications, readNotification, readAllNotifications, removeNotification, clearNotifications, respondFollowRequest, enablePushNotifications, disablePushNotifications,
+  }), [clearNotifications, connectionState, disablePushNotifications, enablePushNotifications, enqueueOperation, flush, notifications, online, pendingOperations, readAllNotifications, readNotification, refreshNotifications, removeNotification, reportRealtime, respondFollowRequest]);
   return <OperationsContext.Provider value={value}>{children}</OperationsContext.Provider>;
 }
 

@@ -1,4 +1,5 @@
 import { requireSupabase } from '../lib/supabase';
+import { saveCompetitionCover } from './organizerMedia';
 
 async function currentUser(client) {
   const { data, error } = await client.auth.getUser();
@@ -12,41 +13,52 @@ function unwrap(result) {
   return result.data || [];
 }
 
+async function requireVerifiedPublishingVenue(client, venueId) {
+  if (!venueId) throw new Error('Choose a verified venue.');
+  const { data, error } = await client
+    .from('venues')
+    .select('id')
+    .eq('id', venueId)
+    .eq('verification_status', 'verified')
+    .eq('active', true)
+    .maybeSingle();
+  if (error) throw error;
+  if (!data) throw new Error('This venue must be verified and active before you can publish.');
+}
+
 export async function loadPlayerPickleballHub() {
   const client = requireSupabase();
   const user = await currentUser(client);
   const now = new Date().toISOString();
-  const [profile, ratings, availability, posts, competitions, programs, memberships, products, matches, challenges, teams] = await Promise.all([
+  const [profile, ratings, posts, competitions, programs, memberships, products, matches, challenges, teams] = await Promise.all([
     client.from('profiles').select('id,display_name,home_area,profile_visibility,availability_visibility,matching_enabled').eq('id', user.id).single(),
     client.from('player_ratings').select('*').eq('user_id', user.id),
-    client.from('player_availability').select('*').eq('user_id', user.id).gte('ends_at', now).order('starts_at'),
     client.from('matchmaking_posts')
       .select('*, profiles!matchmaking_posts_creator_id_fkey(display_name,avatar_url), matched_profile:profiles!matchmaking_posts_matched_user_id_fkey(display_name,avatar_url), venues(name)')
       .in('status', ['open', 'matched'])
       .gt('starts_at', now)
       .order('starts_at')
       .limit(30),
-    client.from('competitions').select('*, competition_entries(id,user_id,team_id,played,won,lost,points_for,points_against,standing_points,profiles(display_name),teams(name,tag)), competition_bracket_matches(*)').in('status', ['registration', 'active']).order('starts_on').limit(20),
-    client.from('venue_programs').select('*, venues(name), profiles!venue_programs_coach_id_fkey(display_name), program_registrations(user_id,status)').eq('registration_status', 'open').gt('starts_at', now).order('starts_at').limit(30),
+    client.from('competitions').select('*, venues(verification_status,active), competition_divisions(*, competition_entries(id,competition_division_id,user_id,team_id,status,eligibility_status,played,won,lost,points_for,points_against,standing_points,profiles(display_name),teams(name,tag)), competition_bracket_matches(*))').in('status', ['registration', 'active']).order('starts_on').limit(20),
+    client.from('venue_programs').select('*, venues(name,verification_status,active), profiles!venue_programs_coach_id_fkey(display_name), program_registrations(user_id,status)').eq('registration_status', 'open').gt('starts_at', now).order('starts_at').limit(30),
     client.from('player_memberships').select('*, membership_products(*, venues(name))').eq('user_id', user.id).in('status', ['pending', 'active', 'paused']).order('expires_at'),
-    client.from('membership_products').select('*, venues(name)').eq('active', true).order('created_at', { ascending: false }).limit(30),
+    client.from('membership_products').select('*, venues(name,verification_status,active)').eq('active', true).order('created_at', { ascending: false }).limit(30),
     client.from('matches').select('id,match_type,mode,verification_status,result_revision,ended_at,venue_id,court_id,venues(name),courts(name),match_participants(user_id,side,position,profiles(display_name)),match_games(home_score,away_score,winner_side),match_result_confirmations(user_id,decision)').eq('status', 'completed').order('ended_at', { ascending: false }).limit(100),
     client.from('team_challenges').select('*, challenger:teams!team_challenges_challenger_team_id_fkey(id,name,tag), challenged:teams!team_challenges_challenged_team_id_fkey(id,name,tag), venues(name)').in('status', ['pending', 'accepted']).order('starts_at'),
     client.from('teams').select('id,name,tag,is_discoverable,team_members(user_id,role)').neq('status', 'archived').order('name'),
   ]);
-  const results = [profile, ratings, availability, posts, competitions, programs, memberships, products, matches, challenges, teams];
+  const results = [profile, ratings, posts, competitions, programs, memberships, products, matches, challenges, teams];
   const failed = results.find((result) => result.error);
   if (failed) throw failed.error;
   return {
     userId: user.id,
     profile: profile.data,
     ratings: ratings.data || [],
-    availability: availability.data || [],
     posts: posts.data || [],
-    competitions: competitions.data || [],
-    programs: programs.data || [],
+    competitions: (competitions.data || []).filter((item) => item.venues?.verification_status === 'verified' && item.venues?.active),
+    programs: (programs.data || []).filter((item) => item.venues?.verification_status === 'verified' && item.venues?.active),
     memberships: memberships.data || [],
-    products: products.data || [],
+    products: (products.data || []).filter((item) => item.venues?.verification_status === 'verified' && item.venues?.active),
     pendingResults: (matches.data || []).filter((match) => ['unverified', 'pending', 'disputed'].includes(match.verification_status) && match.match_participants?.some((participant) => participant.user_id === user.id)),
     performance: buildPerformance(matches.data || [], user.id),
     challenges: challenges.data || [],
@@ -87,19 +99,6 @@ export async function updatePickleballPrivacy(settings) {
   });
   if (error) throw error;
   return data;
-}
-
-export async function publishAvailability({ startsAt, endsAt, area, formats = ['doubles'], recurringRule = null, note = '' }) {
-  const client = requireSupabase();
-  const user = await currentUser(client);
-  const { data, error } = await client.from('player_availability').insert({ user_id: user.id, starts_at: startsAt, ends_at: endsAt, area, formats, recurring_rule: recurringRule, note: note || null }).select().single();
-  if (error) throw error;
-  return data;
-}
-
-export async function removeAvailability(id) {
-  const { error } = await requireSupabase().from('player_availability').delete().eq('id', id);
-  if (error) throw error;
 }
 
 export async function publishMatchRequest({ kind, format = 'doubles', startsAt, endsAt = null, area, venueId = null, minimumRating = null, maximumRating = null, note = '', teamId = null }) {
@@ -155,10 +154,12 @@ export async function joinProgram(programId) {
   return data;
 }
 
-export async function joinCompetition(competitionId, teamId = null) {
-  const client = requireSupabase();
-  const user = await currentUser(client);
-  const { data, error } = await client.from('competition_entries').insert({ competition_id: competitionId, user_id: teamId ? null : user.id, team_id: teamId }).select().single();
+export async function joinCompetition(competitionId, divisionId, teamId = null) {
+  const { data, error } = await requireSupabase().rpc('register_for_competition_division', {
+    p_competition_id: competitionId,
+    p_division_id: divisionId,
+    p_team_id: teamId,
+  });
   if (error) throw error;
   return data;
 }
@@ -186,39 +187,143 @@ export async function respondTeamChallenge(challengeId, accept) {
 export async function loadOrganizerPickleballHub(venues) {
   const client = requireSupabase();
   const venueIds = venues.map((venue) => venue.id);
-  if (!venueIds.length) return { programs: [], competitions: [], products: [], analytics: null };
-  const [programs, competitions, products] = await Promise.all([
+  if (!venueIds.length) return { programs: [], competitions: [], competitionMatches: [], products: [], analytics: null };
+  const [programs, competitions, competitionMatches, products] = await Promise.all([
     client.from('venue_programs').select('*, program_registrations(status)').in('venue_id', venueIds).order('starts_at'),
-    client.from('competitions').select('*, competition_entries(id,status,played,won,lost,standing_points), competition_bracket_matches(*)').in('venue_id', venueIds).order('starts_on'),
+    client.from('competitions').select('*, competition_divisions(*, competition_entries(id,competition_division_id,user_id,team_id,status,eligibility_status,played,won,lost,points_for,points_against,standing_points,profiles(display_name),teams(name,tag)), competition_bracket_matches(*))').in('venue_id', venueIds).order('starts_on'),
+    client.from('matches').select('id,competition_id,competition_division_id,status,scheduled_at,started_at,ended_at,verification_status,team_home_id,team_away_id,match_games(game_number,home_score,away_score,winner_side),match_participants(user_id,side,position,profiles(display_name))').in('venue_id', venueIds).not('competition_id', 'is', null).order('scheduled_at'),
     client.from('membership_products').select('*, player_memberships(*, profiles(display_name))').in('venue_id', venueIds).order('created_at', { ascending: false }),
   ]);
-  return { programs: unwrap(programs), competitions: unwrap(competitions), products: unwrap(products) };
+  return { programs: unwrap(programs), competitions: unwrap(competitions), competitionMatches: unwrap(competitionMatches), products: unwrap(products) };
 }
 
 export async function createVenueProgram({ venueId, name, kind, skillDivision = 'all', startsAt, endsAt, capacity, price = 0, recurringRule = null, description = '' }) {
   const client = requireSupabase();
   const user = await currentUser(client);
+  await requireVerifiedPublishingVenue(client, venueId);
   const { data, error } = await client.from('venue_programs').insert({ venue_id: venueId, created_by: user.id, name, kind, skill_division: skillDivision, starts_at: startsAt, ends_at: endsAt, recurrence_rule: recurringRule, capacity, price, registration_status: 'open', description: description || null }).select().single();
   if (error) throw error;
   return data;
 }
 
-export async function createCompetition({ venueId, name, kind, format = 'doubles', startsOn, endsOn = null, capacity = 16, rules = '', visibility = 'public' }) {
+export const COMPETITION_FORMATS = Object.freeze(['singles', 'doubles']);
+export const COMPETITION_PARTICIPANT_DIVISIONS = Object.freeze(['open', 'women', 'men', 'mixed']);
+export const COMPETITION_SKILL_CATEGORIES = Object.freeze(['open', 'novice', 'intermediate', 'advanced']);
+export const COMPETITION_ENTRY_TYPES = Object.freeze(['player', 'team']);
+
+export async function createCompetition({ venueId, name, kind, startsOn, endsOn = null, divisions, rules = '', visibility = 'public', coverImage = '' }) {
+  if (!Array.isArray(divisions) || !divisions.length) throw new Error('Add at least one competition division.');
+  divisions.forEach((division) => {
+    if (!COMPETITION_FORMATS.includes(division.format)) throw new Error('Division format must be singles or doubles.');
+    if (!COMPETITION_PARTICIPANT_DIVISIONS.includes(division.participantDivision)) throw new Error('Choose a valid participant division.');
+    if (!COMPETITION_SKILL_CATEGORIES.includes(division.skillCategory)) throw new Error('Choose a valid skill category.');
+    if (!COMPETITION_ENTRY_TYPES.includes(division.entryType)) throw new Error('Choose player or team entries.');
+  });
   const client = requireSupabase();
-  const user = await currentUser(client);
-  const { data, error } = await client.from('competitions').insert({ venue_id: venueId, organizer_id: user.id, name, kind, format, status: 'registration', starts_on: startsOn, ends_on: endsOn, capacity, rules: rules || null, visibility }).select().single();
+  await requireVerifiedPublishingVenue(client, venueId);
+  const { data, error } = await client.rpc('create_competition_with_divisions', {
+    p_venue_id: venueId,
+    p_name: name,
+    p_kind: kind,
+    p_starts_on: startsOn,
+    p_ends_on: endsOn,
+    p_rules: rules || null,
+    p_visibility: visibility,
+    p_divisions: divisions,
+  });
+  if (error) throw error;
+  const created = Array.isArray(data) ? data[0] : data;
+  return coverImage ? saveCompetitionCover(created.id, coverImage) : created;
+}
+
+export async function seedTournamentBracket(competitionId, divisionId) {
+  const { data, error } = await requireSupabase().rpc('seed_tournament_division_bracket_ready', {
+    p_competition_id: competitionId,
+    p_division_id: divisionId,
+  });
   if (error) throw error;
   return data;
 }
 
-export async function seedTournamentBracket(competitionId) {
-  const { data, error } = await requireSupabase().rpc('seed_tournament_bracket', { p_competition_id: competitionId });
+export async function reviewCompetitionEntry(entryId, approve) {
+  const { data, error } = await requireSupabase().rpc('review_competition_entry', {
+    p_entry_id: entryId,
+    p_approve: approve,
+  });
+  if (error) throw error;
+  return data;
+}
+
+export async function updateCompetitionDetails({ competitionId, name, startsOn, endsOn = null, visibility = 'public', rules = '' }) {
+  const { data, error } = await requireSupabase().rpc('update_competition_details', {
+    p_competition_id: competitionId,
+    p_name: name,
+    p_starts_on: startsOn,
+    p_ends_on: endsOn,
+    p_visibility: visibility,
+    p_rules: rules || null,
+  });
+  if (error) throw error;
+  return data;
+}
+
+export async function setCompetitionStatus(competitionId, status) {
+  const { data, error } = await requireSupabase().rpc('set_competition_status', {
+    p_competition_id: competitionId,
+    p_status: status,
+  });
+  if (error) throw error;
+  return data;
+}
+
+export async function setCompetitionDivisionStatus(divisionId, status) {
+  const { data, error } = await requireSupabase().rpc('set_competition_division_status', {
+    p_division_id: divisionId,
+    p_status: status,
+  });
+  if (error) throw error;
+  return data;
+}
+
+export async function updateCompetitionDivisionDetails({ divisionId, name, capacity, feeAmount, feeBasis }) {
+  const { data, error } = await requireSupabase().rpc('update_competition_division_details', {
+    p_division_id: divisionId,
+    p_name: name,
+    p_capacity: Number(capacity),
+    p_fee_amount: Number(feeAmount),
+    p_fee_basis: feeBasis,
+  });
+  if (error) throw error;
+  return data;
+}
+
+export async function scheduleCompetitionMatch({ competitionId, divisionId, homeEntryId, awayEntryId, scheduledAt, bracketMatchId = null }) {
+  const { data, error } = await requireSupabase().rpc('schedule_competition_match', {
+    p_competition_id: competitionId,
+    p_division_id: divisionId,
+    p_home_entry_id: homeEntryId,
+    p_away_entry_id: awayEntryId,
+    p_scheduled_at: scheduledAt,
+    p_bracket_match_id: bracketMatchId,
+  });
+  if (error) throw error;
+  return data;
+}
+
+export async function recordCompetitionMatchResult(matchId, homeScore, awayScore) {
+  const { data, error } = await requireSupabase().rpc('record_competition_match_result', {
+    p_match_id: matchId,
+    p_home_score: Number(homeScore),
+    p_away_score: Number(awayScore),
+  });
   if (error) throw error;
   return data;
 }
 
 export async function createMembershipProduct({ venueId, name, kind, price, credits = 0, discountPercent = 0, validityDays = 30, terms = '' }) {
-  const { data, error } = await requireSupabase().from('membership_products').insert({ venue_id: venueId, name, kind, price, credits, discount_percent: discountPercent, validity_days: validityDays, terms: terms || null }).select().single();
+  const client = requireSupabase();
+  await requireVerifiedPublishingVenue(client, venueId);
+  const { data, error } = await client.from('membership_products').insert({ venue_id: venueId, name, kind, price, credits, discount_percent: discountPercent, validity_days: validityDays, terms: terms || null }).select().single();
   if (error) throw error;
   return data;
 }

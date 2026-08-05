@@ -1,10 +1,12 @@
-import React from 'react';
-import { ActivityIndicator, StyleSheet, Text, View } from 'react-native';
-import { DarkTheme, DefaultTheme, NavigationContainer } from '@react-navigation/native';
+import React, { useEffect, useRef } from 'react';
+import { Animated, Easing, StyleSheet, Text, View } from 'react-native';
+import { DarkTheme, DefaultTheme, NavigationContainer, useNavigationContainerRef } from '@react-navigation/native';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
+import * as SplashScreen from 'expo-splash-screen';
+import * as Notifications from 'expo-notifications';
 import AppNavigator from './src/navigation/AppNavigator';
 import { LocationProvider } from './src/context/LocationContext';
-import { AppModeProvider } from './src/context/AppModeContext';
+import { AppModeProvider, useAppMode } from './src/context/AppModeContext';
 import { OpenPlaySessionProvider } from './src/context/OpenPlaySessionContext';
 import { OrganizerPassProvider } from './src/context/OrganizerPassContext';
 import { AuthProvider, useAuth } from './src/context/AuthContext';
@@ -15,34 +17,213 @@ import { NearbyPlayersProvider } from './src/context/NearbyPlayersContext';
 import MatchInviteOverlay from './src/components/MatchInviteOverlay';
 
 const colors = { ink: '#0E2321', optic: '#D6E94A', surface: '#FFFFFF' };
+const BALL_IMAGE = require('./public/images/ball_green.png');
+SplashScreen.setOptions({ duration: 180, fade: true });
 const linking = {
   prefixes: ['peakle://'],
-  config: { screens: { Play: 'open-play/:openPlayCode' } },
+  config: { screens: { Play: 'open-play/:openPlayCode', Inbox: 'messages', DirectChat: 'messages/:conversationId' } },
 };
 
-function LaunchScreen() {
+function LaunchScreen({ edition = 'player', fromEdition = null, overlay = false, status = 'GETTING THE COURT READY' }) {
+  const bounce = useRef(new Animated.Value(0)).current;
+  const screenOpacity = useRef(new Animated.Value(overlay ? 0 : 1)).current;
+  const initialEdition = useRef(fromEdition).current;
+  const editionProgress = useRef(new Animated.Value(initialEdition && initialEdition !== edition ? 0 : 1)).current;
+  const statusProgress = useRef(new Animated.Value(overlay ? 0 : 1)).current;
+
+  useEffect(() => {
+    const animation = Animated.loop(
+      Animated.sequence([
+        Animated.timing(bounce, { toValue: 1, duration: 420, easing: Easing.out(Easing.cubic), useNativeDriver: true }),
+        Animated.timing(bounce, { toValue: 0, duration: 310, easing: Easing.in(Easing.quad), useNativeDriver: true }),
+        Animated.timing(bounce, { toValue: 0.32, duration: 170, easing: Easing.out(Easing.quad), useNativeDriver: true }),
+        Animated.timing(bounce, { toValue: 0, duration: 140, easing: Easing.in(Easing.quad), useNativeDriver: true }),
+        Animated.delay(100),
+      ]),
+    );
+    animation.start();
+    return () => animation.stop();
+  }, [bounce]);
+
+  useEffect(() => {
+    if (!overlay) return undefined;
+    const overlayAnimation = Animated.sequence([
+      Animated.timing(screenOpacity, {
+        toValue: 1,
+        duration: 140,
+        easing: Easing.out(Easing.cubic),
+        useNativeDriver: true,
+      }),
+      Animated.delay(500),
+      Animated.timing(screenOpacity, {
+        toValue: 0,
+        duration: 180,
+        easing: Easing.in(Easing.cubic),
+        useNativeDriver: true,
+      }),
+    ]);
+    overlayAnimation.start();
+    return () => overlayAnimation.stop();
+  }, [overlay, screenOpacity]);
+
+  useEffect(() => {
+    const copyAnimation = Animated.parallel([
+      Animated.timing(editionProgress, {
+        toValue: 1,
+        duration: 420,
+        easing: Easing.inOut(Easing.cubic),
+        useNativeDriver: true,
+      }),
+      Animated.sequence([
+        Animated.delay(70),
+        Animated.timing(statusProgress, {
+          toValue: 1,
+          duration: 360,
+          easing: Easing.out(Easing.cubic),
+          useNativeDriver: true,
+        }),
+      ]),
+    ]);
+    copyAnimation.start();
+    return () => copyAnimation.stop();
+  }, [editionProgress, statusProgress]);
+
+  const heightStyle = {
+    transform: [{ translateY: bounce.interpolate({ inputRange: [0, 1], outputRange: [0, -64] }) }],
+  };
+  const shadowStyle = {
+    opacity: bounce.interpolate({ inputRange: [0, 1], outputRange: [0.32, 0.1] }),
+    transform: [{ scaleX: bounce.interpolate({ inputRange: [0, 1], outputRange: [1, 0.4] }) }],
+  };
+  const trailStyle = {
+    opacity: bounce.interpolate({ inputRange: [0, 0.08, 0.75, 1], outputRange: [0, 0.8, 0.55, 0.15] }),
+  };
+  const incomingEditionStyle = {
+    opacity: editionProgress,
+    transform: [
+      { translateY: editionProgress.interpolate({ inputRange: [0, 1], outputRange: [7, 0] }) },
+      { scale: editionProgress.interpolate({ inputRange: [0, 1], outputRange: [0.94, 1] }) },
+    ],
+  };
+  const outgoingEditionStyle = {
+    opacity: editionProgress.interpolate({ inputRange: [0, 1], outputRange: [1, 0] }),
+    transform: [{ translateY: editionProgress.interpolate({ inputRange: [0, 1], outputRange: [0, -7] }) }],
+  };
+  const statusStyle = {
+    opacity: statusProgress,
+    transform: [{ translateY: statusProgress.interpolate({ inputRange: [0, 1], outputRange: [5, 0] }) }],
+  };
+  const editionTextStyle = (value) => value === 'organizer' ? styles.launchOrganizer : styles.launchPlayerPro;
+  const editionLabel = (value) => value === 'organizer' ? 'ORG' : value === 'player' ? 'PRO' : '';
+
   return (
-    <View style={styles.launchScreen} accessibilityLabel="Peakle is starting">
-      <View style={styles.launchMark}><Text style={styles.launchLetter}>P</Text></View>
-      <Text style={styles.launchName}>Peakle</Text>
-      <ActivityIndicator color={colors.optic} style={styles.launchSpinner} />
-    </View>
+    <Animated.View accessibilityLabel={overlay ? 'Peakle is changing workspaces' : 'Peakle is starting'} accessibilityViewIsModal={overlay} style={[styles.launchScreen, overlay && styles.launchScreenOverlay, { opacity: screenOpacity }]}>
+      <View style={styles.launchBallStage}>
+        <Animated.View style={[styles.launchBallShadow, shadowStyle]} />
+        <Animated.View pointerEvents="none" style={[styles.launchMotionTrails, trailStyle]}>
+          <View style={styles.launchMotionLineShort} />
+          <View style={styles.launchMotionLineTall} />
+        </Animated.View>
+        <Animated.Image accessibilityIgnoresInvertColors accessible={false} source={BALL_IMAGE} style={[styles.launchBall, heightStyle]} resizeMode="contain" />
+      </View>
+      <View style={styles.launchBrand}>
+        <Text style={styles.launchName}>Peakle</Text>
+        {edition ? <View style={styles.launchEditionSlot}>
+          {initialEdition && initialEdition !== edition ? <Animated.Text style={[styles.launchEditionText, editionTextStyle(initialEdition), outgoingEditionStyle]}>{editionLabel(initialEdition)}</Animated.Text> : null}
+          <Animated.Text style={[styles.launchEditionText, editionTextStyle(edition), incomingEditionStyle]}>{editionLabel(edition)}</Animated.Text>
+        </View> : null}
+      </View>
+      <Animated.Text style={[styles.launchStatus, statusStyle]}>{status}</Animated.Text>
+    </Animated.View>
   );
 }
 
 function Root() {
   const { user, hydrated: authHydrated, passwordRecovery } = useAuth();
   const { isDark } = useTheme();
+  const { mode, setMode, hydrated: modeHydrated, isModeSwitching, canUseOrganizerMode, passHydrated } = useAppMode();
+  const navigationRef = useNavigationContainerRef();
+  const previousMode = useRef(mode);
+  const hasFinishedLaunch = useRef(false);
+  const handledNotificationResponse = useRef(null);
+  const pendingJoinedMatch = useRef(null);
+  const expectedMode = user?.mode === 'organizer' && canUseOrganizerMode ? 'organizer' : 'player';
+  const startupReady = authHydrated && modeHydrated && passHydrated && (!user || mode === expectedMode);
+  if (startupReady) hasFinishedLaunch.current = true;
   const navigationTheme = isDark ? {
     ...DarkTheme,
     colors: { ...DarkTheme.colors, primary: colors.optic, background: colors.ink, card: '#17302D', text: '#F3F5EF', border: '#304743' },
   } : DefaultTheme;
 
-  if (!authHydrated) return <LaunchScreen />;
+  useEffect(() => {
+    if (previousMode.current === mode) return undefined;
+    previousMode.current = mode;
+    const dashboardRoute = mode === 'organizer' ? 'Overview' : 'Home';
+    const frame = requestAnimationFrame(() => {
+      if (navigationRef.isReady()) {
+        navigationRef.resetRoot({ index: 0, routes: [{ name: dashboardRoute }] });
+        if (mode === 'player' && pendingJoinedMatch.current) {
+          const params = pendingJoinedMatch.current;
+          pendingJoinedMatch.current = null;
+          navigationRef.navigate('Play', params);
+        }
+      }
+    });
+    return () => cancelAnimationFrame(frame);
+  }, [mode, navigationRef]);
+
+  const openAcceptedMatch = (invite) => {
+    const params = { joinedMatchToken: `${invite?.id || 'match'}-${Date.now()}`, joinedInviteId: invite?.id || null };
+    if (mode !== 'player') {
+      pendingJoinedMatch.current = params;
+      setMode('player');
+      return;
+    }
+    if (navigationRef.isReady()) navigationRef.navigate('Play', params);
+    else pendingJoinedMatch.current = params;
+  };
+
+  useEffect(() => {
+    if (!user?.id) return undefined;
+    const timers = new Set();
+    const openResponse = (response) => {
+      if (response?.actionIdentifier !== Notifications.DEFAULT_ACTION_IDENTIFIER) return;
+      const responseId = response?.notification?.request?.identifier;
+      const data = response?.notification?.request?.content?.data || {};
+      if (!data.conversationId || responseId === handledNotificationResponse.current) return;
+      if (mode !== 'player') {
+        setMode('player');
+        return;
+      }
+      handledNotificationResponse.current = responseId;
+      const open = () => {
+        if (!navigationRef.isReady()) {
+          const timer = setTimeout(open, 180);
+          timers.add(timer);
+          return;
+        }
+        navigationRef.navigate('DirectChat', {
+          conversationId: data.conversationId,
+          player: data.playerId ? { id: data.playerId } : undefined,
+          ownerTab: 'Team',
+        });
+        Notifications.clearLastNotificationResponseAsync().catch(() => {});
+      };
+      open();
+    };
+    Notifications.getLastNotificationResponseAsync().then(openResponse).catch(() => {});
+    const subscription = Notifications.addNotificationResponseReceivedListener(openResponse);
+    return () => {
+      subscription.remove();
+      timers.forEach(clearTimeout);
+    };
+  }, [mode, navigationRef, setMode, user?.id]);
+
+  if (!hasFinishedLaunch.current) return <LaunchScreen edition={null} />;
   if (passwordRecovery) return <AuthFlowScreen key="password-recovery" initialScreen="reset-password" />;
   if (!user) return <AuthFlowScreen key="login" initialScreen="login" />;
   if (!user.onboardingCompleted) return <AuthFlowScreen key={`new-user-setup-${user.id}`} initialScreen="new-user-overview" />;
-  return <View style={styles.appShell}><NavigationContainer theme={navigationTheme} linking={linking}><AppNavigator /></NavigationContainer><MatchInviteOverlay /></View>;
+  return <View style={styles.appShell}><NavigationContainer ref={navigationRef} theme={navigationTheme} linking={linking}><AppNavigator /></NavigationContainer><MatchInviteOverlay onAccepted={openAcceptedMatch} />{isModeSwitching ? <LaunchScreen edition={mode === 'organizer' ? 'organizer' : 'player'} fromEdition={previousMode.current} overlay status={mode === 'organizer' ? 'OPENING ORGANIZER WORKSPACE' : 'OPENING PLAYER WORKSPACE'} /> : null}</View>;
 }
 
 export default function App() {
@@ -72,8 +253,18 @@ export default function App() {
 const styles = StyleSheet.create({
   appShell: { flex: 1 },
   launchScreen: { flex: 1, alignItems: 'center', justifyContent: 'center', backgroundColor: colors.ink },
-  launchMark: { width: 50, height: 50, borderRadius: 25, alignItems: 'center', justifyContent: 'center', backgroundColor: colors.optic },
-  launchLetter: { color: colors.ink, fontSize: 24, fontWeight: '900' },
-  launchName: { marginTop: 12, color: colors.surface, fontSize: 22, fontWeight: '900', letterSpacing: -0.7 },
-  launchSpinner: { marginTop: 24 },
+  launchScreenOverlay: { ...StyleSheet.absoluteFillObject, zIndex: 1000 },
+  launchBallStage: { width: 112, height: 112, alignItems: 'center', justifyContent: 'flex-end' },
+  launchBall: { position: 'absolute', bottom: 13, width: 68, height: 68 },
+  launchBallShadow: { width: 48, height: 9, marginBottom: 7, borderRadius: 24, backgroundColor: '#000000' },
+  launchMotionTrails: { position: 'absolute', bottom: 31, flexDirection: 'row', alignItems: 'flex-end', gap: 12 },
+  launchMotionLineShort: { width: 3, height: 11, borderRadius: 2, backgroundColor: colors.optic },
+  launchMotionLineTall: { width: 3, height: 19, borderRadius: 2, backgroundColor: colors.optic },
+  launchBrand: { marginTop: 8, flexDirection: 'row', alignItems: 'center', gap: 7 },
+  launchName: { color: colors.surface, fontSize: 24, fontWeight: '900', letterSpacing: -0.8 },
+  launchEditionSlot: { width: 29, height: 16, justifyContent: 'center' },
+  launchEditionText: { position: 'absolute', left: 0 },
+  launchOrganizer: { color: '#D7B449', fontSize: 10, fontWeight: '900', letterSpacing: 1.2 },
+  launchPlayerPro: { color: '#DDE4E8', fontSize: 10, fontWeight: '900', letterSpacing: 1.2, textShadowColor: 'rgba(255,255,255,.9)', textShadowOffset: { width: 0, height: 0 }, textShadowRadius: 6 },
+  launchStatus: { marginTop: 9, color: colors.optic, fontSize: 8, fontWeight: '900', letterSpacing: 1.4 },
 });

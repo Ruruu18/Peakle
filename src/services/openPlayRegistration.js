@@ -58,11 +58,52 @@ export function mapOpenPlaySession(row) {
   };
 }
 
+export function mapOpenPlayMatch(row) {
+  if (!row) return null;
+  return {
+    id: row.id,
+    status: row.status,
+    courtId: row.court_id,
+    courtNumber: Number(row.court_number || 0),
+    courtName: row.court_name || `Court ${row.court_number || ''}`.trim(),
+    matchFormat: row.match_format || 'doubles',
+    scores: [Number(row.home_score || 0), Number(row.away_score || 0)],
+    serverSide: Number(row.server_side || 0),
+    servingPosition: Number(row.serving_position || 0),
+    serviceNumber: Number(row.service_number ?? (row.match_format === 'doubles' ? 2 : 1)),
+    canUndo: Boolean(row.can_undo),
+    lastEvent: row.last_event || null,
+    startedAt: row.started_at,
+    scorerPlayerId: row.scorer_player_id,
+    scorerName: row.scorer_name || 'Assigned scorer',
+    canScore: Boolean(row.can_score),
+    players: (row.players || []).map((player) => ({
+      id: player.player_id,
+      userId: player.user_id,
+      name: player.name || 'Guest player',
+      avatar: player.avatar_url || null,
+      side: Number(player.side || 0),
+      position: Number(player.position || 0),
+      isMe: Boolean(player.is_me),
+      isScorer: Boolean(player.is_scorer),
+    })),
+  };
+}
+
 export async function createOpenPlaySession(details) {
-  const { data, error } = await requireSupabase().rpc('create_open_play_session', {
+  const scheduledStart = new Date(details.scheduledStart);
+  const scheduledEnd = new Date(details.scheduledEnd);
+  if (Number.isNaN(scheduledStart.getTime()) || Number.isNaN(scheduledEnd.getTime()) || scheduledEnd <= scheduledStart) {
+    throw new Error('Choose a valid session schedule.');
+  }
+  if (scheduledStart <= new Date()) {
+    throw new Error('Choose a start time that has not passed yet.');
+  }
+  const client = requireSupabase();
+  const { data, error } = await client.rpc('create_open_play_session', {
     p_name: details.name.trim(),
     p_venue_id: details.venueId,
-    p_court_count: details.courtCount,
+    p_court_ids: details.courtIds,
     p_capacity: details.capacity,
     p_visibility: details.visibility,
     p_approval_mode: details.approvalMode,
@@ -74,12 +115,34 @@ export async function createOpenPlaySession(details) {
     p_rules: details.rules,
     p_cancellation_policy: details.cancellationPolicy,
     p_match_format: details.matchFormat || 'doubles',
+    p_court_formats: details.courtFormats || details.courtIds.map(() => details.matchFormat || 'doubles'),
     p_average_match_minutes: details.averageMatchMinutes || 15,
     p_max_consecutive_games: details.maxConsecutiveGames ?? 2,
     p_rest_minutes: details.restMinutes || 0,
   });
   if (error) throw error;
-  return single(data);
+  const session = single(data);
+  if (!session?.id) throw new Error('The session could not be published.');
+  const { data: sessionCourts, error: courtsError } = await client
+    .from('open_play_courts')
+    .select('*, venue_court:courts(name)')
+    .eq('session_id', session.id)
+    .order('court_number');
+  // The RPC has already committed the session and its courts. A transient
+  // follow-up read must not make the organizer retry and create a duplicate
+  // session (or see their newly reserved courts as unavailable).
+  const fallbackCourts = details.courtIds.map((venueCourtId, index) => ({
+    id: `${session.id}-court-${index + 1}`,
+    session_id: session.id,
+    court_number: index + 1,
+    venue_court_id: venueCourtId,
+    match_format: details.courtFormats?.[index] || details.matchFormat || 'doubles',
+    venue_court: null,
+  }));
+  return {
+    ...session,
+    sessionCourts: courtsError || sessionCourts?.length !== details.courtIds.length ? fallbackCourts : sessionCourts,
+  };
 }
 
 export async function listDiscoverableOpenPlaySessions() {
@@ -97,10 +160,14 @@ export async function getOpenPlaySession({ sessionId = null, code = null } = {})
   if (error) throw error;
   const mapped = mapOpenPlaySession(single(data));
   if (!mapped?.id) return mapped;
-  const { data: liveState, error: liveError } = await client.rpc('get_open_play_live_state', { p_session_id: mapped.id });
+  const [{ data: liveState, error: liveError }, { data: activeMatch, error: matchError }] = await Promise.all([
+    client.rpc('get_open_play_live_state', { p_session_id: mapped.id }),
+    client.rpc('get_my_open_play_match', { p_session_id: mapped.id }),
+  ]);
   // Live state is intentionally registration-gated. Session discovery and
   // invitation previews still work before a player joins.
   if (!liveError && liveState) mapped.liveState = single(liveState);
+  if (!matchError && activeMatch) mapped.liveState = { ...(mapped.liveState || {}), activeMatch: mapOpenPlayMatch(single(activeMatch)) };
   return mapped;
 }
 
@@ -192,6 +259,43 @@ export async function completeFairPlayMatch({ matchId, doneIds = [], scores = [0
     p_away_score: scores[1],
     p_winner_side: winner,
     p_ended_at: endedAt,
+  });
+  if (error) throw error;
+  return single(data);
+}
+
+export async function updateOpenPlayMatchScore(matchId, scores) {
+  const { data, error } = await requireSupabase().rpc('update_open_play_match_score', {
+    p_match_id: matchId,
+    p_home_score: Number(scores[0]),
+    p_away_score: Number(scores[1]),
+  });
+  if (error) throw error;
+  return single(data);
+}
+
+export async function recordOpenPlayRally(matchId, winningSide) {
+  const { data, error } = await requireSupabase().rpc('record_open_play_rally', {
+    p_match_id: matchId,
+    p_winning_side: Number(winningSide),
+  });
+  if (error) throw error;
+  return single(data);
+}
+
+export async function undoOpenPlayRally(matchId) {
+  const { data, error } = await requireSupabase().rpc('undo_open_play_rally', {
+    p_match_id: matchId,
+  });
+  if (error) throw error;
+  return single(data);
+}
+
+export async function completeOpenPlayMatchByScorer(matchId, scores) {
+  const { data, error } = await requireSupabase().rpc('complete_open_play_match_by_scorer', {
+    p_match_id: matchId,
+    p_home_score: Number(scores[0]),
+    p_away_score: Number(scores[1]),
   });
   if (error) throw error;
   return single(data);

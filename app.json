@@ -12,6 +12,7 @@
     "backgroundColor": "#F3F5EF",
     "splash": {
       "backgroundColor": "#0E2321",
+      "image": "./public/images/ball_green.png",
       "resizeMode": "contain"
     },
     "ios": {
@@ -60,6 +61,22 @@
         }
       ],
       [
+        "expo-image-picker",
+        {
+          "photosPermission": "Allow Peakle to access your photos so you can choose a profile picture."
+        }
+      ],
+      [
+        "expo-media-library",
+        {
+          "photosPermission": "Allow Peakle to access your photos.",
+          "savePhotosPermission": "Allow Peakle to save your completed match cards to Photos.",
+          "granularPermissions": [
+            "photo"
+          ]
+        }
+      ],
+      [
         "expo-notifications",
         {
           "icon": "./public/images/ball.png",
@@ -67,7 +84,17 @@
           "defaultChannel": "open-play"
         }
       ],
-      "expo-web-browser"
+      [
+        "expo-splash-screen",
+        {
+          "backgroundColor": "#0E2321",
+          "image": "./public/images/ball_green.png",
+          "imageWidth": 68,
+          "resizeMode": "contain"
+        }
+      ],
+      "expo-web-browser",
+      "expo-video"
     ],
     "extra": {
       "eas": {

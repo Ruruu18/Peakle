@@ -2,6 +2,18 @@
 
 React Native implementation of Peakle, backed by Supabase for authentication and persistent app data.
 
+## Organizer web portal
+
+The responsive Next.js organizer workspace now lives in [`organizer-web`](./organizer-web). It shares Peakle authentication and backend permissions while providing desktop, tablet, and mobile-web layouts for venue operations, open play, players, competitions, memberships, analytics, and staff access.
+
+```bash
+cd organizer-web
+npm install
+npm run dev
+```
+
+See [`organizer-web/README.md`](./organizer-web/README.md) for authentication redirects, deployment configuration, verification commands, and the migration handoff.
+
 ## Screens
 
 - `HomeScreen` — implemented dashboard

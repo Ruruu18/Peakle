@@ -73,7 +73,7 @@ export function rankFairPlayQueue(session, now = Date.now()) {
     const gameDeficit = mostGames - gamesPlayed;
     const consecutiveGames = Number(player.consecutiveGames || 0);
     const priorityBoost = Number(player.priorityBoost || 0);
-    const preferenceMatch = !player.playPreference || player.playPreference === 'either' || player.playPreference === rules.matchFormat;
+    const preferenceMatch = rules.matchFormat === 'mixed' || !player.playPreference || player.playPreference === 'either' || player.playPreference === rules.matchFormat;
     const restUntil = playerRestUntil(player, rules);
     const eligible = restUntil <= now && (rules.maxConsecutiveGames <= 0 || consecutiveGames < rules.maxConsecutiveGames || candidates.every((item) => Number(item.consecutiveGames || 0) >= rules.maxConsecutiveGames));
     const score = gameDeficit * rules.gameDeficitWeight

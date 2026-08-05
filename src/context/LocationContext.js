@@ -1,6 +1,7 @@
 import React, { createContext, useCallback, useContext, useEffect, useMemo, useState } from 'react';
 import * as Location from 'expo-location';
 import { useAuth } from './AuthContext';
+import { knownLocationCoordinates } from '../data/phLocations';
 
 const DEFAULT_LOCATION = {
   latitude: null,
@@ -11,34 +12,84 @@ const DEFAULT_LOCATION = {
 
 const LocationContext = createContext(null);
 
+function locationAccessError(code, message) {
+  const error = new Error(message);
+  error.code = code;
+  return error;
+}
+
+export function locationErrorMessage(error) {
+  if (error?.code === 'LOCATION_SERVICES_DISABLED') {
+    return 'Your phone location service is off. Turn it on, then try again.';
+  }
+  if (error?.code === 'LOCATION_PERMISSION_DENIED') {
+    return 'Peakle does not have location permission. Allow location for Peakle in your phone settings, then try again.';
+  }
+  return 'Peakle could not get a GPS fix. Move to an open area and try again.';
+}
+
 function addressLabel(address) {
-  const parts = [address?.district || address?.subregion, address?.city || address?.region, address?.country].filter(Boolean);
-  return [...new Set(parts)].slice(0, 2).join(', ') || 'Current location';
+  const parts = [address?.city || address?.district || address?.subregion, address?.region, address?.country]
+    .filter(Boolean)
+    .filter((part, index, values) => values.findIndex((value) => value.toLocaleLowerCase() === part.toLocaleLowerCase()) === index);
+  return parts.join(' · ') || 'Current location';
 }
 
 export async function geocodeArea(query) {
-  const clean = query?.trim();
+  const clean = typeof query === 'string' ? query.trim() : '';
   if (!clean) return null;
-  const [coords] = await Location.geocodeAsync(clean);
-  return coords ? { latitude: coords.latitude, longitude: coords.longitude } : null;
+  const knownCoordinates = knownLocationCoordinates(clean);
+  if (knownCoordinates) return knownCoordinates;
+  const structuredParts = clean.split(/\s*·\s*/).map((part) => part.trim()).filter(Boolean);
+  const queries = structuredParts.length >= 2
+    ? [
+      structuredParts.join(', '),
+      [structuredParts[0], structuredParts[structuredParts.length - 1]].filter(Boolean).join(', '),
+    ]
+    : [clean];
+  let geocoderResponded = false;
+  let lastError = null;
+
+  for (const placeQuery of [...new Set(queries)]) {
+    try {
+      const results = await Location.geocodeAsync(placeQuery);
+      geocoderResponded = true;
+      const coords = results.find((result) => (
+        [result?.latitude, result?.longitude].every(Number.isFinite)
+        && result.latitude >= -90
+        && result.latitude <= 90
+        && result.longitude >= -180
+        && result.longitude <= 180
+      ));
+      if (coords) return { latitude: coords.latitude, longitude: coords.longitude };
+    } catch (error) {
+      lastError = error;
+      // A region label may not be understood by every platform geocoder.
+      // Continue with the city + country fallback instead.
+    }
+  }
+  if (!geocoderResponded && lastError) throw lastError;
+  return null;
 }
 
 export function distanceInKm(from, to) {
   if (!from || !to || ![from.latitude, from.longitude, to.latitude, to.longitude].every(Number.isFinite)) return null;
-  const radius = 6371;
+  if (Math.abs(from.latitude) > 90 || Math.abs(to.latitude) > 90 || Math.abs(from.longitude) > 180 || Math.abs(to.longitude) > 180) return null;
+  const radius = 6371.0088;
   const radians = (value) => value * Math.PI / 180;
   const lat = radians(to.latitude - from.latitude);
   const lng = radians(to.longitude - from.longitude);
-  const value = Math.sin(lat / 2) ** 2
+  const haversine = Math.sin(lat / 2) ** 2
     + Math.cos(radians(from.latitude)) * Math.cos(radians(to.latitude)) * Math.sin(lng / 2) ** 2;
+  const value = Math.min(1, Math.max(0, haversine));
   return radius * 2 * Math.atan2(Math.sqrt(value), Math.sqrt(1 - value));
 }
 
 export function formatDistance(distance) {
-  if (!Number.isFinite(distance)) return 'Distance unavailable';
-  if (distance < 1) return `${Math.max(10, Math.round(distance * 1000 / 10) * 10)} m`;
-  if (distance < 10) return `${distance.toFixed(1)} km`;
-  return `${Math.round(distance)} km`;
+  if (!Number.isFinite(distance) || distance < 0) return 'Distance unavailable';
+  if (distance < 1) return `${Math.max(10, Math.round(distance * 1000 / 10) * 10).toLocaleString('en-US')} m`;
+  if (distance < 100) return `${distance.toFixed(1)} km`;
+  return `${Math.round(distance).toLocaleString('en-US')} km`;
 }
 
 export function LocationProvider({ children }) {
@@ -56,31 +107,52 @@ export function LocationProvider({ children }) {
     }
   }, []);
 
-  const useCurrentLocation = useCallback(async ({ quiet = false } = {}) => {
+  const getCurrentCoordinates = useCallback(async ({ requestPermission = false } = {}) => {
+    const servicesEnabled = await Location.hasServicesEnabledAsync();
+    if (!servicesEnabled) {
+      throw locationAccessError('LOCATION_SERVICES_DISABLED', 'Device location services are disabled.');
+    }
+
+    let permission = await Location.getForegroundPermissionsAsync();
+    if (permission.status !== 'granted' && requestPermission) {
+      permission = await Location.requestForegroundPermissionsAsync();
+    }
+    if (permission.status !== 'granted') {
+      throw locationAccessError('LOCATION_PERMISSION_DENIED', 'Foreground location permission was not granted.');
+    }
+
+    const result = await Location.getCurrentPositionAsync({
+      accuracy: Location.Accuracy.Highest,
+      mayShowUserSettingsDialog: true,
+    });
+    return {
+      latitude: result.coords.latitude,
+      longitude: result.coords.longitude,
+      accuracy: Number.isFinite(result.coords.accuracy) ? Math.max(0, result.coords.accuracy) : null,
+      timestamp: Number.isFinite(result.timestamp) ? result.timestamp : Date.now(),
+      source: 'gps',
+    };
+  }, []);
+
+  const useCurrentLocation = useCallback(async ({ quiet = false, throwOnError = false } = {}) => {
     setLoading(true);
     setError('');
     try {
-      let permission = await Location.getForegroundPermissionsAsync();
-      if (permission.status !== 'granted' && !quiet) permission = await Location.requestForegroundPermissionsAsync();
-      if (permission.status !== 'granted') {
-        if (!quiet) setError('Location permission is off. Search for a city or area instead.');
-        return false;
-      }
-      const result = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.High });
-      const coords = { latitude: result.coords.latitude, longitude: result.coords.longitude };
+      const coords = await getCurrentCoordinates({ requestPermission: !quiet });
       const label = await resolveAddress(coords);
       const located = { ...coords, label, source: 'gps' };
       setUserLocation(located);
       return located;
-    } catch {
-      if (!quiet) setError('We could not get your position. Check location services and try again.');
+    } catch (nextError) {
+      if (!quiet) setError(locationErrorMessage(nextError));
+      if (throwOnError) throw nextError;
       return false;
     } finally {
       setLoading(false);
     }
-  }, [resolveAddress]);
+  }, [getCurrentCoordinates, resolveAddress]);
 
-  const setManualLocation = useCallback(async (query) => {
+  const setManualLocation = useCallback(async (query, displayLabel = '') => {
     const clean = query.trim();
     if (!clean) return false;
     setLoading(true);
@@ -92,7 +164,7 @@ export function LocationProvider({ children }) {
         return false;
       }
       const label = await resolveAddress(coords, clean);
-      setUserLocation({ ...coords, label: label === 'Current location' ? clean : label, source: 'manual' });
+      setUserLocation({ ...coords, label: displayLabel.trim() || (label === 'Current location' ? clean : label), source: 'manual' });
       return true;
     } catch {
       setError('Place search is unavailable right now. Check your connection and try again.');
@@ -105,7 +177,10 @@ export function LocationProvider({ children }) {
 
   useEffect(() => {
     const homeArea = user?.location?.trim();
-    if (!homeArea) return undefined;
+    if (!homeArea) {
+      setUserLocation((current) => ['gps', 'manual'].includes(current.source) ? current : DEFAULT_LOCATION);
+      return undefined;
+    }
     let active = true;
     const applyProfileLocation = (coords) => {
       if (!active) return;
@@ -120,11 +195,43 @@ export function LocationProvider({ children }) {
     return () => { active = false; };
   }, [user?.location]);
 
+  // On mount: ask for permission and, if granted, apply the GPS location automatically.
   useEffect(() => {
-    useCurrentLocation({ quiet: true });
-  }, [useCurrentLocation]);
+    let active = true;
+    (async () => {
+      try {
+        const servicesEnabled = await Location.hasServicesEnabledAsync();
+        if (!servicesEnabled) return;
+        // Request permission — shows the native prompt if not yet decided.
+        const permission = await Location.requestForegroundPermissionsAsync();
+        if (!active || permission.status !== 'granted') return;
+        const result = await Location.getCurrentPositionAsync({
+          accuracy: Location.Accuracy.Balanced,
+          mayShowUserSettingsDialog: true,
+        });
+        if (!active) return;
+        const coords = {
+          latitude: result.coords.latitude,
+          longitude: result.coords.longitude,
+          accuracy: Number.isFinite(result.coords.accuracy) ? Math.max(0, result.coords.accuracy) : null,
+          timestamp: Number.isFinite(result.timestamp) ? result.timestamp : Date.now(),
+          source: 'gps',
+        };
+        const label = await resolveAddress(coords);
+        if (!active) return;
+        setUserLocation((current) =>
+          // Don't overwrite a manually-set location.
+          current.source === 'manual' ? current : { ...coords, label, source: 'gps' }
+        );
+      } catch {
+        // Permission denied or GPS unavailable — stay on default / profile location.
+      }
+    })();
+    return () => { active = false; };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
-  const value = useMemo(() => ({ userLocation, loading, error, useCurrentLocation, setManualLocation, clearError }), [userLocation, loading, error, useCurrentLocation, setManualLocation, clearError]);
+  const value = useMemo(() => ({ userLocation, loading, error, getCurrentCoordinates, useCurrentLocation, setManualLocation, clearError }), [userLocation, loading, error, getCurrentCoordinates, useCurrentLocation, setManualLocation, clearError]);
   return <LocationContext.Provider value={value}>{children}</LocationContext.Provider>;
 }
 

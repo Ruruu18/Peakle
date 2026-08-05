@@ -21,7 +21,9 @@ import ScrollView from '../components/FocusResetScrollView';
 import SectionList from '../components/FocusResetSectionList';
 import { distanceInKm, formatDistance, useUserLocation } from '../context/LocationContext';
 import { useAuth } from '../context/AuthContext';
+import { useOperations } from '../context/OperationsContext';
 import { createDarkStyleSheet, DARK_CONTENT_COLORS, useTheme } from '../context/ThemeContext';
+import { createMobileStyleSheet } from '../utils/mobileStyles';
 import {
   cancelBooking, createMultiCourtBooking, joinCourtWaitlist, listCourtAvailability, listMyBookingsPage,
   listTeams, listVenues, modifyBooking, quoteCourtBooking,
@@ -29,12 +31,27 @@ import {
 import * as Crypto from 'expo-crypto';
 import { getAvailableMapProviders, openMapProvider } from '../services/externalMaps';
 import { requireSupabase } from '../lib/supabase';
+import { peekCachedData, readCachedData, withTimeout, writeCachedData } from '../lib/asyncData';
+import { BOOKING_VENUES_CACHE_KEY, bookingsCacheKey } from '../lib/cacheKeys';
+import ResilientImage from '../components/ResilientImage';
 
 const LIGHT_C = {
   ink: '#0E2321', paper: '#F3F5EF', surface: '#FFFFFF', optic: '#D6E94A',
   teal: '#1C6B66', brick: '#B6472E', ink70: '#3C4A45', ink40: '#7C8983', line: '#DDE3DA',
 };
 let C = LIGHT_C;
+
+function presentVenue(venue) {
+  const courts = venue.courts || [];
+  const prices = courts.map((item) => Number(item.hourly_price)).filter(Number.isFinite);
+  return {
+    id: venue.id, name: venue.name, area: venue.area, address: venue.address, latitude: venue.latitude, longitude: venue.longitude,
+    rating: '—', reviews: 0, price: prices.length ? Math.min(...prices) : 0, courts: courts.length,
+    available: courts.filter((item) => item.active).length, hours: `${venue.opens_at?.slice(0, 5)}–${venue.closes_at?.slice(0, 5)}`,
+    type: venue.venue_type, color: venue.color || LIGHT_C.teal, brandImage: venue.brand_image_url || null, description: venue.description, amenities: venue.amenities || [], timeZone: venue.time_zone || 'Asia/Manila', cancellationCutoffMinutes: venue.cancellation_cutoff_minutes || 240,
+    courtOptions: courts.filter((item) => item.active).map((item) => ({ id: item.id, name: item.name, environment: item.environment, surface: item.surface, image: item.image_url || null, price: Number(item.hourly_price), available: true, next: 'Check times' })),
+  };
+}
 
 const TIMES = ['8:00 AM', '9:30 AM', '11:00 AM', '1:00 PM', '3:30 PM', '5:00 PM', '6:30 PM', '8:00 PM'];
 
@@ -155,10 +172,12 @@ function BookingTabs({ active, onChange }) {
   );
 }
 
-function CourtArt({ color, large = false }) {
+function CourtArt({ color, large = false, imageUrl = null, accessibilityLabel }) {
   return (
     <View style={[styles.courtArt, large && styles.courtArtLarge, { backgroundColor: color }]}>
-      <View style={styles.courtLines}><View style={styles.centerLine} /><View style={styles.crossLine} /><View style={[styles.crossLine, styles.crossLineTwo]} /></View>
+      {imageUrl
+        ? <ResilientImage uri={imageUrl} accessibilityLabel={accessibilityLabel} style={StyleSheet.absoluteFillObject} fallbackColor={color} />
+        : <View style={styles.courtLines}><View style={styles.centerLine} /><View style={styles.crossLine} /><View style={[styles.crossLine, styles.crossLineTwo]} /></View>}
       <View style={styles.availableBadge}><View style={styles.availableDot} /><Text style={styles.availableText}>AVAILABLE TODAY</Text></View>
     </View>
   );
@@ -210,7 +229,7 @@ function MapOptionsSheet({ destination, onClose }) {
 function CourtCard({ court, onPress }) {
   return (
     <Pressable onPress={onPress} style={({ pressed }) => [styles.courtCard, pressed && styles.pressed]}>
-      <CourtArt color={court.color} />
+      <CourtArt color={court.color} imageUrl={court.brandImage} accessibilityLabel={`${court.name} venue image`} />
       <View style={styles.cardBody}>
         <View style={styles.cardTitleRow}><Text style={styles.cardTitle}>{court.name}</Text><Text style={styles.price}>₱{court.price}<Text style={styles.perHour}>/hr</Text></Text></View>
         <View style={styles.meta}><Icon name="location-outline" size={14} color={C.ink40} /><Text style={styles.metaText}>{court.area} · {court.distance}</Text></View>
@@ -227,12 +246,16 @@ function Discovery({ courts, loading, error, onRetry, onSelect, onShowBookings, 
   const hasQuery = Boolean(query.trim());
   const filtered = useMemo(() => courts.map((court) => {
     const distanceKm = distanceInKm(userLocation, court);
-    return { ...court, distanceKm, distance: formatDistance(distanceKm) };
+    return {
+      ...court,
+      distanceKm,
+      distance: formatDistance(distanceKm),
+    };
   }).filter((court) => {
     const matchesQuery = `${court.name} ${court.area}`.toLowerCase().includes(query.toLowerCase());
     const matchesFilter = filter === 'All' || court.type === filter || (filter === 'Nearby' && court.distanceKm <= 25);
     return matchesQuery && matchesFilter;
-  }).sort((a, b) => a.distanceKm - b.distanceKm), [courts, query, filter, userLocation]);
+  }).sort((a, b) => (a.distanceKm ?? Number.MAX_VALUE) - (b.distanceKm ?? Number.MAX_VALUE)), [courts, filter, query, userLocation]);
 
   return (
     <ScrollView contentContainerStyle={styles.content} showsVerticalScrollIndicator={false} refreshControl={<RefreshControl refreshing={loading} onRefresh={onRetry} tintColor={C.teal} colors={[C.teal]} progressBackgroundColor={C.surface} />}>
@@ -243,7 +266,7 @@ function Discovery({ courts, loading, error, onRetry, onSelect, onShowBookings, 
       <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.filterRow}>
         {['All', 'Indoor', 'Outdoor', 'Nearby'].map((item) => <Pressable key={item} accessibilityRole="button" accessibilityState={{ selected: filter === item }} onPress={() => setFilter(item)} style={({ pressed }) => [styles.filterChip, filter === item && styles.filterChipActive, pressed && styles.pressed]}><Text style={[styles.filterText, filter === item && styles.filterTextActive]}>{item}</Text></Pressable>)}
       </ScrollView>
-      <View style={styles.resultsHead}><View style={styles.resultsCopy}><Text style={styles.eyebrow}>NEAREST TO {userLocation.label.toUpperCase()}</Text><Text style={styles.h2}>{filtered.length} courts available</Text></View><View style={styles.mapLink}><Icon name="navigate-outline" size={16} color={C.teal} /><Text style={styles.mapText}>By distance</Text></View></View>
+      <View style={styles.resultsHead}><View style={styles.resultsCopy}><Text style={styles.eyebrow}>NEAREST TO {userLocation.label.toUpperCase()}</Text><Text style={styles.h2}>{filtered.length} courts available</Text></View><View style={styles.mapLink}><Icon name="navigate-outline" size={16} color={C.teal} /><Text style={styles.mapText}>Distance</Text></View></View>
       {loading && !courts.length && <View style={styles.loadState}><ActivityIndicator color={C.teal} /><Text style={styles.emptyText}>Finding available courts…</Text></View>}
       {!loading && error && !courts.length && <View style={styles.empty}><Icon name="cloud-offline-outline" size={32} color={C.ink40} /><Text style={styles.emptyTitle}>Courts could not load</Text><Text style={styles.emptyText}>{error}</Text><Pressable accessibilityRole="button" onPress={onRetry} style={styles.retryButton}><Text style={styles.retryText}>Try again</Text></Pressable></View>}
       {filtered.map((court) => <CourtCard key={court.id} court={court} onPress={() => onSelect(court)} />)}
@@ -383,8 +406,8 @@ function CourtDetail({ court, onBack, onBook, onOpenMaps }) {
   return (
     <ScrollView contentContainerStyle={styles.content} showsVerticalScrollIndicator={false}>
       <Header title="Court details" subtitle="PICK YOUR COURT" onBack={onBack} />
-      <CourtArt color={court.color} large />
-      <View style={styles.detailTop}><View style={styles.detailName}><Text style={styles.h2}>{court.name}</Text><Text style={styles.body}>{court.area} · {court.distance} away</Text></View><Pressable accessibilityLabel={saved ? 'Remove saved court' : 'Save court'} onPress={() => setSaved((value) => !value)} style={[styles.iconButton, saved && styles.savedButton]}><Icon name={saved ? 'bookmark' : 'bookmark-outline'} color={saved ? C.teal : C.ink} /></Pressable></View>
+      <CourtArt color={court.color} large imageUrl={selectedCourt?.image || court.brandImage} accessibilityLabel={`${selectedCourt?.name || court.name} photo`} />
+      <View style={styles.detailTop}><View style={styles.detailName}><Text style={styles.h2}>{court.name}</Text><Text style={styles.body}>{court.area} · {court.distance}</Text></View><Pressable accessibilityLabel={saved ? 'Remove saved court' : 'Save court'} onPress={() => setSaved((value) => !value)} style={[styles.iconButton, saved && styles.savedButton]}><Icon name={saved ? 'bookmark' : 'bookmark-outline'} color={saved ? C.teal : C.ink} /></Pressable></View>
       <View style={styles.ratingRow}><View style={styles.ratingBadge}><Text style={styles.ratingBig}>{court.rating}</Text><Text style={styles.ratingCaption}>★ · {court.reviews} reviews</Text></View><View style={styles.detailStat}><Text style={styles.detailNumber}>{court.courts}</Text><Text style={styles.detailLabel}>COURTS</Text></View><View style={styles.detailStat}><Text style={styles.detailNumber}>{court.available}</Text><Text style={styles.detailLabel}>OPEN NOW</Text></View></View>
       <Text style={styles.courtDescription}>{court.description}</Text>
       <View style={styles.venueFacts}><View style={styles.venueFact}><Icon name="location-outline" size={18} color={C.teal} /><View style={styles.venueFactCopy}><Text style={styles.venueFactLabel}>ADDRESS</Text><Text style={styles.venueFactValue}>{court.address}</Text></View></View><View style={styles.venueFact}><Icon name="time-outline" size={18} color={C.teal} /><View style={styles.venueFactCopy}><Text style={styles.venueFactLabel}>TODAY'S HOURS</Text><Text style={styles.venueFactValue}>{court.hours}</Text></View></View></View>
@@ -394,7 +417,7 @@ function CourtDetail({ court, onBack, onBook, onOpenMaps }) {
       <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.courtOptions}>
         {court.courtOptions.map((option) => {
           const active = selectedCourt?.id === option.id;
-          return <Pressable key={option.id} disabled={!option.available} accessibilityState={{ selected: active, disabled: !option.available }} onPress={() => setSelectedCourt(option)} style={({ pressed }) => [styles.courtOption, active && styles.courtOptionActive, !option.available && styles.courtOptionUnavailable, pressed && styles.pressed]}><View style={styles.courtOptionHead}><Text style={[styles.courtOptionName, active && styles.courtOptionNameActive]}>{option.name}</Text>{active && <Icon name="checkmark-circle" size={17} color={C.teal} />}</View><Text style={styles.courtOptionMeta}>{option.environment} · {option.surface}</Text><Text style={[styles.courtOptionStatus, !option.available && styles.courtOptionStatusBusy]}>{option.next}</Text><Text style={styles.courtOptionPrice}>₱{option.price}<Text style={styles.perHour}>/hr</Text></Text></Pressable>;
+          return <Pressable key={option.id} disabled={!option.available} accessibilityState={{ selected: active, disabled: !option.available }} onPress={() => setSelectedCourt(option)} style={({ pressed }) => [styles.courtOption, active && styles.courtOptionActive, !option.available && styles.courtOptionUnavailable, pressed && styles.pressed]}>{option.image ? <ResilientImage uri={option.image} accessibilityLabel={`${option.name} photo`} style={styles.courtOptionImage} /> : null}<View style={styles.courtOptionHead}><Text style={[styles.courtOptionName, active && styles.courtOptionNameActive]}>{option.name}</Text>{active && <Icon name="checkmark-circle" size={17} color={C.teal} />}</View><Text style={styles.courtOptionMeta}>{option.environment} · {option.surface}</Text><Text style={[styles.courtOptionStatus, !option.available && styles.courtOptionStatusBusy]}>{option.next}</Text><Text style={styles.courtOptionPrice}>₱{option.price}<Text style={styles.perHour}>/hr</Text></Text></Pressable>;
         })}
       </ScrollView>
       <View style={styles.sectionLine} />
@@ -405,7 +428,7 @@ function CourtDetail({ court, onBack, onBook, onOpenMaps }) {
   );
 }
 
-function Setup({ court, courtOption, teams, onBack, onConfirm, onWaitlist, existingBooking, saving }) {
+function Setup({ court, courtOption, teams, onBack, onConfirm, onWaitlist, existingBooking, saving, availabilityVersion = 0 }) {
   const existingStart = existingBooking ? new Date(existingBooking.starts_at) : null;
   const existingEnd = existingBooking ? new Date(existingBooking.ends_at) : null;
   const todayIso = useManilaToday();
@@ -425,6 +448,7 @@ function Setup({ court, courtOption, teams, onBack, onConfirm, onWaitlist, exist
   const [quoteVersion, setQuoteVersion] = useState(0);
   const [quoteError, setQuoteError] = useState('');
   const [quoteLoading, setQuoteLoading] = useState(false);
+  const scheduleScopeRef = useRef('');
   const calendarDates = useMemo(() => bookingDateRange(visibleStartIso), [visibleStartIso]);
   const selectedDate = useMemo(() => bookingDateOption(selectedDateIso), [selectedDateIso]);
   const canShowPreviousWeek = visibleStartIso > todayIso;
@@ -451,14 +475,20 @@ function Setup({ court, courtOption, teams, onBack, onConfirm, onWaitlist, exist
   }, [teams, selectedTeamId]);
   useEffect(() => {
     let active = true;
-    setSchedule([]);
+    const scheduleScope = `${court.id}:${selectedDateIso}`;
+    if (scheduleScopeRef.current !== scheduleScope) setSchedule([]);
+    scheduleScopeRef.current = scheduleScope;
     setScheduleLoading(true);
-    listCourtAvailability(court.courtOptions.map((item) => item.id), selectedDateIso)
+    withTimeout(
+      listCourtAvailability(court.courtOptions.map((item) => item.id), selectedDateIso),
+      10000,
+      'Court availability took too long to refresh.',
+    )
       .then((rows) => active && setSchedule(rows))
-      .catch(() => active && setSchedule([]))
+      .catch(() => {})
       .finally(() => active && setScheduleLoading(false));
     return () => { active = false; };
-  }, [court.courtOptions, selectedDateIso]);
+  }, [availabilityVersion, court.courtOptions, court.id, selectedDateIso]);
   const conflicts = (slot, courtId) => {
     const [clock, period] = slot.split(' ');
     const [rawHour, minute] = clock.split(':').map(Number);
@@ -493,7 +523,6 @@ function Setup({ court, courtOption, teams, onBack, onConfirm, onWaitlist, exist
   const toggleCourt = (id) => setSelectedCourtIds((current) => current.includes(id)
     ? (current.length === 1 ? current : current.filter((value) => value !== id))
     : [...current, id]);
-  const unavailableReason = schedule.find((item) => selectedCourtIds.includes(item.court_id) && conflicts(time, item.court_id))?.reason;
   const confirm = () => onConfirm({
     date: selectedDate.full, dateIso: selectedDateIso, time, duration, total,
     inviteTeam: inviteTeam && Boolean(selectedTeam), teamId: inviteTeam ? selectedTeam?.id : null,
@@ -501,7 +530,7 @@ function Setup({ court, courtOption, teams, onBack, onConfirm, onWaitlist, exist
     courtOptions: court.courtOptions.filter((item) => selectedCourtIds.includes(item.id)), quote,
   });
   return (
-    <ScrollView contentContainerStyle={styles.content} showsVerticalScrollIndicator={false}>
+    <View style={styles.setupScreen}><ScrollView contentContainerStyle={[styles.content, styles.setupContent]} showsVerticalScrollIndicator={false}>
       <Header title="Finish setup" subtitle="BOOKING DETAILS" onBack={onBack} />
       <View style={styles.compactCourt}><View style={[styles.compactSwatch, { backgroundColor: court.color }]}><Icon name="tennisball-outline" color={C.surface} /></View><View style={styles.compactCopy}><Text style={styles.compactName}>{existingBooking ? 'Change reservation' : court.name}</Text><Text style={styles.bodySmall}>{selectedCourtIds.length} court{selectedCourtIds.length === 1 ? '' : 's'} selected · {court.timeZone || 'Asia/Manila'}</Text></View><Text style={styles.compactPrice}>₱{total.toLocaleString()}</Text></View>
       {!existingBooking && <><Text style={styles.sectionLabel}>COURTS · SELECT MORE THAN ONE</Text><View style={styles.multiCourtGrid}>{court.courtOptions.map((option) => { const selected = selectedCourtIds.includes(option.id); return <Pressable key={option.id} accessibilityState={{ selected }} onPress={() => toggleCourt(option.id)} style={[styles.multiCourt, selected && styles.multiCourtActive]}><Icon name={selected ? 'checkmark-circle' : 'ellipse-outline'} size={17} color={selected ? C.teal : C.ink40} /><View style={styles.flex}><Text style={styles.multiCourtName}>{option.name}</Text><Text style={styles.multiCourtPrice}>₱{option.price}/hr</Text></View></Pressable>; })}</View></>}
@@ -524,9 +553,7 @@ function Setup({ court, courtOption, teams, onBack, onConfirm, onWaitlist, exist
       {inviteTeam && teams.length > 1 && <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.teamChoices}>{teams.map((team) => { const active = team.id === selectedTeamId; return <Pressable key={team.id} accessibilityState={{ selected: active }} onPress={() => setSelectedTeamId(team.id)} style={[styles.teamChoice, active && styles.teamChoiceActive]}><Icon name={active ? 'checkmark-circle' : 'people-outline'} size={15} color={active ? C.surface : C.teal} /><Text numberOfLines={1} style={[styles.teamChoiceText, active && styles.teamChoiceTextActive]}>{team.name}</Text></Pressable>; })}</ScrollView>}
       <Text style={styles.sectionLabel}>PROMO CODE</Text><TextInput autoCapitalize="characters" value={promoCode} onChangeText={setPromoCode} placeholder="Optional" placeholderTextColor={C.ink40} style={styles.promoInput} />
       <View style={styles.summary}><Text style={styles.summaryTitle}>Price-locked summary</Text><View style={styles.summaryRow}><Text style={styles.body}>Courts</Text><Text style={styles.summaryValue}>{court.courtOptions.filter((item) => selectedCourtIds.includes(item.id)).map((item) => item.name).join(', ')}</Text></View><View style={styles.summaryRow}><Text style={styles.body}>Date</Text><Text style={styles.summaryValue}>{selectedDate.full}</Text></View><View style={styles.summaryRow}><Text style={styles.body}>Time</Text><Text style={styles.summaryValue}>{reservedWindow} · {duration} min</Text></View><View style={styles.summaryRow}><Text style={styles.body}>Court subtotal</Text><Text style={styles.summaryValue}>₱{Number(quote?.subtotal ?? total).toLocaleString()}</Text></View>{quote?.breakdown?.lines?.filter((line) => line.ruleName).map((line) => <View key={line.courtId} style={styles.summaryRow}><Text style={styles.body}>{line.ruleName}</Text><Text style={styles.summaryValue}>₱{Number(line.amount).toLocaleString()}</Text></View>)}<View style={styles.summaryRow}><Text style={styles.body}>Pricing adjustment</Text><Text style={styles.summaryValue}>₱{Math.max(0, Number(quote?.total || 0) - Number(quote?.subtotal || 0) + Number(quote?.discount_amount || 0)).toLocaleString()}</Text></View><View style={styles.summaryRow}><Text style={styles.body}>Discounts</Text><Text style={styles.summaryValue}>− ₱{Number(quote?.discount_amount || 0).toLocaleString()}</Text></View><View style={styles.summaryRow}><Text style={styles.body}>Fees</Text><Text style={styles.summaryValue}>₱{Number(quote?.fee_amount || 0).toLocaleString()}</Text></View><View style={styles.summaryRow}><Text style={styles.body}>Payment</Text><Text style={styles.summaryValue}>Pay at venue</Text></View><View style={styles.sectionLine} /><View style={styles.summaryRow}><Text style={styles.totalLabel}>Total</Text><Text style={styles.total}>₱{total.toLocaleString()}</Text></View>{quote && <Text style={styles.quoteExpiry}>Price locked until {timeLabel(new Date(quote.expires_at))}</Text>}{quoteLoading && <ActivityIndicator size="small" color={C.teal} />}{quoteError ? <Text style={styles.quoteError}>{quoteError}</Text> : null}</View>
-      {selectedTimeBooked && selectedCourtIds.length === 1 && !scheduleLoading ? <PrimaryButton disabled={saving} icon="notifications-outline" onPress={() => onWaitlist({ courtId: selectedCourtIds[0], dateIso: selectedDateIso, time, duration })}>Join waitlist · {unavailableReason || 'Fully booked'}</PrimaryButton> : <PrimaryButton disabled={scheduleLoading || selectedTimeUnavailable || !quote || quoteLoading || saving} icon="checkmark" onPress={confirm}>{saving ? 'Securing every court…' : scheduleLoading ? 'Checking availability…' : selectedTimePast ? 'Choose a future time' : `${existingBooking ? 'Save change' : 'Confirm booking'} · ₱${total.toLocaleString()}`}</PrimaryButton>}
-      <Text style={styles.terms}>No charge today. Payment is collected at the venue.</Text>
-    </ScrollView>
+    </ScrollView><View style={styles.bookingStickyBar}><View style={styles.bookingStickySummary}><Text style={styles.bookingStickyLabel}>{selectedDate.day} {selectedDate.date} · {reservedWindow}</Text><Text style={styles.bookingStickyValue}>₱{total.toLocaleString()}</Text><Text numberOfLines={1} style={styles.bookingStickyMeta}>{selectedCourtIds.length} court{selectedCourtIds.length === 1 ? '' : 's'} · Pay at venue</Text></View>{selectedTimeBooked && selectedCourtIds.length === 1 && !scheduleLoading ? <PrimaryButton disabled={saving} icon="notifications-outline" onPress={() => onWaitlist({ courtId: selectedCourtIds[0], dateIso: selectedDateIso, time, duration })}>Join waitlist</PrimaryButton> : <PrimaryButton disabled={scheduleLoading || selectedTimeUnavailable || !quote || quoteLoading || saving} icon="checkmark" onPress={confirm}>{saving ? 'Securing…' : scheduleLoading ? 'Checking…' : selectedTimePast ? 'Choose time' : existingBooking ? 'Save change' : 'Confirm'}</PrimaryButton>}</View></View>
   );
 }
 
@@ -580,18 +607,21 @@ export default function BookScreen({ route, navigation }) {
   styles = isDark ? darkStyles : lightStyles;
   const { userLocation } = useUserLocation();
   const { user } = useAuth();
-  const [venues, setVenues] = useState([]);
-  const [venuesLoading, setVenuesLoading] = useState(true);
-  const [venuesLoaded, setVenuesLoaded] = useState(false);
+  const { reportRealtime } = useOperations();
+  const userBookingsCacheKey = bookingsCacheKey(user?.id || 'guest');
+  const [venues, setVenues] = useState(() => peekCachedData(BOOKING_VENUES_CACHE_KEY) || []);
+  const [venuesLoading, setVenuesLoading] = useState(() => peekCachedData(BOOKING_VENUES_CACHE_KEY) === null);
+  const [venuesLoaded, setVenuesLoaded] = useState(() => peekCachedData(BOOKING_VENUES_CACHE_KEY) !== null);
   const [venuesError, setVenuesError] = useState('');
   const [venuesRequest, setVenuesRequest] = useState(0);
-  const [bookings, setBookings] = useState([]);
-  const [bookingsLoading, setBookingsLoading] = useState(true);
+  const [bookings, setBookings] = useState(() => peekCachedData(userBookingsCacheKey) || []);
+  const [bookingsLoading, setBookingsLoading] = useState(() => peekCachedData(userBookingsCacheKey) === null);
   const [bookingsLoadingMore, setBookingsLoadingMore] = useState(false);
   const [bookingsHistoryPage, setBookingsHistoryPage] = useState(0);
   const [hasMoreBookingHistory, setHasMoreBookingHistory] = useState(false);
   const [bookingsError, setBookingsError] = useState('');
   const [bookingsRequest, setBookingsRequest] = useState(0);
+  const [availabilityVersion, setAvailabilityVersion] = useState(0);
   const [joinedTeams, setJoinedTeams] = useState([]);
   const [rootView, setRootView] = useState('find');
   const [step, setStep] = useState('discover');
@@ -603,34 +633,39 @@ export default function BookScreen({ route, navigation }) {
   const [savingBooking, setSavingBooking] = useState(false);
   const bookingRequestKey = useRef(null);
   const [openedFromHome, setOpenedFromHome] = useState(false);
+  const venuesRef = useRef(venues);
+  const bookingsRef = useRef(bookings);
+  const realtimeRefreshTimer = useRef(null);
+  useEffect(() => { venuesRef.current = venues; }, [venues]);
+  useEffect(() => { bookingsRef.current = bookings; }, [bookings]);
   useEffect(() => {
     let active = true;
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), 12000);
-    setVenuesLoading(true);
-    setVenuesLoaded(false);
-    setVenuesError('');
-    listVenues({ signal: controller.signal }).then((rows) => {
+    (async () => {
+      const cached = await readCachedData(BOOKING_VENUES_CACHE_KEY);
       if (!active) return;
-      setVenues(rows.map((venue) => {
-        const courts = venue.courts || [];
-        const prices = courts.map((item) => Number(item.hourly_price)).filter(Number.isFinite);
-        return {
-          id: venue.id, name: venue.name, area: venue.area, address: venue.address, latitude: venue.latitude, longitude: venue.longitude,
-          rating: '—', reviews: 0, price: prices.length ? Math.min(...prices) : 0, courts: courts.length,
-          available: courts.filter((item) => item.active).length, hours: `${venue.opens_at?.slice(0, 5)}–${venue.closes_at?.slice(0, 5)}`,
-          type: venue.venue_type, color: venue.color || C.teal, description: venue.description, amenities: venue.amenities || [], timeZone: venue.time_zone || 'Asia/Manila', cancellationCutoffMinutes: venue.cancellation_cutoff_minutes || 240,
-          courtOptions: courts.filter((item) => item.active).map((item) => ({ id: item.id, name: item.name, environment: item.environment, surface: item.surface, price: Number(item.hourly_price), available: true, next: 'Check times' })),
-        };
-      }));
-      setVenuesLoaded(true);
-    }).catch((error) => {
-      if (!active) return;
-      setVenuesError(controller.signal.aborted ? 'The request took too long. Check your connection and try again.' : (error.message || 'Check your connection and try again.'));
-    }).finally(() => {
-      clearTimeout(timeout);
-      if (active) setVenuesLoading(false);
-    });
+      if (cached !== null && !venuesRef.current.length) {
+        setVenues(cached);
+        setVenuesLoaded(true);
+      }
+      setVenuesLoading(cached === null && !venuesRef.current.length);
+      setVenuesError('');
+      try {
+        const rows = await listVenues({ signal: controller.signal });
+        if (!active) return;
+        const nextVenues = rows.map(presentVenue);
+        setVenues(nextVenues);
+        setVenuesLoaded(true);
+        writeCachedData(BOOKING_VENUES_CACHE_KEY, nextVenues);
+      } catch (error) {
+        if (!active) return;
+        setVenuesError(controller.signal.aborted ? 'The request took too long. Showing the last saved courts.' : (error.message || 'Check your connection and try again.'));
+      } finally {
+        clearTimeout(timeout);
+        if (active) setVenuesLoading(false);
+      }
+    })();
     return () => {
       active = false;
       clearTimeout(timeout);
@@ -642,21 +677,34 @@ export default function BookScreen({ route, navigation }) {
   }, []);
   useEffect(() => {
     let active = true;
-    setBookingsLoading(true);
-    setBookingsLoadingMore(false);
-    setBookingsError('');
-    listMyBookingsPage().then((result) => {
+    const controller = new AbortController();
+    (async () => {
+      const cached = await readCachedData(userBookingsCacheKey);
       if (!active) return;
-      setBookings(result.bookings || []);
-      setBookingsHistoryPage(0);
-      setHasMoreBookingHistory(result.hasMoreHistory);
-    }).catch((error) => {
-      if (active) setBookingsError(error.message || 'Check your connection and try again.');
-    }).finally(() => {
-      if (active) setBookingsLoading(false);
-    });
-    return () => { active = false; };
-  }, [bookingsRequest]);
+      if (cached !== null && !bookingsRef.current.length) setBookings(cached);
+      setBookingsLoading(cached === null && !bookingsRef.current.length);
+      setBookingsLoadingMore(false);
+      setBookingsError('');
+      try {
+        const result = await withTimeout(
+          listMyBookingsPage({ signal: controller.signal }),
+          12000,
+          'Bookings took too long to refresh.',
+        );
+        if (!active) return;
+        const nextBookings = result.bookings || [];
+        setBookings(nextBookings);
+        setBookingsHistoryPage(0);
+        setHasMoreBookingHistory(result.hasMoreHistory);
+        writeCachedData(userBookingsCacheKey, nextBookings);
+      } catch (error) {
+        if (active) setBookingsError(`${error.message || 'Check your connection and try again.'}${bookingsRef.current.length ? ' Showing your last saved bookings.' : ''}`);
+      } finally {
+        if (active) setBookingsLoading(false);
+      }
+    })();
+    return () => { active = false; controller.abort(); };
+  }, [bookingsRequest, userBookingsCacheKey]);
   useEffect(() => navigation.addListener('focus', () => setBookingsRequest((request) => request + 1)), [navigation]);
   useEffect(() => {
     if (!route.params?.findCourtsToken) return;
@@ -671,14 +719,42 @@ export default function BookScreen({ route, navigation }) {
   }, [route.params?.findCourtsToken, navigation]);
   useEffect(() => {
     const client = requireSupabase();
+    let active = true;
+    let availabilityChannel = null;
     const channel = client.channel('booking-availability')
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'bookings' }, () => setBookingsRequest((value) => value + 1))
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'court_blackouts' }, () => setVenuesRequest((value) => value + 1))
-      .subscribe();
-    return () => { client.removeChannel(channel); };
-  }, []);
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'bookings', filter: `user_id=eq.${user.id}` }, () => {
+        clearTimeout(realtimeRefreshTimer.current);
+        realtimeRefreshTimer.current = setTimeout(() => setBookingsRequest((value) => value + 1), 180);
+        setAvailabilityVersion((value) => value + 1);
+      })
+      .subscribe((status) => reportRealtime(`bookings-${user.id}`, status));
+    client.from('court_availability_events').select('scope').limit(1).then(({ error }) => {
+      if (!active || error) return;
+      availabilityChannel = client.channel(`court-availability-${user.id}`)
+        .on('postgres_changes', { event: '*', schema: 'public', table: 'court_availability_events' }, () => setAvailabilityVersion((value) => value + 1))
+        .subscribe((status) => reportRealtime(`court-availability-${user.id}`, status));
+    });
+    return () => {
+      active = false;
+      clearTimeout(realtimeRefreshTimer.current);
+      client.removeChannel(channel);
+      reportRealtime(`bookings-${user.id}`, 'REMOVE');
+      if (availabilityChannel) {
+        client.removeChannel(availabilityChannel);
+        reportRealtime(`court-availability-${user.id}`, 'REMOVE');
+      }
+    };
+  }, [reportRealtime, user.id]);
   const selectCourt = (selected) => { setCourt(selected); setCourtOption(null); setStep('detail'); };
-  const activeCourt = useMemo(() => court ? { ...court, distanceKm: distanceInKm(userLocation, court), distance: formatDistance(distanceInKm(userLocation, court)) } : null, [court, userLocation]);
+  const activeCourt = useMemo(() => {
+    if (!court) return null;
+    const distanceKm = distanceInKm(userLocation, court);
+    return {
+      ...court,
+      distanceKm,
+      distance: formatDistance(distanceKm),
+    };
+  }, [court, userLocation]);
   useEffect(() => {
     const id = route.params?.courtId;
     if (!id || !venuesLoaded) return;
@@ -758,25 +834,25 @@ export default function BookScreen({ route, navigation }) {
     }
   };
   const openMaps = (destination) => setMapDestination(destination);
-  return <SafeAreaView style={styles.safe}><StatusBar style={isDark ? 'light' : 'dark'} backgroundColor={C.paper} />{step === 'discover' && rootView === 'find' && <Discovery courts={venues} loading={venuesLoading} error={venuesError} onRetry={() => setVenuesRequest((value) => value + 1)} onShowBookings={() => setRootView('bookings')} onShowEvents={() => navigation.navigate('Pickleball', { openTab: 'Compete', ownerTab: 'Book' })} onSelect={(selected) => { setOpenedFromHome(false); setEditingBooking(null); selectCourt(selected); }} />}{step === 'discover' && rootView === 'bookings' && <MyBookings bookings={bookings} loading={bookingsLoading} loadingMore={bookingsLoadingMore} hasMoreHistory={hasMoreBookingHistory} error={bookingsError} onRetry={() => setBookingsRequest((value) => value + 1)} onLoadMore={loadOlderBookings} onFindCourts={() => setRootView('find')} onOpenMaps={openMaps} onCancel={cancelReservation} onModify={changeReservation} onViewLastMatch={() => navigation.navigate('Profile', { openTab: 'Matches', openTabToken: Date.now(), openMatchId: 'latest' })} />}{step === 'detail' && activeCourt && <CourtDetail court={activeCourt} onBack={backFromDetail} onBook={(option) => { setCourtOption(option); setEditingBooking(null); setStep('setup'); }} onOpenMaps={openMaps} />}{step === 'setup' && activeCourt && courtOption && <Setup court={activeCourt} courtOption={courtOption} teams={joinedTeams} existingBooking={editingBooking} saving={savingBooking} onBack={() => { setEditingBooking(null); setStep(editingBooking ? 'discover' : 'detail'); }} onConfirm={confirmBooking} onWaitlist={waitlist} />}{step === 'success' && activeCourt && booking && <Success court={activeCourt} booking={booking} onDone={() => { setRootView('bookings'); setStep('discover'); setCourt(null); setCourtOption(null); setBooking(null); setEditingBooking(null); setOpenedFromHome(false); }} />}<MapOptionsSheet destination={mapDestination} onClose={() => setMapDestination(null)} /></SafeAreaView>;
+  return <SafeAreaView style={styles.safe}><StatusBar style={isDark ? 'light' : 'dark'} backgroundColor={C.paper} />{step === 'discover' && rootView === 'find' && <Discovery courts={venues} loading={venuesLoading} error={venuesError} onRetry={() => setVenuesRequest((value) => value + 1)} onShowBookings={() => setRootView('bookings')} onShowEvents={() => navigation.navigate('Pickleball', { openTab: 'Compete', ownerTab: 'Book' })} onSelect={(selected) => { setOpenedFromHome(false); setEditingBooking(null); selectCourt(selected); }} />}{step === 'discover' && rootView === 'bookings' && <MyBookings bookings={bookings} loading={bookingsLoading} loadingMore={bookingsLoadingMore} hasMoreHistory={hasMoreBookingHistory} error={bookingsError} onRetry={() => setBookingsRequest((value) => value + 1)} onLoadMore={loadOlderBookings} onFindCourts={() => setRootView('find')} onOpenMaps={openMaps} onCancel={cancelReservation} onModify={changeReservation} onViewLastMatch={() => navigation.navigate('Profile', { openTab: 'Matches', openTabToken: Date.now(), openMatchId: 'latest' })} />}{step === 'detail' && activeCourt && <CourtDetail court={activeCourt} onBack={backFromDetail} onBook={(option) => { setCourtOption(option); setEditingBooking(null); setStep('setup'); }} onOpenMaps={openMaps} />}{step === 'setup' && activeCourt && courtOption && <Setup court={activeCourt} courtOption={courtOption} teams={joinedTeams} existingBooking={editingBooking} saving={savingBooking} availabilityVersion={availabilityVersion} onBack={() => { setEditingBooking(null); setStep(editingBooking ? 'discover' : 'detail'); }} onConfirm={confirmBooking} onWaitlist={waitlist} />}{step === 'success' && activeCourt && booking && <Success court={activeCourt} booking={booking} onDone={() => { setRootView('bookings'); setStep('discover'); setCourt(null); setCourtOption(null); setBooking(null); setEditingBooking(null); setOpenedFromHome(false); }} />}<MapOptionsSheet destination={mapDestination} onClose={() => setMapDestination(null)} /></SafeAreaView>;
 }
 
 const shadow = Platform.select({ ios: { shadowColor: C.ink, shadowOpacity: 0.08, shadowRadius: 12, shadowOffset: { width: 0, height: 4 } }, android: { elevation: 3 } });
-const lightStyles = StyleSheet.create({
-  safe: { flex: 1, backgroundColor: C.paper }, flex: { flex: 1 }, content: { paddingHorizontal: 20, paddingTop: 20, paddingBottom: 42 },
+const lightStyles = createMobileStyleSheet({
+  safe: { flex: 1, backgroundColor: C.paper }, flex: { flex: 1 }, content: { paddingHorizontal: 20, paddingTop: 20, paddingBottom: 42 }, setupScreen: { flex: 1 }, setupContent: { paddingBottom: 28 }, bookingStickyBar: { paddingHorizontal: 16, paddingVertical: 11, flexDirection: 'row', alignItems: 'center', gap: 12, borderTopWidth: 1, borderColor: C.line, backgroundColor: C.surface, ...shadow }, bookingStickySummary: { width: 122, flexShrink: 0 }, bookingStickyLabel: { color: C.ink40, fontSize: 8, fontWeight: '800' }, bookingStickyValue: { marginTop: 2, color: C.ink, fontSize: 19, fontWeight: '900' }, bookingStickyMeta: { marginTop: 1, color: C.ink40, fontSize: 7 },
   pastBookingModalSafe: { flex: 1, backgroundColor: C.paper }, pastBookingModalHead: { minHeight: 76, paddingHorizontal: 20, paddingVertical: 12, flexDirection: 'row', alignItems: 'center', gap: 12, borderBottomWidth: 1, borderColor: C.line, backgroundColor: C.surface }, pastBookingModalTitle: { marginTop: 1, color: C.ink, fontSize: 24, lineHeight: 30, fontWeight: '900', letterSpacing: -.5 }, pastBookingModalClose: { width: 44, height: 44, alignItems: 'center', justifyContent: 'center', borderRadius: 22, borderWidth: 1, borderColor: C.line, backgroundColor: C.paper }, pastBookingModalScroll: { paddingHorizontal: 20, paddingTop: 20, paddingBottom: 36 }, pastBookingModalIntro: { marginBottom: 16, padding: 14, flexDirection: 'row', alignItems: 'center', gap: 11, borderRadius: 16, backgroundColor: '#E5F0ED' }, pastBookingModalIntroIcon: { width: 44, height: 44, alignItems: 'center', justifyContent: 'center', borderRadius: 13, backgroundColor: C.optic }, pastBookingModalIntroTitle: { marginBottom: 3, color: C.ink, fontSize: 13, fontWeight: '900' }, pastBookingDone: { minHeight: 52, alignItems: 'center', justifyContent: 'center', borderRadius: 14, backgroundColor: C.ink }, pastBookingDoneText: { color: C.surface, fontSize: 13, fontWeight: '900' },
   mapModal: { flex: 1, justifyContent: 'flex-end' }, mapBackdrop: { ...StyleSheet.absoluteFillObject, backgroundColor: 'rgba(4,18,17,0.58)' }, mapSheetSafe: { backgroundColor: C.surface, borderTopLeftRadius: 28, borderTopRightRadius: 28 }, mapSheet: { paddingHorizontal: 20, paddingTop: 10, paddingBottom: 10, borderTopLeftRadius: 28, borderTopRightRadius: 28, backgroundColor: C.surface }, mapSheetHandle: { width: 42, height: 5, marginBottom: 18, alignSelf: 'center', borderRadius: 3, backgroundColor: C.line }, mapSheetHeader: { flexDirection: 'row', alignItems: 'flex-start', gap: 12 }, mapSheetIcon: { width: 46, height: 46, alignItems: 'center', justifyContent: 'center', borderRadius: 14, backgroundColor: C.optic }, mapSheetEyebrow: { color: C.teal, fontSize: 8, lineHeight: 12, fontWeight: '900', letterSpacing: 1 }, mapSheetTitle: { marginTop: 1, color: C.ink, fontSize: 18, lineHeight: 23, fontWeight: '900' }, mapSheetAddress: { marginTop: 2, color: C.ink40, fontSize: 10, lineHeight: 14 }, mapSheetClose: { width: 38, height: 38, alignItems: 'center', justifyContent: 'center', borderRadius: 19, backgroundColor: C.paper }, mapSheetPrompt: { marginTop: 22, marginBottom: 8, color: C.ink40, fontSize: 9, fontWeight: '900', letterSpacing: .8 }, mapSheetLoading: { minHeight: 76, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 9 }, mapProvider: { minHeight: 66, marginBottom: 8, paddingHorizontal: 12, flexDirection: 'row', alignItems: 'center', gap: 11, borderRadius: 15, borderWidth: 1, borderColor: C.line, backgroundColor: C.paper }, mapProviderIcon: { width: 40, height: 40, alignItems: 'center', justifyContent: 'center', borderRadius: 12, backgroundColor: C.surface }, mapProviderName: { color: C.ink, fontSize: 13, fontWeight: '900' }, mapProviderMeta: { marginTop: 2, color: C.ink40, fontSize: 9 }, mapCancelButton: { minHeight: 48, marginTop: 4, alignItems: 'center', justifyContent: 'center', borderRadius: 14, backgroundColor: C.ink }, mapCancelText: { color: C.surface, fontSize: 12, fontWeight: '900' },
   header: { minHeight: 52, flexDirection: 'row', alignItems: 'center', gap: 12 }, headerCopy: { flex: 1 }, eyebrow: { color: C.ink40, fontSize: 10, lineHeight: 15, fontWeight: '800', letterSpacing: 1 }, h1: { color: C.ink, fontSize: 29, lineHeight: 35, fontWeight: '800', letterSpacing: -0.8 }, h2: { color: C.ink, fontSize: 22, lineHeight: 28, fontWeight: '800', letterSpacing: -0.4 },
   locationChip: { maxWidth: '44%', flexDirection: 'row', alignItems: 'center', gap: 4, paddingHorizontal: 10, minHeight: 36, borderRadius: 18, borderWidth: 1, borderColor: C.line, backgroundColor: C.surface }, locationText: { flexShrink: 1, color: C.teal, fontSize: 10, fontWeight: '800' }, iconButton: { width: 44, height: 44, borderRadius: 22, alignItems: 'center', justifyContent: 'center', borderWidth: 1, borderColor: C.line, backgroundColor: C.surface },
   bookingTabs: { marginBottom: 16, padding: 4, flexDirection: 'row', gap: 4, borderRadius: 14, backgroundColor: '#E7EBE6' }, bookingTab: { flex: 1, minHeight: 42, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 7, borderRadius: 11 }, bookingTabActive: { backgroundColor: C.optic }, bookingTabText: { color: C.ink40, fontSize: 11, fontWeight: '800' }, bookingTabTextActive: { color: '#000000' }, eventEntry: { minHeight: 76, marginBottom: 13, paddingHorizontal: 12, flexDirection: 'row', alignItems: 'center', gap: 10, borderRadius: 17, borderWidth: 1, borderColor: '#BFD8D2', backgroundColor: C.surface }, eventEntryIcon: { width: 42, height: 42, alignItems: 'center', justifyContent: 'center', borderRadius: 13, backgroundColor: '#E5F0ED' }, eventEntryCopy: { flex: 1, minWidth: 0 }, eventEntryEyebrow: { color: C.teal, fontSize: 7, fontWeight: '900', letterSpacing: .7 }, eventEntryTitle: { marginTop: 2, color: C.ink, fontSize: 11, fontWeight: '900' }, eventEntryMeta: { marginTop: 3, color: C.ink40, fontSize: 8, lineHeight: 12 },
-  kitchen: { height: 7, marginTop: 18, marginBottom: 23 }, solid: { height: 2, backgroundColor: C.ink }, dashed: { marginTop: 4, borderTopWidth: 1, borderStyle: 'dashed', borderColor: C.ink40 }, search: { height: 52, paddingLeft: 15, paddingRight: 6, flexDirection: 'row', alignItems: 'center', borderRadius: 14, borderWidth: 1, borderColor: C.line, backgroundColor: C.surface }, searchInput: { flex: 1, marginLeft: 9, color: C.ink, fontSize: 14 }, clearSearchButton: { width: 40, height: 40, alignItems: 'center', justifyContent: 'center', borderRadius: 10, backgroundColor: C.paper },
+  kitchen: { height: 7, marginTop: 18, marginBottom: 23 }, solid: { height: 2, backgroundColor: C.ink }, dashed: { marginTop: 4, borderTopWidth: 1, borderStyle: 'dashed', borderColor: C.ink40 }, search: { height: 52, paddingLeft: 15, paddingRight: 6, flexDirection: 'row', alignItems: 'center', borderRadius: 14, borderWidth: 1, borderColor: C.line, backgroundColor: C.surface }, searchInput: { flex: 1, marginLeft: 9, color: C.ink, fontSize: 14, letterSpacing: 0 }, clearSearchButton: { width: 40, height: 40, alignItems: 'center', justifyContent: 'center', borderRadius: 10, backgroundColor: C.paper },
   filterRow: { gap: 8, paddingVertical: 14 }, filterChip: { minHeight: 36, paddingHorizontal: 14, alignItems: 'center', justifyContent: 'center', borderRadius: 18, borderWidth: 1, borderColor: C.line, backgroundColor: C.surface }, filterChipActive: { backgroundColor: C.ink, borderColor: C.ink }, filterText: { color: C.ink70, fontSize: 11, fontWeight: '700' }, filterTextActive: { color: C.paper }, resultsHead: { marginTop: 6, marginBottom: 13, flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-end', gap: 8 }, resultsCopy: { flex: 1 }, mapLink: { minHeight: 40, paddingHorizontal: 4, flexDirection: 'row', alignItems: 'center', gap: 5 }, mapText: { color: C.teal, fontSize: 10, fontWeight: '800' },
   loadState: { paddingVertical: 70, alignItems: 'center', gap: 12 }, retryButton: { minHeight: 42, marginTop: 18, paddingHorizontal: 18, alignItems: 'center', justifyContent: 'center', borderRadius: 12, backgroundColor: C.optic }, retryText: { color: C.ink, fontSize: 11, fontWeight: '800' },
   bookingWarning: { marginBottom: 14, padding: 12, flexDirection: 'row', alignItems: 'center', gap: 8, borderRadius: 12, backgroundColor: '#F7EAE6' }, bookingWarningText: { flex: 1, color: C.brick, fontSize: 10, fontWeight: '700' }, bookingSectionHead: { marginTop: 10, marginBottom: 13, flexDirection: 'row', alignItems: 'flex-end', justifyContent: 'space-between' }, bookingCount: { minWidth: 28, height: 28, paddingHorizontal: 8, overflow: 'hidden', borderRadius: 14, color: C.teal, backgroundColor: '#E5F0ED', fontSize: 11, lineHeight: 28, fontWeight: '900', textAlign: 'center' }, bookingListFooter: { paddingVertical: 22, alignItems: 'center', gap: 8 },
   reservationCard: { marginBottom: 16, overflow: 'hidden', borderRadius: 20, borderBottomLeftRadius: 9, borderBottomRightRadius: 9, borderWidth: 1, borderColor: C.line, backgroundColor: C.surface, ...shadow }, reservationTop: { minHeight: 76, padding: 13, flexDirection: 'row', alignItems: 'center', gap: 10 }, reservationMark: { width: 42, height: 42, alignItems: 'center', justifyContent: 'center', borderRadius: 12, backgroundColor: 'rgba(14,35,33,0.25)' }, reservationTitleCopy: { flex: 1 }, reservationVenue: { color: '#FFFFFF', fontSize: 15, fontWeight: '900' }, reservationCourt: { marginTop: 3, color: 'rgba(255,255,255,0.72)', fontSize: 9, fontWeight: '700' }, statusPill: { paddingHorizontal: 8, paddingVertical: 6, borderRadius: 8 }, statusText: { fontSize: 7, fontWeight: '900', letterSpacing: 0.65 }, reservationExpandIcon: { marginLeft: 2, alignItems: 'center', justifyContent: 'center' }, reservationBody: { paddingHorizontal: 14 }, reservationCompactBody: { paddingHorizontal: 16, paddingVertical: 12, flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }, reservationCompactDate: { color: C.ink, fontSize: 12, fontWeight: '800' }, reservationCompactTime: { marginTop: 1, color: C.ink70, fontSize: 11, fontWeight: '700' }, reservationCompactTotal: { color: C.ink, fontSize: 15, fontWeight: '900' }, reservationSchedule: { minHeight: 102, flexDirection: 'row', alignItems: 'center', gap: 11 }, reservationDateBox: { width: 50, height: 59, alignItems: 'center', justifyContent: 'center', borderRadius: 12, backgroundColor: C.paper }, reservationMonth: { color: C.teal, fontSize: 8, fontWeight: '900', letterSpacing: 0.8 }, reservationDay: { marginTop: 1, color: C.ink, fontSize: 23, lineHeight: 25, fontWeight: '900' }, reservationWhen: { flex: 1 }, reservationDateLabel: { color: C.ink, fontSize: 12, fontWeight: '800' }, reservationTime: { marginTop: 3, color: C.ink70, fontSize: 11, fontWeight: '700' }, reservationZone: { marginTop: 4, color: C.ink40, fontSize: 7, fontWeight: '800', letterSpacing: 0.6 }, reservationPrice: { alignItems: 'flex-end' }, reservationAmount: { marginTop: 2, color: C.ink, fontSize: 15, fontWeight: '900' }, paymentLabel: { marginTop: 2, color: C.ink40, fontSize: 7 }, refundLabel: { marginTop: 2, color: C.ink40, fontSize: 6 }, reservationActions: { minHeight: 48, flexDirection: 'row', borderTopWidth: 1, borderColor: C.line }, reservationAction: { flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 4 }, reservationActionText: { color: C.teal, fontSize: 9, fontWeight: '800' }, actionDivider: { width: 1, marginVertical: 10, backgroundColor: C.line }, manageActions: { paddingVertical: 10, flexDirection: 'row', gap: 8, borderTopWidth: 1, borderColor: C.line }, manageButton: { minHeight: 38, flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 5, borderRadius: 11, backgroundColor: '#E5F0ED' }, cancelButton: { backgroundColor: '#F7EAE6' }, manageText: { color: C.teal, fontSize: 9, fontWeight: '900' }, cancelText: { color: C.brick },
   courtCard: { marginBottom: 14, overflow: 'hidden', borderRadius: 24, borderBottomLeftRadius: 10, borderBottomRightRadius: 10, borderWidth: 1, borderColor: C.line, backgroundColor: C.surface, ...shadow }, courtArt: { height: 132, overflow: 'hidden' }, courtArtLarge: { height: 215, borderRadius: 24, borderBottomLeftRadius: 10, borderBottomRightRadius: 10 }, courtLines: { position: 'absolute', left: '16%', right: '16%', top: 17, bottom: -35, borderWidth: 2, borderColor: 'rgba(255,255,255,0.6)', transform: [{ perspective: 260 }, { rotateX: '35deg' }] }, centerLine: { position: 'absolute', top: 0, bottom: 0, left: '50%', width: 2, backgroundColor: 'rgba(255,255,255,0.55)' }, crossLine: { position: 'absolute', left: 0, right: 0, top: '30%', height: 2, backgroundColor: 'rgba(255,255,255,0.55)' }, crossLineTwo: { top: '72%' }, availableBadge: { position: 'absolute', top: 12, left: 12, paddingHorizontal: 8, paddingVertical: 6, flexDirection: 'row', alignItems: 'center', gap: 5, borderRadius: 7, backgroundColor: 'rgba(14,35,33,0.82)' }, availableDot: { width: 6, height: 6, borderRadius: 3, backgroundColor: C.optic }, availableText: { color: C.surface, fontSize: 8, fontWeight: '800', letterSpacing: .7 },
   cardBody: { padding: 14 }, cardTitleRow: { flexDirection: 'row', justifyContent: 'space-between', gap: 10 }, cardTitle: { flex: 1, color: C.ink, fontSize: 17, fontWeight: '800' }, price: { color: C.teal, fontSize: 16, fontWeight: '800' }, perHour: { color: C.ink40, fontSize: 9, fontWeight: '500' }, meta: { marginTop: 4, flexDirection: 'row', alignItems: 'center', gap: 4 }, metaText: { color: C.ink40, fontSize: 11 }, tags: { marginTop: 11, flexDirection: 'row', gap: 6 }, tag: { paddingHorizontal: 8, paddingVertical: 5, overflow: 'hidden', borderRadius: 7, color: C.ink70, backgroundColor: C.paper, fontSize: 9, fontWeight: '800' }, rating: { color: C.teal }, pressed: { opacity: .78, transform: [{ scale: .985 }] }, empty: { paddingVertical: 70, alignItems: 'center' }, emptyTitle: { marginTop: 12, color: C.ink, fontSize: 18, fontWeight: '800' }, emptyText: { marginTop: 5, color: C.ink40, fontSize: 12 },
-  detailTop: { marginTop: 18, flexDirection: 'row', gap: 10, alignItems: 'flex-start' }, detailName: { flex: 1 }, savedButton: { borderColor: '#BFD8D2', backgroundColor: '#E5F0ED' }, body: { color: C.ink70, fontSize: 13, lineHeight: 19 }, bodySmall: { color: C.ink40, fontSize: 11, lineHeight: 16 }, ratingRow: { marginTop: 18, padding: 14, flexDirection: 'row', alignItems: 'center', borderWidth: 1, borderColor: C.line, borderRadius: 14, backgroundColor: C.surface }, ratingBadge: { flex: 1.5 }, ratingBig: { color: C.ink, fontSize: 25, lineHeight: 27, fontWeight: '800' }, ratingCaption: { marginTop: 2, color: C.teal, fontSize: 9, fontWeight: '800' }, detailStat: { flex: 1, alignItems: 'center', borderLeftWidth: 1, borderColor: C.line }, detailNumber: { color: C.ink, fontSize: 17, fontWeight: '800' }, detailLabel: { marginTop: 2, color: C.ink40, fontSize: 8, fontWeight: '800', letterSpacing: .7 }, courtDescription: { marginTop: 16, color: C.ink70, fontSize: 12, lineHeight: 18 }, venueFacts: { marginTop: 14, paddingHorizontal: 13, borderRadius: 14, borderWidth: 1, borderColor: C.line, backgroundColor: C.surface }, venueFact: { minHeight: 62, flexDirection: 'row', alignItems: 'center', gap: 9, borderBottomWidth: 1, borderColor: C.line }, venueFactCopy: { flex: 1 }, venueFactLabel: { color: C.ink40, fontSize: 7, fontWeight: '900', letterSpacing: .7 }, venueFactValue: { marginTop: 3, color: C.ink, fontSize: 10, fontWeight: '700' }, directionsButton: { minHeight: 45, marginTop: 9, paddingHorizontal: 12, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6, borderRadius: 12, borderWidth: 1, borderColor: C.line, backgroundColor: C.surface }, directionsText: { color: C.teal, fontSize: 10, fontWeight: '800' }, courtChoiceHead: { flexDirection: 'row', alignItems: 'flex-end', justifyContent: 'space-between', gap: 8 }, courtChoiceTitle: { marginTop: 2, color: C.ink, fontSize: 17, fontWeight: '800' }, courtChoiceCount: { color: C.teal, fontSize: 9, fontWeight: '800' }, courtOptions: { gap: 9, paddingTop: 11, paddingRight: 20 }, courtOption: { width: 164, minHeight: 128, padding: 12, borderRadius: 15, borderWidth: 1, borderColor: C.line, backgroundColor: C.surface }, courtOptionActive: { borderWidth: 2, borderColor: C.teal, backgroundColor: '#F6FAF8' }, courtOptionUnavailable: { opacity: .52, backgroundColor: '#E9ECE7' }, courtOptionHead: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }, courtOptionName: { color: C.ink, fontSize: 12, fontWeight: '800' }, courtOptionNameActive: { color: C.teal }, courtOptionMeta: { minHeight: 27, marginTop: 5, color: C.ink40, fontSize: 8, lineHeight: 12 }, courtOptionStatus: { marginTop: 5, color: C.teal, fontSize: 8, fontWeight: '800' }, courtOptionStatusBusy: { color: C.brick }, courtOptionPrice: { marginTop: 'auto', color: C.ink, fontSize: 15, fontWeight: '900' }, sectionLine: { marginVertical: 20, height: 1, backgroundColor: C.line }, amenities: { marginTop: 11, flexDirection: 'row', flexWrap: 'wrap', gap: 8 }, amenity: { width: '48%', minHeight: 48, paddingHorizontal: 11, flexDirection: 'row', alignItems: 'center', gap: 8, borderRadius: 11, borderWidth: 1, borderColor: C.line, backgroundColor: C.surface }, amenityText: { flex: 1, color: C.ink70, fontSize: 11, fontWeight: '700' }, infoCard: { marginTop: 18, padding: 14, flexDirection: 'row', gap: 10, borderRadius: 14, backgroundColor: '#E5F0ED' }, infoCopy: { flex: 1 }, infoTitle: { color: C.ink, fontSize: 12, fontWeight: '800' }, bookBar: { marginTop: 22, padding: 14, flexDirection: 'row', alignItems: 'center', gap: 12, borderRadius: 16, borderWidth: 1, borderColor: C.line, backgroundColor: C.surface, ...shadow }, barLabel: { color: C.ink40, fontSize: 8, fontWeight: '800', letterSpacing: .8 }, barPrice: { color: C.ink, fontSize: 19, fontWeight: '800' },
+  detailTop: { marginTop: 18, flexDirection: 'row', gap: 10, alignItems: 'flex-start' }, detailName: { flex: 1 }, savedButton: { borderColor: '#BFD8D2', backgroundColor: '#E5F0ED' }, body: { color: C.ink70, fontSize: 13, lineHeight: 19 }, bodySmall: { color: C.ink40, fontSize: 11, lineHeight: 16 }, ratingRow: { marginTop: 18, padding: 14, flexDirection: 'row', alignItems: 'center', borderWidth: 1, borderColor: C.line, borderRadius: 14, backgroundColor: C.surface }, ratingBadge: { flex: 1.5 }, ratingBig: { color: C.ink, fontSize: 25, lineHeight: 27, fontWeight: '800' }, ratingCaption: { marginTop: 2, color: C.teal, fontSize: 9, fontWeight: '800' }, detailStat: { flex: 1, alignItems: 'center', borderLeftWidth: 1, borderColor: C.line }, detailNumber: { color: C.ink, fontSize: 17, fontWeight: '800' }, detailLabel: { marginTop: 2, color: C.ink40, fontSize: 8, fontWeight: '800', letterSpacing: .7 }, courtDescription: { marginTop: 16, color: C.ink70, fontSize: 12, lineHeight: 18 }, venueFacts: { marginTop: 14, paddingHorizontal: 13, borderRadius: 14, borderWidth: 1, borderColor: C.line, backgroundColor: C.surface }, venueFact: { minHeight: 62, flexDirection: 'row', alignItems: 'center', gap: 9, borderBottomWidth: 1, borderColor: C.line }, venueFactCopy: { flex: 1 }, venueFactLabel: { color: C.ink40, fontSize: 7, fontWeight: '900', letterSpacing: .7 }, venueFactValue: { marginTop: 3, color: C.ink, fontSize: 10, fontWeight: '700' }, directionsButton: { minHeight: 45, marginTop: 9, paddingHorizontal: 12, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6, borderRadius: 12, borderWidth: 1, borderColor: C.line, backgroundColor: C.surface }, directionsText: { color: C.teal, fontSize: 10, fontWeight: '800' }, courtChoiceHead: { flexDirection: 'row', alignItems: 'flex-end', justifyContent: 'space-between', gap: 8 }, courtChoiceTitle: { marginTop: 2, color: C.ink, fontSize: 17, fontWeight: '800' }, courtChoiceCount: { color: C.teal, fontSize: 9, fontWeight: '800' }, courtOptions: { gap: 9, paddingTop: 11, paddingRight: 20 }, courtOption: { width: 164, minHeight: 128, padding: 12, overflow: 'hidden', borderRadius: 15, borderWidth: 1, borderColor: C.line, backgroundColor: C.surface }, courtOptionActive: { borderWidth: 2, borderColor: C.teal, backgroundColor: '#F6FAF8' }, courtOptionUnavailable: { opacity: .52, backgroundColor: '#E9ECE7' }, courtOptionImage: { height: 76, marginHorizontal: -12, marginTop: -12, marginBottom: 10 }, courtOptionHead: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }, courtOptionName: { color: C.ink, fontSize: 12, fontWeight: '800' }, courtOptionNameActive: { color: C.teal }, courtOptionMeta: { minHeight: 27, marginTop: 5, color: C.ink40, fontSize: 8, lineHeight: 12 }, courtOptionStatus: { marginTop: 5, color: C.teal, fontSize: 8, fontWeight: '800' }, courtOptionStatusBusy: { color: C.brick }, courtOptionPrice: { marginTop: 'auto', color: C.ink, fontSize: 15, fontWeight: '900' }, sectionLine: { marginVertical: 20, height: 1, backgroundColor: C.line }, amenities: { marginTop: 11, flexDirection: 'row', flexWrap: 'wrap', gap: 8 }, amenity: { width: '48%', minHeight: 48, paddingHorizontal: 11, flexDirection: 'row', alignItems: 'center', gap: 8, borderRadius: 11, borderWidth: 1, borderColor: C.line, backgroundColor: C.surface }, amenityText: { flex: 1, color: C.ink70, fontSize: 11, fontWeight: '700' }, infoCard: { marginTop: 18, padding: 14, flexDirection: 'row', gap: 10, borderRadius: 14, backgroundColor: '#E5F0ED' }, infoCopy: { flex: 1 }, infoTitle: { color: C.ink, fontSize: 12, fontWeight: '800' }, bookBar: { marginTop: 22, padding: 14, flexDirection: 'row', alignItems: 'center', gap: 12, borderRadius: 16, borderWidth: 1, borderColor: C.line, backgroundColor: C.surface, ...shadow }, barLabel: { color: C.ink40, fontSize: 8, fontWeight: '800', letterSpacing: .8 }, barPrice: { color: C.ink, fontSize: 19, fontWeight: '800' },
   primary: { minHeight: 52, paddingHorizontal: 18, flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8, borderRadius: 14, backgroundColor: C.optic }, primaryText: { color: C.ink, fontSize: 13, fontWeight: '800' }, disabled: { opacity: .4 }, compactCourt: { padding: 12, flexDirection: 'row', alignItems: 'center', gap: 10, borderWidth: 1, borderColor: C.line, borderRadius: 14, backgroundColor: C.surface }, compactSwatch: { width: 46, height: 46, borderRadius: 12, alignItems: 'center', justifyContent: 'center' }, compactCopy: { flex: 1 }, compactName: { color: C.ink, fontSize: 13, fontWeight: '800' }, compactPrice: { color: C.teal, fontSize: 11, fontWeight: '800' }, sectionLabel: { marginTop: 24, marginBottom: 10, color: C.ink, fontSize: 10, fontWeight: '800', letterSpacing: .9 }, multiCourtGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 }, multiCourt: { width: '48.7%', minHeight: 58, paddingHorizontal: 10, flexDirection: 'row', alignItems: 'center', gap: 7, borderRadius: 12, borderWidth: 1, borderColor: C.line, backgroundColor: C.surface }, multiCourtActive: { borderColor: C.teal, backgroundColor: '#E5F0ED' }, multiCourtName: { color: C.ink, fontSize: 10, fontWeight: '900' }, multiCourtPrice: { marginTop: 2, color: C.ink40, fontSize: 8 }, calendarCard: { padding: 12, borderRadius: 16, borderWidth: 1, borderColor: C.line, backgroundColor: C.surface }, calendarHeader: { minHeight: 44, marginBottom: 12, flexDirection: 'row', alignItems: 'center', gap: 10 }, calendarCopy: { flex: 1 }, calendarMonth: { color: C.ink, fontSize: 13, fontWeight: '900' }, calendarSelected: { marginTop: 2, color: C.ink40, fontSize: 9, fontWeight: '600' }, calendarNav: { flexDirection: 'row', gap: 6 }, calendarNavButton: { width: 36, height: 36, alignItems: 'center', justifyContent: 'center', borderRadius: 10, borderWidth: 1, borderColor: C.line, backgroundColor: C.paper }, calendarNavDisabled: { opacity: .35 }, dateRow: { flexDirection: 'row', gap: 4 }, date: { minWidth: 0, height: 68, flex: 1, alignItems: 'center', justifyContent: 'center', borderRadius: 11, borderWidth: 1, borderColor: C.line, backgroundColor: C.paper }, dateActive: { backgroundColor: C.ink, borderColor: C.ink }, dateDay: { color: C.ink40, fontSize: 7, fontWeight: '900' }, dateNumber: { marginTop: 3, color: C.ink, fontSize: 18, lineHeight: 21, fontWeight: '900' }, dateTextActive: { color: C.paper }, dateDot: { width: 4, height: 4, marginTop: 5, borderRadius: 2, backgroundColor: 'transparent' }, dateDotToday: { backgroundColor: C.teal }, dateDotTodayActive: { backgroundColor: C.optic }, sectionHead: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }, availabilityMeta: { marginTop: 14, flexDirection: 'row', alignItems: 'center', gap: 5 }, timeZone: { color: C.ink40, fontSize: 9 }, timeGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 }, time: { width: '48.7%', height: 48, alignItems: 'center', justifyContent: 'center', borderRadius: 11, borderWidth: 1, borderColor: C.line, backgroundColor: C.surface }, timeActive: { borderColor: C.optic, backgroundColor: C.optic }, timeBooked: { backgroundColor: '#E9ECE7' }, timeText: { color: C.ink, fontSize: 11, fontWeight: '800' }, timeTextActive: { color: C.ink }, timeTextBooked: { color: C.ink40 }, bookedText: { color: C.ink40, fontSize: 6, fontWeight: '800', letterSpacing: .6 }, segment: { padding: 4, flexDirection: 'row', borderRadius: 12, backgroundColor: '#E7EBE6' }, segmentItem: { flex: 1, minHeight: 40, alignItems: 'center', justifyContent: 'center', borderRadius: 9 }, segmentActive: { backgroundColor: C.optic, ...shadow }, segmentText: { color: C.ink40, fontSize: 11, fontWeight: '700' }, segmentTextActive: { color: C.ink }, inviteRow: { marginTop: 18, padding: 13, flexDirection: 'row', alignItems: 'center', gap: 10, borderRadius: 14, borderWidth: 1, borderColor: C.line, backgroundColor: C.surface }, inviteRowDisabled: { opacity: .65 }, inviteIcon: { width: 40, height: 40, alignItems: 'center', justifyContent: 'center', borderRadius: 11, backgroundColor: '#E5F0ED' }, inviteCopy: { flex: 1 }, inviteTitle: { color: C.ink, fontSize: 12, fontWeight: '800' }, toggle: { width: 43, height: 25, padding: 3, borderRadius: 13, backgroundColor: C.line }, toggleOn: { backgroundColor: C.optic }, toggleKnob: { width: 19, height: 19, borderRadius: 10, backgroundColor: C.surface }, toggleKnobOn: { alignSelf: 'flex-end' }, teamChoices: { gap: 8, paddingTop: 9, paddingRight: 20 }, teamChoice: { maxWidth: 180, minHeight: 36, paddingHorizontal: 11, flexDirection: 'row', alignItems: 'center', gap: 6, borderRadius: 18, borderWidth: 1, borderColor: C.line, backgroundColor: C.surface }, teamChoiceActive: { borderColor: C.teal, backgroundColor: C.teal }, teamChoiceText: { flexShrink: 1, color: C.teal, fontSize: 10, fontWeight: '800' }, teamChoiceTextActive: { color: C.surface }, promoInput: { minHeight: 48, paddingHorizontal: 13, borderRadius: 12, borderWidth: 1, borderColor: C.line, color: C.ink, backgroundColor: C.surface, fontSize: 11, fontWeight: '800' }, summary: { marginVertical: 18, padding: 16, borderRadius: 18, borderBottomLeftRadius: 8, borderBottomRightRadius: 8, borderWidth: 1, borderColor: C.line, backgroundColor: C.surface }, summaryTitle: { marginBottom: 13, color: C.ink, fontSize: 16, fontWeight: '800' }, summaryRow: { marginVertical: 5, flexDirection: 'row', justifyContent: 'space-between', gap: 15 }, summaryValue: { flex: 1, color: C.ink, fontSize: 12, fontWeight: '700', textAlign: 'right' }, totalLabel: { color: C.ink, fontSize: 15, fontWeight: '800' }, total: { color: C.ink, fontSize: 20, fontWeight: '800' }, quoteExpiry: { marginTop: 9, color: C.teal, fontSize: 8, fontWeight: '900', textAlign: 'right' }, quoteError: { marginTop: 9, color: C.brick, fontSize: 8, lineHeight: 12 }, terms: { marginTop: 9, color: C.ink40, textAlign: 'center', fontSize: 9 },
   successContent: { alignItems: 'stretch', paddingTop: 28, paddingBottom: 38 }, successHero: { alignItems: 'center' }, successIcon: { width: 66, height: 66, marginBottom: 14, borderRadius: 33, alignItems: 'center', justifyContent: 'center', backgroundColor: C.optic }, successTitle: { marginTop: 3, color: C.ink, fontSize: 30, lineHeight: 36, fontWeight: '800', letterSpacing: -.8, textAlign: 'center' }, successLead: { maxWidth: 310, marginTop: 5, color: C.ink40, fontSize: 12, lineHeight: 18, textAlign: 'center' }, ticket: { width: '100%', marginTop: 22, overflow: 'hidden', borderRadius: 22, borderWidth: 1, borderColor: C.line, backgroundColor: C.surface, ...shadow }, ticketTop: { padding: 17 }, ticketTopRow: { marginBottom: 16, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 10 }, ticketStatus: { minHeight: 28, paddingHorizontal: 9, flexDirection: 'row', alignItems: 'center', gap: 5, borderRadius: 14 }, ticketStatusText: { fontSize: 8, fontWeight: '900', letterSpacing: .7 }, ticketReference: { flexShrink: 1, fontSize: 8, fontWeight: '900', letterSpacing: .8, opacity: .76 }, ticketVenue: { fontSize: 10, lineHeight: 14, fontWeight: '900', letterSpacing: .8, opacity: .72, textTransform: 'uppercase' }, ticketCourt: { marginTop: 3, fontSize: 21, lineHeight: 27, fontWeight: '900' }, ticketCourtMeta: { marginTop: 2, fontSize: 10, lineHeight: 15, fontWeight: '600', opacity: .72 }, ticketBody: { padding: 17, backgroundColor: C.surface }, ticketWhen: { flexDirection: 'row', alignItems: 'center', gap: 12 }, ticketWhenIcon: { width: 42, height: 42, alignItems: 'center', justifyContent: 'center', borderRadius: 12, backgroundColor: C.paper }, ticketWhenCopy: { flex: 1 }, ticketDate: { marginTop: 3, color: C.ink, fontSize: 15, lineHeight: 20, fontWeight: '900' }, ticketTime: { marginTop: 1, color: C.ink70, fontSize: 13, lineHeight: 18, fontWeight: '800' }, ticketTimezone: { marginTop: 3, color: C.ink40, fontSize: 7, fontWeight: '900', letterSpacing: .7 }, ticketDivider: { marginVertical: 16, borderTopWidth: 1, borderStyle: 'dashed', borderColor: C.line }, ticketDetails: { flexDirection: 'row', alignItems: 'flex-start' }, ticketDetail: { flex: 1 }, ticketDetailMiddle: { paddingLeft: 12, borderLeftWidth: 1, borderColor: C.line }, ticketDetailRight: { paddingLeft: 12, alignItems: 'flex-end', borderLeftWidth: 1, borderColor: C.line }, ticketValue: { marginTop: 4, color: C.ink, fontSize: 12, lineHeight: 17, fontWeight: '800' }, ticketTotal: { marginTop: 2, color: C.ink, fontSize: 18, lineHeight: 22, fontWeight: '900' }, shared: { marginTop: 14, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 7 }, sharedText: { color: C.teal, fontSize: 11, fontWeight: '700' }, successActions: { width: '100%', marginTop: 14, flexDirection: 'row', gap: 10 }, calendarButton: { minHeight: 50, flex: 1, paddingHorizontal: 10, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6, borderRadius: 14, borderWidth: 1, borderColor: C.line, backgroundColor: C.surface }, calendarText: { color: C.teal, fontSize: 10, fontWeight: '800' }, successDone: { width: '100%', marginTop: 10, flexDirection: 'row' },
 });

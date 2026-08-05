@@ -12,8 +12,10 @@ import {
   refreshOrganizerPass,
   restoreDemoOrganizerPass,
 } from '../services/organizerPass';
+import { readCachedData, withTimeout, writeCachedData } from '../lib/asyncData';
 
 const OrganizerPassContext = createContext(null);
+const entitlementCacheKey = (userId) => `@peakle/cache/organizer-pass/${userId}`;
 
 export function OrganizerPassProvider({ children }) {
   const { user } = useAuth();
@@ -24,10 +26,29 @@ export function OrganizerPassProvider({ children }) {
   useEffect(() => {
     let active = true;
     setHydrated(false);
-    loadOrganizerPass(user?.id)
-      .then((value) => { if (active) setEntitlement(value); })
-      .catch(() => { if (active) setEntitlement(createPreviewEntitlement()); })
-      .finally(() => { if (active) setHydrated(true); });
+    if (!user?.id) {
+      setEntitlement(createPreviewEntitlement());
+      setHydrated(true);
+      return () => { active = false; };
+    }
+    readCachedData(entitlementCacheKey(user.id))
+      .then(async (cached) => {
+        if (!active) return;
+        if (cached) {
+          setEntitlement(cached);
+          setHydrated(true);
+        }
+        try {
+          const value = await withTimeout(loadOrganizerPass(user.id), 8000, 'Organizer access refresh timed out.');
+          if (!active) return;
+          setEntitlement(value);
+          writeCachedData(entitlementCacheKey(user.id), value);
+        } catch {
+          if (active && !cached) setEntitlement(createPreviewEntitlement());
+        } finally {
+          if (active) setHydrated(true);
+        }
+      });
     return () => { active = false; };
   }, [user?.id]);
 
@@ -47,11 +68,12 @@ export function OrganizerPassProvider({ children }) {
     try {
       const value = await operation();
       setEntitlement(value);
+      if (user?.id) writeCachedData(entitlementCacheKey(user.id), value);
       return value;
     } finally {
       setBusy(false);
     }
-  }, []);
+  }, [user?.id]);
 
   const passTier = user?.isAdmin ? 'admin' : hasCurrentOrganizerAccess(entitlement) ? getOrganizerPassTier(entitlement) : null;
   const value = useMemo(() => ({

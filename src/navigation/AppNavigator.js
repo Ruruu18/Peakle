@@ -1,4 +1,4 @@
-import React, { useEffect, useRef } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { Animated, Easing, Image, Platform, Pressable, StyleSheet, Text, View } from 'react-native';
 import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -7,13 +7,23 @@ import HomeScreen from '../screens/HomeScreen';
 import BookScreen from '../screens/BookScreen';
 import PlayScreen from '../screens/PlayScreen';
 import TeamScreen from '../screens/TeamScreen';
-import ProfileScreen from '../screens/ProfileScreen';
+import PlayerProfileScreen from '../screens/ProfileScreen';
+import OrganizerProfileScreen from '../screens/OrganizerProfileScreen';
 import VenueDashboardScreen from '../screens/VenueDashboardScreen';
 import OrganizerPassScreen from '../screens/OrganizerPassScreen';
-import PickleballHubScreen from '../screens/PickleballHubScreen';
+import PickleballHubScreen, { OrganizerAnalyticsScreen, OrganizerCompetitionScreen, OrganizerCreateCompetitionScreen, OrganizerCreateMembershipScreen, OrganizerCreateProgramScreen, OrganizerMembershipsScreen, OrganizerProgramsScreen } from '../screens/PickleballHubScreen';
+import PlayerActivitiesScreen from '../screens/PlayerActivitiesScreen';
+import PlayerActivityDetailsScreen from '../screens/PlayerActivityDetailsScreen';
+import PlayerOpenPlayRouteScreen from '../screens/PlayerOpenPlayRouteScreen';
+import PrivacyScreen from '../screens/PrivacyScreen';
+import { DirectChatScreen, InboxScreen } from '../screens/DirectMessagesScreens';
+import PublicProfileScreen from '../screens/PublicProfileScreen';
+import NotificationTestScreen from '../screens/NotificationTestScreen';
 import { OrganizerMonitorScreen, OrganizerMoreScreen, OrganizerOverviewScreen, OrganizerPlayersScreen, OrganizerSessionsScreen, OrganizerStaffScreen } from '../screens/OrganizerScreens';
 import { useAppMode } from '../context/AppModeContext';
 import { useTheme } from '../context/ThemeContext';
+import { useNearbyPlayersContext } from '../context/NearbyPlayersContext';
+import LeaveMatchDialog from '../components/LeaveMatchDialog';
 
 const Tab = createBottomTabNavigator();
 const colors = { ink: '#0E2321', surface: '#FFFFFF', optic: '#D6E94A', teal: '#1C6B66', ink40: '#7C8983', line: '#DDE3DA' };
@@ -103,16 +113,33 @@ function TabBarItem({ focused, label, onPress, play, routeName, theme, badge = 0
 function PeakleTabBar({ state, descriptors, navigation }) {
   const insets = useSafeAreaInsets();
   const { isDark } = useTheme();
-  const organizerMoreRoutes = new Set(['Pass', 'Venue', 'Staff', 'Profile']);
-  const alwaysHiddenRoutes = new Set(['Pass', 'Pickleball']);
+  const { joinedInvite, leave } = useNearbyPlayersContext();
+  const [leaveDialogOpen, setLeaveDialogOpen] = useState(false);
+  const [leavingMatch, setLeavingMatch] = useState(false);
+  const [leaveError, setLeaveError] = useState('');
+  const [pendingRoute, setPendingRoute] = useState(null);
+  const organizerMoreRoutes = new Set(['Pass', 'Venue', 'Staff', 'Profile', 'Analytics']);
+  const organizerActivityRoutes = new Set(['Programs', 'Competition', 'Memberships']);
+  const organizerCreateRoutes = new Set(['CreateProgram', 'CreateCompetition', 'CreateMembership']);
+  const alwaysHiddenRoutes = new Set(['Pass', 'Pickleball', 'Activities', 'ActivityDetails', 'OpenPlayActivity', 'Privacy', 'NotificationTest', 'Inbox', 'DirectChat', 'Programs', 'Competition', 'Memberships', 'Analytics', 'CreateProgram', 'CreateCompetition', 'CreateMembership', 'PublicProfile']);
   const currentRoute = state.routes[state.index];
   const hasOrganizerMore = state.routes.some((route) => route.name === 'More');
   const theme = isDark
     ? { background: '#0E2321', surface: '#17302D', line: '#304743', activeText: colors.ink, activeLabel: colors.ink, centerActiveLabel: colors.surface, muted: '#9FB3AC', active: colors.optic, kitchenLine: colors.optic }
     : { background: '#F3F5EF', surface: colors.surface, line: colors.line, activeText: colors.ink, activeLabel: colors.ink, centerActiveLabel: colors.ink, muted: colors.ink40, active: colors.optic, kitchenLine: colors.teal };
+  if (organizerCreateRoutes.has(currentRoute.name)) return null;
+
+  // Exclude routes that should never show a tab
+  // If the More tab exists (Organizer mode), keep its detail screens out of the tab bar.
   const visibleRoutes = state.routes.filter((route) => !alwaysHiddenRoutes.has(route.name) && (!hasOrganizerMore || !organizerMoreRoutes.has(route.name)));
   const contextualOwner = currentRoute.name === 'Pickleball'
     ? (currentRoute.params?.ownerTab || ({ Ratings: 'Profile', Privacy: 'Profile', 'Find play': 'Play', Compete: 'Book' }[currentRoute.params?.openTab]))
+    : organizerActivityRoutes.has(currentRoute.name) ? (currentRoute.params?.ownerTab || 'More')
+    : organizerCreateRoutes.has(currentRoute.name) ? (currentRoute.params?.ownerTab || 'Overview')
+    : currentRoute.name === 'Analytics' ? 'More'
+    : ['Privacy', 'NotificationTest'].includes(currentRoute.name) ? 'Profile'
+    : ['Inbox', 'DirectChat'].includes(currentRoute.name) ? (currentRoute.params?.ownerTab || 'Team')
+    : ['Activities', 'ActivityDetails', 'OpenPlayActivity'].includes(currentRoute.name) ? 'Home'
     : null;
   return (
     <View style={[styles.tabOuter, { paddingBottom: Math.max(insets.bottom, 9), backgroundColor: theme.background }]}>
@@ -126,50 +153,118 @@ function PeakleTabBar({ state, descriptors, navigation }) {
           const play = route.name === 'Play' || route.name === 'Monitor';
           const label = descriptors[route.key].options.tabBarLabel ?? route.name;
           const onPress = () => {
+            if (currentRoute.name === 'Play' && route.name !== 'Play' && joinedInvite) {
+              if (leaveDialogOpen) return;
+              setPendingRoute({ name: route.name, params: route.params });
+              setLeaveError('');
+              setLeaveDialogOpen(true);
+              return;
+            }
             const event = navigation.emit({ type: 'tabPress', target: route.key, canPreventDefault: true });
             if (!routeFocused && !event.defaultPrevented) navigation.navigate(route.name, route.params);
           };
           return <TabBarItem key={route.key} focused={focused} label={label} onPress={onPress} play={play} routeName={route.name} theme={theme} badge={route.name === 'Team' ? Number(route.params?.unreadCount || 0) : 0} />;
         })}
       </View>
+      <LeaveMatchDialog
+        visible={leaveDialogOpen}
+        hostName={joinedInvite?.sender?.display_name}
+        busy={leavingMatch}
+        error={leaveError}
+        onCancel={() => {
+          if (leavingMatch) return;
+          setLeaveDialogOpen(false);
+          setLeaveError('');
+          setPendingRoute(null);
+        }}
+        onConfirm={async () => {
+          if (!joinedInvite?.id || leavingMatch) return;
+          setLeavingMatch(true);
+          setLeaveError('');
+          const left = await leave(joinedInvite.id);
+          setLeavingMatch(false);
+          if (!left) {
+            setLeaveError('Couldn’t leave the match. Check your connection and try again.');
+            return;
+          }
+          setLeaveDialogOpen(false);
+          if (pendingRoute) navigation.navigate(pendingRoute.name, pendingRoute.params);
+          setPendingRoute(null);
+        }}
+      />
     </View>
   );
 }
 
-export default function AppNavigator() {
-  const { mode } = useAppMode();
-  const { isDark } = useTheme();
+function WorkspaceNavigator({ children, initialRouteName, isDark, workspaceKey }) {
   return (
     <Tab.Navigator
-      key={`${mode}-workspace`}
+      key={workspaceKey}
+      initialRouteName={initialRouteName}
+      backBehavior="history"
       tabBar={(props) => <PeakleTabBar {...props} />}
       screenOptions={{
         headerShown: false,
         sceneStyle: { backgroundColor: isDark ? '#0E2321' : '#F3F5EF' },
       }}
     >
-      {mode === 'player' ? <>
-        <Tab.Screen name="Home" component={HomeScreen} />
-        <Tab.Screen name="Book" component={BookScreen} options={{ tabBarLabel: 'Explore' }} />
-        <Tab.Screen name="Play" component={PlayScreen} />
-        <Tab.Screen name="Team" component={TeamScreen} options={{ tabBarLabel: 'Teams' }} />
-        <Tab.Screen name="Profile" component={ProfileScreen} />
-        <Tab.Screen name="Pass" component={OrganizerPassScreen} />
-        <Tab.Screen name="Pickleball" component={PickleballHubScreen} />
-      </> : <>
-        <Tab.Screen name="Overview" component={OrganizerOverviewScreen} />
-        <Tab.Screen name="Sessions" component={OrganizerSessionsScreen} />
-        <Tab.Screen name="Monitor" component={OrganizerMonitorScreen} />
-        <Tab.Screen name="Players" component={OrganizerPlayersScreen} />
-        <Tab.Screen name="More" component={OrganizerMoreScreen} />
-        <Tab.Screen name="Pass" component={OrganizerPassScreen} />
-        <Tab.Screen name="Venue" component={VenueDashboardScreen} />
-        <Tab.Screen name="Staff" component={OrganizerStaffScreen} />
-        <Tab.Screen name="Profile" component={ProfileScreen} />
-        <Tab.Screen name="Pickleball" component={PickleballHubScreen} />
-      </>}
+      {children}
     </Tab.Navigator>
   );
+}
+
+function PlayerWorkspace({ isDark }) {
+  return (
+    <WorkspaceNavigator workspaceKey="player-workspace" initialRouteName="Home" isDark={isDark}>
+      <Tab.Screen name="Home" component={HomeScreen} />
+      <Tab.Screen name="Book" component={BookScreen} options={{ tabBarLabel: 'Explore' }} />
+      <Tab.Screen name="Play" component={PlayScreen} />
+      <Tab.Screen name="Team" component={TeamScreen} options={{ tabBarLabel: 'Teams' }} />
+      <Tab.Screen name="Profile" component={PlayerProfileScreen} />
+      <Tab.Screen name="Pass" component={OrganizerPassScreen} />
+      <Tab.Screen name="Pickleball" component={PickleballHubScreen} />
+      <Tab.Screen name="Activities" component={PlayerActivitiesScreen} />
+      <Tab.Screen name="ActivityDetails" component={PlayerActivityDetailsScreen} />
+      <Tab.Screen name="OpenPlayActivity" component={PlayerOpenPlayRouteScreen} />
+      <Tab.Screen name="Privacy" component={PrivacyScreen} />
+      <Tab.Screen name="NotificationTest" component={NotificationTestScreen} />
+      <Tab.Screen name="Inbox" component={InboxScreen} />
+      <Tab.Screen name="DirectChat" component={DirectChatScreen} />
+      <Tab.Screen name="PublicProfile" component={PublicProfileScreen} />
+    </WorkspaceNavigator>
+  );
+}
+
+function OrganizerWorkspace({ isDark }) {
+  return (
+    <WorkspaceNavigator workspaceKey="organizer-workspace" initialRouteName="Overview" isDark={isDark}>
+      <Tab.Screen name="Overview" component={OrganizerOverviewScreen} />
+      <Tab.Screen name="Sessions" component={OrganizerSessionsScreen} options={{ tabBarLabel: 'Open Play' }} />
+      <Tab.Screen name="Monitor" component={OrganizerMonitorScreen} />
+      <Tab.Screen name="Players" component={OrganizerPlayersScreen} />
+      <Tab.Screen name="More" component={OrganizerMoreScreen} />
+      <Tab.Screen name="Pass" component={OrganizerPassScreen} />
+      <Tab.Screen name="Venue" component={VenueDashboardScreen} />
+      <Tab.Screen name="Staff" component={OrganizerStaffScreen} />
+      <Tab.Screen name="Profile" component={OrganizerProfileScreen} />
+      <Tab.Screen name="Programs" component={OrganizerProgramsScreen} />
+      <Tab.Screen name="Competition" component={OrganizerCompetitionScreen} />
+      <Tab.Screen name="Memberships" component={OrganizerMembershipsScreen} />
+      <Tab.Screen name="Analytics" component={OrganizerAnalyticsScreen} />
+      <Tab.Screen name="CreateProgram" component={OrganizerCreateProgramScreen} />
+      <Tab.Screen name="CreateCompetition" component={OrganizerCreateCompetitionScreen} />
+      <Tab.Screen name="CreateMembership" component={OrganizerCreateMembershipScreen} />
+      <Tab.Screen name="Privacy" component={PrivacyScreen} />
+      <Tab.Screen name="NotificationTest" component={NotificationTestScreen} />
+      <Tab.Screen name="PublicProfile" component={PublicProfileScreen} />
+    </WorkspaceNavigator>
+  );
+}
+
+export default function AppNavigator() {
+  const { mode } = useAppMode();
+  const { isDark } = useTheme();
+  return mode === 'organizer' ? <OrganizerWorkspace isDark={isDark} /> : <PlayerWorkspace isDark={isDark} />;
 }
 
 const styles = StyleSheet.create({
@@ -177,10 +272,10 @@ const styles = StyleSheet.create({
   tabBar: { height: 76, paddingHorizontal: 5, borderWidth: 1, borderColor: colors.line, borderRadius: 25, flexDirection: 'row', backgroundColor: colors.surface, ...Platform.select({ ios: { shadowColor: colors.ink, shadowOpacity: 0.16, shadowRadius: 24, shadowOffset: { width: 0, height: 10 } }, android: { elevation: 11 } }) },
   tabItem: { flex: 1, alignItems: 'center', justifyContent: 'center' },
   tabBadge: { position: 'absolute', top: 8, right: 9, minWidth: 18, height: 18, paddingHorizontal: 5, alignItems: 'center', justifyContent: 'center', borderRadius: 9, backgroundColor: '#B6472E' },
-  tabBadgeText: { color: '#FFFFFF', fontSize: 6.5, fontWeight: '900' },
+  tabBadgeText: { color: '#FFFFFF', fontSize: 8, fontWeight: '900' },
   activePill: { position: 'absolute', top: 9, right: 5, bottom: 9, left: 5, borderRadius: 17 },
   tabIcon: { width: 30, height: 26, alignItems: 'center', justifyContent: 'center' },
-  tabLabel: { marginTop: 1, fontSize: 8.5, fontWeight: '700', letterSpacing: 0.1 }, tabLabelActive: { fontWeight: '900' },
+  tabLabel: { marginTop: 1, fontSize: 10, fontWeight: '700', letterSpacing: 0.1 }, tabLabelActive: { fontWeight: '900' },
   kitchenIndicator: { position: 'absolute', top: -1, width: 34, height: 8 },
   kitchenSolid: { height: 2 },
   kitchenDashed: { marginTop: 2, borderTopWidth: 1, borderStyle: 'dashed' },

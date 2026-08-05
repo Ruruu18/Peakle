@@ -1,29 +1,29 @@
 import React, { createContext, useContext, useEffect, useMemo, useState } from 'react';
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import { Linking } from 'react-native';
+import { AppState, Linking } from 'react-native';
 import { makeRedirectUri } from 'expo-auth-session';
 import * as WebBrowser from 'expo-web-browser';
 import { isSupabaseConfigured, requireSupabase, supabase } from '../lib/supabase';
+import { readCachedData, withTimeout, writeCachedData } from '../lib/asyncData';
+import { disablePushToken } from '../services/realtimeOperations';
+import { deleteManagedProfilePhoto, isLocalPhotoUri, normalizeProfilePhoto, uploadProfilePhoto } from '../services/profilePhotos';
+import {
+  BOOKING_VENUES_CACHE_KEY,
+  HOME_VENUES_CACHE_KEY,
+  bookingsCacheKey,
+  homeDashboardCacheKey,
+  openPlaySessionsCacheKey,
+  profileScreenCacheKey,
+  teamScreenCacheKey,
+} from '../lib/cacheKeys';
 
 const AuthContext = createContext(null);
 const PENDING_VERIFICATION_EMAIL_KEY = '@peakle/pending-verification-email';
 const LAST_SIGN_IN_METHOD_KEY = '@peakle/last-sign-in-method';
 const REMEMBERED_EMAIL_KEY = '@peakle/remembered-email';
 const ONBOARDING_SAVE_TIMEOUT_MS = 15000;
-
-async function withTimeout(promise, timeoutMs, message) {
-  let timeoutId;
-  try {
-    return await Promise.race([
-      promise,
-      new Promise((_, reject) => {
-        timeoutId = setTimeout(() => reject(new Error(message)), timeoutMs);
-      }),
-    ]);
-  } finally {
-    clearTimeout(timeoutId);
-  }
-}
+const AUTH_STARTUP_TIMEOUT_MS = 8000;
+const userCacheKey = (userId) => `@peakle/cache/auth-user/${userId}`;
 
 function mapUser(authUser, profile, isAdmin = false) {
   if (!authUser) return null;
@@ -32,8 +32,8 @@ function mapUser(authUser, profile, isAdmin = false) {
     id: authUser.id,
     email: authUser.email,
     name: profile?.display_name || metadata.display_name || metadata.full_name || authUser.email?.split('@')[0] || 'Peakle Player',
-    picture: profile?.avatar_url || metadata.avatar_url,
-    location: profile?.home_area || 'Metro Manila',
+    picture: normalizeProfilePhoto(profile?.avatar_url || metadata.avatar_url || metadata.picture),
+    location: profile?.home_area || '',
     skill: profile?.skill_rating != null ? String(profile.skill_rating) : null,
     preference: profile?.play_preference || 'Doubles',
     presenceStatus: profile?.presence_status || 'free',
@@ -51,10 +51,11 @@ async function recordLogin(authUserId, method) {
   try {
     const changes = { last_login_at: new Date().toISOString() };
     if (method === 'email' || method === 'google') changes.last_sign_in_method = method;
-    await requireSupabase()
-      .from('profiles')
-      .update(changes)
-      .eq('id', authUserId);
+    await withTimeout(
+      requireSupabase().from('profiles').update(changes).eq('id', authUserId),
+      5000,
+      'Login activity update timed out.',
+    );
   } catch (_) {
     // silent
   }
@@ -128,30 +129,66 @@ export function AuthProvider({ children }) {
     if (!supabase) { setHydrated(true); return undefined; }
     let active = true;
     Promise.all([
-      supabase.auth.getSession(),
+      withTimeout(supabase.auth.getSession(), 6000, 'Session restore timed out.'),
       AsyncStorage.getItem(PENDING_VERIFICATION_EMAIL_KEY).catch(() => ''),
       AsyncStorage.getItem(LAST_SIGN_IN_METHOD_KEY).catch(() => null),
       AsyncStorage.getItem(REMEMBERED_EMAIL_KEY).catch(() => ''),
     ]).then(async ([{ data }, pendingEmail, storedSignInMethod, storedEmail]) => {
       if (!active) return;
+      const authUser = data.session?.user;
       const localSignInMethod = storedSignInMethod === 'google' || storedSignInMethod === 'email' ? storedSignInMethod : null;
-      if (data.session?.user) {
+      if (authUser) {
         setPendingVerificationEmail('');
         AsyncStorage.removeItem(PENDING_VERIFICATION_EMAIL_KEY).catch(() => {});
       } else {
         setPendingVerificationEmail(pendingEmail || '');
       }
       setRememberedEmail(storedEmail || '');
-      const currentUser = await readCurrentUser(data.session?.user);
-      setUser(currentUser);
-      const syncedSignInMethod = currentUser?.lastSignInMethod === 'google' || currentUser?.lastSignInMethod === 'email'
-        ? currentUser.lastSignInMethod
+      const [cachedUser] = authUser ? await Promise.all([
+        readCachedData(userCacheKey(authUser.id)),
+        readCachedData(teamScreenCacheKey(authUser.id)),
+        readCachedData(profileScreenCacheKey(authUser.id)),
+        readCachedData(homeDashboardCacheKey(authUser.id)),
+        readCachedData(HOME_VENUES_CACHE_KEY),
+        readCachedData(BOOKING_VENUES_CACHE_KEY),
+        readCachedData(bookingsCacheKey(authUser.id)),
+        readCachedData(openPlaySessionsCacheKey(authUser.id)),
+      ]) : [null];
+      const hasCachedUser = cachedUser?.id === authUser?.id;
+      const provisionalUser = authUser
+        ? { ...mapUser(authUser), ...(hasCachedUser ? cachedUser : {}), id: authUser.id, email: authUser.email }
+        : null;
+      if (!active) return;
+      setUser(provisionalUser);
+      if (!authUser || hasCachedUser) setHydrated(true);
+      const syncedSignInMethod = provisionalUser?.lastSignInMethod === 'google' || provisionalUser?.lastSignInMethod === 'email'
+        ? provisionalUser.lastSignInMethod
         : localSignInMethod;
       setLastSignInMethod(syncedSignInMethod);
-      if (currentUser?.lastSignInMethod) {
-        AsyncStorage.setItem(LAST_SIGN_IN_METHOD_KEY, currentUser.lastSignInMethod).catch(() => {});
+      if (provisionalUser?.lastSignInMethod) {
+        AsyncStorage.setItem(LAST_SIGN_IN_METHOD_KEY, provisionalUser.lastSignInMethod).catch(() => {});
       }
-    }).catch(() => { if (active) setUser(null); }).finally(() => { if (active) setHydrated(true); });
+      if (authUser) {
+        try {
+          const currentUser = await withTimeout(
+            readCurrentUser(authUser),
+            AUTH_STARTUP_TIMEOUT_MS,
+            'Profile refresh timed out.',
+          );
+          if (!active) return;
+          setUser(currentUser);
+          writeCachedData(userCacheKey(authUser.id), currentUser);
+          if (currentUser?.lastSignInMethod) {
+            setLastSignInMethod(currentUser.lastSignInMethod);
+            AsyncStorage.setItem(LAST_SIGN_IN_METHOD_KEY, currentUser.lastSignInMethod).catch(() => {});
+          }
+        } catch {
+          // Keep the authenticated cached profile visible while the database reconnects.
+        } finally {
+          if (active) setHydrated(true);
+        }
+      }
+    }).catch(() => { if (active) setHydrated(true); });
     const { data: listener } = supabase.auth.onAuthStateChange((event, session) => {
       if (event === 'PASSWORD_RECOVERY') setPasswordRecovery(true);
       if (session?.user) {
@@ -163,7 +200,26 @@ export function AuthProvider({ children }) {
           recordLogin(session.user.id);
         }
       }
-      setTimeout(() => readCurrentUser(session?.user).then((value) => { if (active) setUser(value); }).catch(() => { if (active) setUser(null); }), 0);
+      if (!session?.user) {
+        setUser(null);
+        return;
+      }
+      setTimeout(async () => {
+        const authUser = session.user;
+        const cachedUser = await readCachedData(userCacheKey(authUser.id));
+        if (!active) return;
+        setUser((current) => current?.id === authUser.id
+          ? current
+          : { ...mapUser(authUser), ...(cachedUser?.id === authUser.id ? cachedUser : {}), id: authUser.id, email: authUser.email });
+        try {
+          const value = await withTimeout(readCurrentUser(authUser), AUTH_STARTUP_TIMEOUT_MS, 'Profile refresh timed out.');
+          if (!active) return;
+          setUser(value);
+          writeCachedData(userCacheKey(authUser.id), value);
+        } catch {
+          // A temporary fetch failure must not turn an authenticated user into a guest.
+        }
+      }, 0);
     });
     const openUrl = ({ url }) => {
       if (url.includes('reset-password')) setPasswordRecovery(true);
@@ -176,6 +232,41 @@ export function AuthProvider({ children }) {
     Linking.getInitialURL().then((url) => { if (url) openUrl({ url }); });
     return () => { active = false; listener.subscription.unsubscribe(); linkListener.remove(); };
   }, []);
+
+  useEffect(() => {
+    const userId = user?.id;
+    if (!supabase || !userId) return undefined;
+    let active = true;
+    let syncing = false;
+    const syncProfile = async () => {
+      if (syncing) return;
+      syncing = true;
+      try {
+        const { data, error } = await supabase.auth.getUser();
+        if (error || !data.user || data.user.id !== userId) return;
+        const nextUser = await readCurrentUser(data.user);
+        if (!active || !nextUser) return;
+        setUser(nextUser);
+        writeCachedData(userCacheKey(userId), nextUser);
+      } catch {
+        // Keep the last usable profile while another device or the network reconnects.
+      } finally {
+        syncing = false;
+      }
+    };
+    const channel = supabase.channel(`profile-sync-${userId}`)
+      .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'profiles', filter: `id=eq.${userId}` }, syncProfile)
+      .subscribe();
+    const appState = AppState.addEventListener('change', (nextState) => {
+      if (nextState === 'active') syncProfile();
+    });
+    syncProfile();
+    return () => {
+      active = false;
+      appState.remove();
+      supabase.removeChannel(channel);
+    };
+  }, [user?.id]);
 
   const rememberPendingVerification = async (email) => {
     setPendingVerificationEmail(email);
@@ -321,10 +412,14 @@ export function AuthProvider({ children }) {
       authUser = result.user;
     }
     if (!authUser) throw new Error('Your account session is missing. Please log in again.');
+    const selectedAvatar = normalizeProfilePhoto(profile.avatar !== undefined ? profile.avatar : profile.picture);
+    const savedAvatar = isLocalPhotoUri(selectedAvatar)
+      ? await uploadProfilePhoto(authUser.id, selectedAvatar)
+      : selectedAvatar || null;
     const profilePayload = {
       id: authUser.id,
       display_name: profile.name,
-      avatar_url: profile.avatar || profile.picture || null,
+      avatar_url: savedAvatar,
       home_area: profile.location,
       skill_rating: null,
       play_preference: profile.preference,
@@ -366,26 +461,49 @@ export function AuthProvider({ children }) {
       throw new Error('Your profile setup could not be verified. Please try again.');
     }
     setUser(currentUser);
+    writeCachedData(userCacheKey(authUser.id), currentUser);
   };
 
   const updateProfile = async (changes) => {
+    const previousAvatar = user?.picture || null;
+    const nextChanges = { ...changes };
+    let uploadedAvatar = null;
+    if (isLocalPhotoUri(changes.avatar)) {
+      uploadedAvatar = await uploadProfilePhoto(user.id, changes.avatar);
+      nextChanges.avatar = uploadedAvatar;
+    }
     const payload = {};
-    if (changes.name !== undefined) payload.display_name = changes.name;
-    if (changes.location !== undefined) payload.home_area = changes.location;
-    if (changes.avatar !== undefined) payload.avatar_url = changes.avatar;
-    if (changes.preference !== undefined) payload.play_preference = changes.preference;
-    if (changes.presenceStatus !== undefined) payload.presence_status = changes.presenceStatus;
-    if (changes.mode !== undefined) payload.app_mode = changes.mode;
-    if (changes.preferences !== undefined) payload.notification_preferences = changes.preferences;
-    const { error } = await requireSupabase().from('profiles').update(payload).eq('id', user.id);
-    if (error) throw error;
-    setUser((current) => ({ ...current, ...changes, ...(changes.avatar !== undefined ? { picture: changes.avatar } : {}) }));
+    if (nextChanges.name !== undefined) payload.display_name = nextChanges.name;
+    if (nextChanges.location !== undefined) payload.home_area = nextChanges.location;
+    if (nextChanges.avatar !== undefined) payload.avatar_url = nextChanges.avatar || null;
+    if (nextChanges.preference !== undefined) payload.play_preference = nextChanges.preference;
+    if (nextChanges.presenceStatus !== undefined) payload.presence_status = nextChanges.presenceStatus;
+    if (nextChanges.mode !== undefined) payload.app_mode = nextChanges.mode;
+    if (nextChanges.preferences !== undefined) payload.notification_preferences = nextChanges.preferences;
+    const { data: savedProfile, error } = await requireSupabase().from('profiles').update(payload).eq('id', user.id).select('*').single();
+    if (error) {
+      if (uploadedAvatar) deleteManagedProfilePhoto(uploadedAvatar).catch(() => {});
+      throw error;
+    }
+    if (nextChanges.avatar !== undefined) nextChanges.avatar = normalizeProfilePhoto(savedProfile.avatar_url);
+    setUser((current) => {
+      const nextUser = { ...current, ...nextChanges, ...(nextChanges.avatar !== undefined ? { picture: nextChanges.avatar || null } : {}) };
+      writeCachedData(userCacheKey(user.id), nextUser);
+      return nextUser;
+    });
+    if (nextChanges.avatar !== undefined && previousAvatar && previousAvatar !== nextChanges.avatar) {
+      deleteManagedProfilePhoto(previousAvatar).catch(() => {});
+    }
+    return nextChanges;
   };
 
   const signOut = async () => {
     const client = requireSupabase();
     if (user?.id) {
-      await client.from('player_presence').update({ availability: 'offline', updated_at: new Date().toISOString() }).eq('user_id', user.id).catch(() => {});
+      await Promise.all([
+        client.from('player_presence').update({ availability: 'offline', updated_at: new Date().toISOString() }).eq('user_id', user.id).catch(() => {}),
+        disablePushToken(user.id).catch(() => {}),
+      ]);
     }
     const { error } = await client.auth.signOut();
     if (error) throw error;
