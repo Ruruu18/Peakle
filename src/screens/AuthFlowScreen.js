@@ -2,6 +2,7 @@ import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
   ActivityIndicator,
   Animated,
+  Easing,
   Image,
   KeyboardAvoidingView,
   Modal,
@@ -12,7 +13,6 @@ import {
   Text,
   TextInput,
   View,
-  LayoutAnimation,
   UIManager
 } from 'react-native';
 import * as Location from 'expo-location';
@@ -871,15 +871,32 @@ export default function AuthFlowScreen({ initialScreen = 'welcome' }) {
   const [screen, setScreen] = useState(() => ['welcome', 'login'].includes(initialScreen) && pendingVerificationEmail ? 'verify-email' : initialScreen);
   const [verificationEmail, setVerificationEmail] = useState(pendingVerificationEmail || '');
   const [profile, setProfile] = useState(() => initialScreen === 'complete-profile' ? { name: user?.name || '', email: user?.email, picture: user?.picture, location: user?.location, skill: user?.skill, preference: user?.preference } : null);
-  if (screen === 'reset-password') return <ResetPassword />;
-  if (screen === 'new-user-overview') return <DeviceIntro onComplete={() => setScreen('complete-profile')} />;
-  if (user && !user.onboardingCompleted) return <Personalize profile={profile || { name: user.name || '', email: user.email, picture: user.picture, location: user.location, skill: user.skill, preference: user.preference }} />;
-  if (screen === 'welcome') return <Welcome onLogin={() => setScreen('login')} onCreate={() => setScreen('create')} />;
-  if (screen === 'login') return <AccountForm kind="login" onAlternate={() => setScreen('create')} onForgot={() => setScreen('forgot-password')} onNeedsVerification={(email) => { setVerificationEmail(email); setScreen('verify-email'); }} />;
-  if (screen === 'forgot-password') return <ForgotPassword onBack={() => setScreen('login')} onLogin={() => setScreen('login')} />;
-  if (screen === 'verify-email') return <VerifyEmail email={verificationEmail || pendingVerificationEmail} onLogin={() => setScreen('login')} onUseDifferentEmail={async () => { await clearPendingVerification(); setVerificationEmail(''); setProfile(null); setScreen('create'); }} />;
-  if (screen === 'create') return <AccountForm kind="create" onBack={() => setScreen('login')} onAlternate={() => setScreen('login')} onNewAccount={(value) => { setProfile({ name: value.name, email: value.email }); if (value.needsEmailConfirmation) { setVerificationEmail(value.email); setScreen('verify-email'); } else { setScreen('personalize'); } }} />;
-  return <Personalize profile={profile || { name: user?.name || '', email: user?.email, picture: user?.picture, location: user?.location, skill: user?.skill, preference: user?.preference }} onBack={screen === 'complete-profile' ? undefined : () => setScreen('create')} />;
+
+  const fade = useRef(new Animated.Value(1)).current;
+  const goTo = (next) => {
+    Animated.timing(fade, { toValue: 0, duration: 140, easing: Easing.out(Easing.cubic), useNativeDriver: true }).start(() => {
+      setScreen(next);
+      fade.setValue(0);
+      Animated.timing(fade, { toValue: 1, duration: 240, easing: Easing.out(Easing.cubic), useNativeDriver: true }).start();
+    });
+  };
+
+  let content;
+  if (screen === 'reset-password') content = <ResetPassword />;
+  else if (screen === 'new-user-overview') content = <DeviceIntro onComplete={() => goTo('complete-profile')} />;
+  else if (user && !user.onboardingCompleted) content = <Personalize profile={profile || { name: user.name || '', email: user.email, picture: user.picture, location: user.location, skill: user.skill, preference: user.preference }} />;
+  else if (screen === 'welcome') content = <Welcome onLogin={() => goTo('login')} onCreate={() => goTo('create')} />;
+  else if (screen === 'login') content = <AccountForm kind="login" onAlternate={() => goTo('create')} onForgot={() => goTo('forgot-password')} onNeedsVerification={(email) => { setVerificationEmail(email); goTo('verify-email'); }} />;
+  else if (screen === 'forgot-password') content = <ForgotPassword onBack={() => goTo('login')} onLogin={() => goTo('login')} />;
+  else if (screen === 'verify-email') content = <VerifyEmail email={verificationEmail || pendingVerificationEmail} onLogin={() => goTo('login')} onUseDifferentEmail={async () => { await clearPendingVerification(); setVerificationEmail(''); setProfile(null); goTo('create'); }} />;
+  else if (screen === 'create') content = <AccountForm kind="create" onBack={() => goTo('login')} onAlternate={() => goTo('login')} onNewAccount={(value) => { setProfile({ name: value.name, email: value.email }); if (value.needsEmailConfirmation) { setVerificationEmail(value.email); goTo('verify-email'); } else { goTo('personalize'); } }} />;
+  else content = <Personalize profile={profile || { name: user?.name || '', email: user?.email, picture: user?.picture, location: user?.location, skill: user?.skill, preference: user?.preference }} onBack={screen === 'complete-profile' ? undefined : () => goTo('create')} />;
+
+  return (
+    <Animated.View style={{ flex: 1, opacity: fade, transform: [{ translateY: fade.interpolate({ inputRange: [0, 1], outputRange: [8, 0] }) }] }}>
+      {content}
+    </Animated.View>
+  );
 }
 
 const shadow = Platform.select({ ios: { shadowColor: C.ink, shadowOpacity: .12, shadowRadius: 20, shadowOffset: { width: 0, height: 8 } }, android: { elevation: 5 } });

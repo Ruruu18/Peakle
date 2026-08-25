@@ -2,6 +2,7 @@
 
 import { useState } from "react";
 import Image from "next/image";
+import Link from "next/link";
 import { ArrowRight, Check, Eye, EyeOff, Moon, ShieldCheck, Sun, Trophy, Users } from "lucide-react";
 import { toast } from "sonner";
 import { useAuth, useTheme } from "./providers";
@@ -57,7 +58,7 @@ export default function LoginScreen() {
             <div><span><ShieldCheck size={18} /></span><p><strong>Venue control</strong>Staff access and secure operations.</p></div>
           </div>
         </div>
-        <div className="story-proof"><span className="live-dot" /> BUILT FOR THE BASELINE</div>
+        <div className="story-proof" />
         <Image src="/ball.png" alt="" width={520} height={520} className="login-story-art" priority />
       </section>
 
@@ -89,6 +90,8 @@ export default function LoginScreen() {
           <button className="button button-ghost google-button" disabled={busy || !configured} type="button" onClick={google}>
             <Image src="/google.svg" alt="" width={18} height={18} className="google-icon" /> Continue with Google
           </button>
+
+          <p className="auth-switch">New to Peakle Organizer? <Link href="/register">Create an organizer account</Link></p>
 
           <div className="login-trust"><Check size={14} /> Protected by the same Peakle permissions and venue roles.</div>
         </div>

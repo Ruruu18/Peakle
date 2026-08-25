@@ -14,8 +14,10 @@ import {
   TextInput,
   useWindowDimensions,
   View,
+  Image,
 } from 'react-native';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
+import { useFocusEffect } from '@react-navigation/native';
 import { StatusBar } from 'expo-status-bar';
 import * as MediaLibrary from 'expo-media-library';
 import * as Sharing from 'expo-sharing';
@@ -28,10 +30,18 @@ import { normalizeProfilePhoto } from '../services/profilePhotos';
 import ScrollView from '../components/FocusResetScrollView';
 import { useAuth } from '../context/AuthContext';
 import { createDarkStyleSheet, DARK_CONTENT_COLORS, useTheme } from '../context/ThemeContext';
-import { listTeams, listVenues, loadUnfinishedMatch, saveCompletedMatch, saveUnfinishedMatch } from '../services/database';
+import { listMyBookings, listTeams, loadUnfinishedMatch, saveCompletedMatch, saveUnfinishedMatch } from '../services/database';
 import { listFollowingPlayers } from '../services/directMessages';
 import { useNearbyPlayersContext } from '../context/NearbyPlayersContext';
 import { createMobileStyleSheet } from '../utils/mobileStyles';
+import { announceScoreForVoiceOver, speakScoreAnnouncement, stopScoreAnnouncement } from '../utils/scoreAccessibility';
+import useShoutScoring from '../hooks/useShoutScoring';
+import { parseVoiceMatchCommand } from '../utils/voiceMatchCommands';
+import { evenSidePlayerFromCurrentServer, playerForSideOut, resolveRallyState } from '../utils/liveMatchScoring';
+import { DEMO_MODE } from '../config/demoMode';
+import { DEMO_LIVE_MATCH } from '../config/demoData';
+
+const BALL_IMAGE = require('../../public/images/ball.png');
 
 const LIGHT_C = {
   ink: '#0E2321', paper: '#F3F5EF', surface: '#FFFFFF', optic: '#D6E94A',
@@ -42,22 +52,62 @@ let C = LIGHT_C;
 const emptyLineup = (currentUserName) => [[currentUserName || 'You', ''], ['', '']];
 const normalizedPlayerName = (name) => name?.trim().toLocaleLowerCase() || '';
 
+function isConfirmedBooking(booking) {
+  return booking?.status === 'confirmed' && new Date(booking.ends_at).getTime() > Date.now();
+}
+
+function isCourtBookingActive(court, now = Date.now()) {
+  const startsAt = new Date(court?.bookingStartsAt).getTime();
+  const endsAt = new Date(court?.bookingEndsAt).getTime();
+  return Boolean(court?.bookingId && Number.isFinite(startsAt) && Number.isFinite(endsAt) && startsAt <= now && now < endsAt);
+}
+
+function bookingTimeLabel(booking) {
+  const startsAt = new Date(booking.starts_at);
+  const endsAt = new Date(booking.ends_at);
+  const timeZone = booking.venues?.time_zone || 'Asia/Manila';
+  const time = (date) => date.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', timeZone });
+  const date = startsAt.toLocaleDateString('en-US', { month: 'short', day: 'numeric', timeZone });
+  return startsAt.getTime() <= Date.now()
+    ? `Booked now · until ${time(endsAt)}`
+    : `Booked ${date} · ${time(startsAt)}–${time(endsAt)}`;
+}
+
+function playableCourtsFromBookings(bookings) {
+  return (bookings || [])
+    .filter(isConfirmedBooking)
+    .filter((booking) => booking.courts && booking.venues)
+    .sort((a, b) => new Date(a.starts_at) - new Date(b.starts_at))
+    .map((booking) => ({
+      id: booking.court_id,
+      bookingId: booking.id,
+      bookingStartsAt: booking.starts_at,
+      bookingEndsAt: booking.ends_at,
+      name: booking.venues.name,
+      detail: `${booking.courts.name} · ${booking.courts.environment || 'Court'}`,
+      distance: booking.venues.area || 'Confirmed reservation',
+      next: bookingTimeLabel(booking),
+      color: booking.venues.color || C.teal,
+    }));
+}
+
 function Icon({ name, size = 20, color = C.ink }) {
   return <Ionicons name={name} size={size} color={color} />;
 }
 
-function KitchenLine({ dark = false }) {
-  return <View style={styles.kitchen}><View style={[styles.solid, dark && styles.solidLight]} /><View style={[styles.dashed, dark && styles.dashedLight]} /></View>;
+function KitchenLine({ dark = false, style }) {
+  return <View style={[styles.kitchen, style]}><View style={[styles.solid, dark && styles.solidLight]} /><View style={[styles.dashed, dark && styles.dashedLight]} /></View>;
 }
 
-function Header({ eyebrow, title, action }) {
+function Header({ eyebrow, title, action, onBack }) {
   return (
     <>
       <View style={styles.header}>
-        <View style={styles.headerCopy}><Text style={styles.eyebrow}>{eyebrow}</Text><Text style={styles.h1}>{title}</Text></View>
+        {onBack ? <Pressable accessibilityRole="button" accessibilityLabel="Back to Play options" hitSlop={6} onPress={onBack} style={styles.headerBack}><Icon name="arrow-back" /></Pressable> : null}
+        <View style={styles.headerCopy}><Text numberOfLines={1} style={styles.eyebrow}>{eyebrow}</Text><Text numberOfLines={1} style={styles.h1}>{title}</Text></View>
         {action}
       </View>
-      <KitchenLine />
+      <KitchenLine style={styles.headerLine} />
     </>
   );
 }
@@ -225,12 +275,12 @@ function CourtPicker({ courts, visible, selected, onSelect, onClose }) {
   const sheetHeight = Math.min(520, desiredHeight, Math.floor(availableHeight * 0.72));
 
   const renderCourt = ({ item: court }) => {
-    const active = selected?.id === court.id;
+    const active = selected?.bookingId === court.bookingId;
     return (
       <Pressable
         accessibilityRole="button"
         accessibilityState={{ selected: active }}
-        key={court.id}
+        key={court.bookingId}
         onPress={() => onSelect(court)}
         style={({ pressed }) => [styles.courtOption, active && styles.courtOptionActive, pressed && styles.pressed]}
       >
@@ -246,13 +296,13 @@ function CourtPicker({ courts, visible, selected, onSelect, onClose }) {
       <Pressable accessibilityLabel="Close court picker" style={[styles.modalBackdrop, { paddingBottom: Math.max(insets.bottom, 16) }]} onPress={onClose}>
         <Pressable accessibilityRole="dialog" testID="court-picker-sheet" style={[styles.courtSheet, { height: sheetHeight }]} onPress={(event) => event.stopPropagation()}>
           <View style={styles.sheetHandle} />
-          <View style={styles.sheetHead}><View><Text style={styles.eyebrow}>BEFORE YOU PLAY</Text><Text style={styles.sheetTitle}>Choose a court</Text></View><Pressable accessibilityLabel="Close" onPress={onClose} style={styles.sheetClose}><Icon name="close" /></Pressable></View>
-          <Text style={styles.sheetLead}>Select where this match will take place.</Text>
+          <View style={styles.sheetHead}><View><Text style={styles.eyebrow}>CONFIRMED RESERVATIONS</Text><Text style={styles.sheetTitle}>Choose a booked court</Text></View><Pressable accessibilityLabel="Close" onPress={onClose} style={styles.sheetClose}><Icon name="close" /></Pressable></View>
+          <Text style={styles.sheetLead}>Only courts covered by your confirmed bookings are available.</Text>
           <FlatList
             testID="court-picker-list"
             data={courts}
             renderItem={renderCourt}
-            keyExtractor={(court) => court.id}
+            keyExtractor={(court) => court.bookingId}
             style={styles.courtList}
             contentContainerStyle={styles.courtListContent}
             showsVerticalScrollIndicator
@@ -331,13 +381,13 @@ function PlayChoiceScreen({ onFindPlay, onSetupMatch, unfinishedMatch, onResume 
   return (
     <ScrollView contentContainerStyle={[styles.content, styles.playChoiceContent]} showsVerticalScrollIndicator={false}>
       <Header
-        eyebrow="PLAY"
-        title="How do you want to play?"
-        action={<View style={styles.choiceHelpBadge}><Icon name="sparkles-outline" size={17} color={C.teal} /><Text style={styles.choiceHelpBadgeText}>QUICK START</Text></View>}
+        eyebrow="YOUR GAME"
+        title="Play"
+        action={<View accessibilityElementsHidden importantForAccessibility="no-hide-descendants" style={styles.playHeaderBall}><Image source={BALL_IMAGE} style={styles.playHeaderBallImage} resizeMode="contain" /></View>}
       />
 
       <View style={styles.choiceIntro}>
-        <Text style={styles.choiceIntroTitle}>Choose what sounds like you.</Text>
+        <Text style={styles.choiceIntroTitle}>How do you want to play?</Text>
         <Text style={styles.choiceIntroText}>Find people nearby or set up a match you already have.</Text>
       </View>
 
@@ -405,7 +455,7 @@ function PlayChoiceScreen({ onFindPlay, onSetupMatch, unfinishedMatch, onResume 
   );
 }
 
-function SetupScreen({ courts, nearbyPlayers, nearbyPresence, currentUserName, currentUserId, currentUserAvatar, onStart, focusChallenge, onBackToChoices, showBackToChoices = true, onFindPlay, onMessagePlayer, onLeaveJoined, unfinishedMatch, onResume, openNearbyPlayersToken }) {
+function SetupScreen({ courts, courtsLoading, courtsError, onRefreshCourts, onBookCourt, nearbyPlayers, nearbyPresence, currentUserName, currentUserId, currentUserAvatar, onStart, focusChallenge, onBackToChoices, showBackToChoices = true, onFindPlay, onMessagePlayer, onLeaveJoined, unfinishedMatch, onResume, openNearbyPlayersToken }) {
   const [followingPlayers, setFollowingPlayers] = useState([]);
   const [teammates, setTeammates] = useState([]);
   const [rosterError, setRosterError] = useState('');
@@ -443,10 +493,12 @@ function SetupScreen({ courts, nearbyPlayers, nearbyPresence, currentUserName, c
   const [winByTwo, setWinByTwo] = useState(true);
   const [players, setPlayers] = useState(() => emptyLineup(currentUserName));
   const [invited, setInvited] = useState([]);
-  const [court, setCourt] = useState(courts[0] || null);
+  const [court, setCourt] = useState(null);
+  const [bookingClock, setBookingClock] = useState(Date.now());
   const [scorerSource, setScorerSource] = useState('host');
   const [scorer, setScorer] = useState(currentUserName || 'You');
   const [scorerId, setScorerId] = useState(currentUserId || null);
+  const [scoringMethod, setScoringMethod] = useState('manual');
   const [showCourts, setShowCourts] = useState(false);
   const [showAdvanced, setShowAdvanced] = useState(false);
   const [setupStage, setSetupStage] = useState(() => openNearbyPlayersToken ? 1 : 0);
@@ -494,7 +546,6 @@ function SetupScreen({ courts, nearbyPlayers, nearbyPresence, currentUserName, c
   const normalizedLineup = onCourtScorers.map(normalizedPlayerName);
   const hasDuplicatePlayers = new Set(normalizedLineup).size !== normalizedLineup.length;
   const missingPlayerCount = (requiredPlayers * 2) - onCourtScorers.length;
-  useEffect(() => { if (!court && courts.length) setCourt(courts[0]); }, [courts, court]);
   const joinedInvite = nearbyPresence.joinedInvite;
   const joinedSender = joinedInvite?.sender;
   const acceptedProfiles = nearbyPresence.outgoingInvites.filter((invite) => invite.status === 'accepted' && invite.match_payload?.setupId === setupId).map((invite) => invite.recipient).filter(Boolean);
@@ -503,7 +554,8 @@ function SetupScreen({ courts, nearbyPlayers, nearbyPresence, currentUserName, c
   const scorerIsValid = scorerSource === 'host'
     ? Boolean(currentUserId && scorerId === currentUserId)
     : registeredScorerCandidates.some((profile) => profile.id === scorerId);
-  const canStart = !joinedInvite && Boolean(court) && scorerIsValid && missingPlayerCount === 0 && !hasDuplicatePlayers;
+  const bookingActive = Boolean(joinedInvite) || isCourtBookingActive(court, bookingClock);
+  const canStart = !joinedInvite && !courtsLoading && !courtsError && Boolean(court) && bookingActive && scorerIsValid && missingPlayerCount === 0 && !hasDuplicatePlayers;
   const acceptedInvitePlayers = acceptedProfiles.map((profile) => ({
     id: profile.id,
     name: profile.display_name,
@@ -526,13 +578,19 @@ function SetupScreen({ courts, nearbyPlayers, nearbyPresence, currentUserName, c
   }, []);
   const lineupProfiles = [...followingPlayers, ...teammates, ...nearbyPlayers, ...(joinedSender ? [{ id: joinedSender.id, name: joinedSender.display_name, avatar: joinedSender.avatar_url }] : [])]
     .filter((profile, index, rows) => profile?.id && rows.findIndex((candidate) => candidate?.id === profile.id) === index);
-  const matchConfiguration = { setupId, matchType, mode, access, target, bestOf, winByTwo, players: trimmedPlayers, registeredPlayers, court, scorer, scorerId, scorerSource, focusChallenge };
+  const matchConfiguration = { setupId, matchType, mode, access, target, bestOf, winByTwo, players: trimmedPlayers, registeredPlayers, court, scorer, scorerId, scorerSource, scoringMethod, focusChallenge };
   const setupMessage = hasDuplicatePlayers
     ? 'Each player needs a unique name.'
     : missingPlayerCount > 0
       ? `Add ${missingPlayerCount} more ${missingPlayerCount === 1 ? 'player' : 'players'} to complete the lineup.`
+      : courtsError
+        ? 'Your court booking could not be verified. Try again before continuing.'
       : !court
         ? 'Choose where you are playing.'
+        : !bookingActive
+          ? new Date(court.bookingStartsAt).getTime() > bookingClock
+            ? `Your booking has not started yet. Court time begins ${court.next.replace(/^Booked /, '')}.`
+            : 'This booking is no longer active. Choose another confirmed reservation.'
         : !scorerIsValid
           ? 'Choose who will keep score.'
           : 'Everything is ready. Choose the first server.';
@@ -545,17 +603,29 @@ function SetupScreen({ courts, nearbyPlayers, nearbyPresence, currentUserName, c
   const stageMessage = [
     'Choose the kind of match you want to play.',
     hasDuplicatePlayers ? 'Each player needs a unique name.' : missingPlayerCount > 0 ? `Add ${missingPlayerCount} more ${missingPlayerCount === 1 ? 'player' : 'players'}.` : 'Your lineup is complete.',
-    court ? `${court.name} is selected. Continue when ready.` : 'Choose where this match will take place.',
+    courtsLoading ? 'Checking your confirmed court bookings.' : courtsError ? 'Your booking could not be verified. Try again.' : court ? `${court.name} is selected. Continue when ready.` : 'Choose a confirmed court booking.',
     setupMessage,
   ][setupStage];
   const canContinueStage = setupStage === 0
     || (setupStage === 1 && missingPlayerCount === 0 && !hasDuplicatePlayers)
-    || (setupStage === 2 && Boolean(court));
+    || (setupStage === 2 && !courtsLoading && !courtsError && Boolean(court));
 
   const moveToStage = (nextStage) => {
     setSetupStage(nextStage);
     requestAnimationFrame(() => scrollRef.current?.scrollTo({ y: 0, animated: true }));
   };
+
+  useEffect(() => {
+    if (!court || joinedInvite) return undefined;
+    const timer = setInterval(() => setBookingClock(Date.now()), 15000);
+    return () => clearInterval(timer);
+  }, [court, joinedInvite]);
+
+  useEffect(() => {
+    if (!court || joinedInvite) return;
+    const bookingStillAvailable = courts.some((option) => option.bookingId === court.bookingId);
+    if (!bookingStillAvailable) setCourt(null);
+  }, [court, courts, joinedInvite]);
 
   useEffect(() => {
     if (!joinedInvite?.id || !joinedSender?.display_name) return;
@@ -678,12 +748,10 @@ function SetupScreen({ courts, nearbyPlayers, nearbyPresence, currentUserName, c
 
   return (
     <ScrollView ref={scrollRef} contentContainerStyle={styles.content} showsVerticalScrollIndicator={false} keyboardShouldPersistTaps="handled">
-      {showBackToChoices && !joinedInvite ? <Pressable accessibilityRole="button" accessibilityLabel="Back to Play choices" onPress={onBackToChoices} style={({ pressed }) => [styles.playChoiceBack, pressed && styles.pressed]}>
-        <Icon name="chevron-back" size={16} color={C.teal} /><Text style={styles.playChoiceBackText}>Play options</Text>
-      </Pressable> : null}
       <Header
         eyebrow={joinedInvite ? 'MATCH JOINED' : 'MATCH DAY'}
         title={joinedInvite ? 'You’re in the match' : 'Set up a match'}
+        onBack={showBackToChoices && !joinedInvite ? onBackToChoices : null}
         action={joinedInvite ? <View style={styles.joinedChip}><Icon name="checkmark-circle" size={13} color="#0E2321" /><Text style={styles.joinedChipText}>JOINED</Text></View> : <View style={styles.liveChip}><View style={styles.liveDot} /><Text style={styles.liveChipText}>COURT-SIDE</Text></View>}
       />
 
@@ -721,7 +789,7 @@ function SetupScreen({ courts, nearbyPlayers, nearbyPresence, currentUserName, c
       {setupStage === 0 && !joinedInvite && <>
       {unfinishedMatch && <View style={styles.resumeCard}><View style={styles.resultIcon}><Icon name="checkmark" size={32} color="#0E2321" /></View><View style={styles.flex}><Text style={styles.resumeEyebrow}>UNFINISHED MATCH SAVED</Text><Text style={styles.resumeTitle}>{teamName(unfinishedMatch.players[0])} · {unfinishedMatch.scores[0]}–{unfinishedMatch.scores[1]} · {teamName(unfinishedMatch.players[1])}</Text><Text style={styles.resumeMeta}>Continue from the saved score when you have court time again.</Text></View><Pressable accessibilityRole="button" onPress={onResume} style={({ pressed }) => [styles.resumeButton, pressed && styles.pressed]}><Text style={styles.resumeButtonText}>Resume</Text><Icon name="play" size={13} color={C.surface} /></Pressable></View>}
       <View style={styles.introCard}>
-        <View style={styles.introIcon}><Icon name="tennisball-outline" size={26} color="#0E2321" /></View>
+        <View style={styles.introIcon}><Image source={BALL_IMAGE} style={{ width: 26, height: 26, tintColor: '#0E2321' }} resizeMode="contain" /></View>
         <View style={styles.introCopy}><Text style={[styles.introTitle, { color: '#0E2321' }]}>Start a match in minutes.</Text><Text style={[styles.bodySmall, { color: '#3C4A45' }]}>Pick a format, add the players, and confirm the court. We’ll handle the scoring defaults.</Text></View>
       </View>
       </>}
@@ -742,7 +810,7 @@ function SetupScreen({ courts, nearbyPlayers, nearbyPresence, currentUserName, c
           {setupStages.map(({ icon, label }, index) => {
             const done = index < setupStage;
             const active = index === setupStage;
-            return <React.Fragment key={label}><View style={styles.setupStep}><View style={[styles.setupStepIcon, done && styles.setupStepIconDone, active && styles.setupStepIconActive]}><Icon name={done ? 'checkmark' : icon} size={15} color={done || active ? '#0E2321' : C.ink40} /></View><Text style={[styles.setupStepText, done && styles.setupStepTextDone, active && styles.setupStepTextActive]}>{label}</Text></View>{index < setupStages.length - 1 && <View style={[styles.setupStepLine, index < setupStage && styles.setupStepLineDone]} />}</React.Fragment>;
+            return <React.Fragment key={label}><View style={styles.setupStep}><View style={[styles.setupStepIcon, done && styles.setupStepIconDone, active && styles.setupStepIconActive]}>{done ? <Icon name="checkmark" size={15} color="#0E2321" /> : icon === 'tennisball-outline' ? <Image source={BALL_IMAGE} style={{ width: 17, height: 17, tintColor: active ? '#0E2321' : C.ink40 }} resizeMode="contain" /> : <Icon name={icon} size={15} color={active ? '#0E2321' : C.ink40} />}</View><Text style={[styles.setupStepText, done && styles.setupStepTextDone, active && styles.setupStepTextActive]}>{label}</Text></View>{index < setupStages.length - 1 && <View style={[styles.setupStepLine, index < setupStage && styles.setupStepLineDone]} />}</React.Fragment>;
           })}
         </View>
         <Text accessibilityLiveRegion="polite" style={[styles.setupGuideMessage, setupStage === 3 && canStart && styles.setupGuideMessageReady]}>{stageMessage}</Text>
@@ -792,12 +860,16 @@ function SetupScreen({ courts, nearbyPlayers, nearbyPresence, currentUserName, c
 
       {setupStage === 2 && !joinedInvite && <View style={styles.formPart}>
       <View style={styles.fieldGroup}>
-        <Text style={styles.sectionLabel}>COURT</Text>
-        <Pressable accessibilityLabel="Choose a court" onPress={() => setShowCourts(true)} style={({ pressed }) => [styles.courtSelect, court && styles.courtSelectChosen, pressed && styles.pressed]}>
-          <View style={[styles.courtSelectIcon, court && { backgroundColor: court.color }]}><Icon name={court ? 'tennisball-outline' : 'location-outline'} color={court ? C.surface : C.teal} /></View>
-          <View style={styles.courtSelectCopy}><Text style={styles.courtSelectName}>{court ? court.name : 'Select a court'}</Text><Text style={styles.courtSelectDetail}>{court ? `${court.detail} · ${court.next}` : 'Required before starting the match'}</Text></View>
-          <Icon name={court ? 'create-outline' : 'chevron-forward'} color={C.teal} />
-        </Pressable>
+        <Text style={styles.sectionLabel}>BOOKED COURT</Text>
+        {courtsLoading && !courts.length ? <View style={styles.bookingGateCard}><ActivityIndicator color={C.teal} /><View style={styles.flex}><Text style={styles.bookingGateTitle}>Checking your reservations</Text><Text style={styles.bookingGateText}>Peakle is confirming which courts you can use.</Text></View></View> : courtsError ?<View style={styles.bookingGateCard}><View style={styles.bookingGateIcon}><Icon name="cloud-offline-outline" color={C.brick} /></View><View style={styles.flex}><Text style={styles.bookingGateTitle}>Booking check unavailable</Text><Text style={styles.bookingGateText}>{courtsError}</Text><Pressable accessibilityRole="button" onPress={onRefreshCourts} style={styles.bookingGateLink}><Text style={styles.bookingGateLinkText}>Try again</Text></Pressable></View></View> : !courts.length ? <View style={styles.bookingGateCard}><View style={styles.bookingGateIcon}><Icon name="ticket-outline" color={C.teal} /></View><View style={styles.flex}><Text style={styles.bookingGateTitle}>Book a court first</Text><Text style={styles.bookingGateText}>A confirmed court reservation is required before you can start scoring a match.</Text><Pressable accessibilityRole="button" onPress={onBookCourt} style={styles.bookCourtButton}><Icon name="calendar-outline" size={16} color="#0E2321" /><Text style={styles.bookCourtButtonText}>Find and book a court</Text></Pressable></View></View> : <>
+          <Pressable accessibilityLabel="Choose a booked court" onPress={() => setShowCourts(true)} style={({ pressed }) => [styles.courtSelect, court && styles.courtSelectChosen, pressed && styles.pressed]}>
+            <View style={[styles.courtSelectIcon, court && { backgroundColor: court.color }]}><Icon name={court ? 'tennisball-outline' : 'ticket-outline'} color={court ? C.surface : C.teal} /></View>
+            <View style={styles.courtSelectCopy}><Text style={styles.courtSelectName}>{court ? court.name : 'Select from your bookings'}</Text><Text style={styles.courtSelectDetail}>{court ? `${court.detail} · ${court.next}` : `${courts.length} confirmed ${courts.length === 1 ? 'reservation' : 'reservations'} available`}</Text></View>
+            <Icon name={court ? 'create-outline' : 'chevron-forward'} color={C.teal} />
+          </Pressable>
+          <View style={styles.bookingVerifiedNote}><Icon name="shield-checkmark-outline" size={15} color={C.teal} /><Text style={styles.bookingVerifiedText}>Only confirmed reservations are shown. Live scoring unlocks during your booked time.</Text></View>
+          <Pressable accessibilityRole="button" onPress={onBookCourt} style={styles.bookAnotherButton}><Icon name="add-circle-outline" size={15} color={C.teal} /><Text style={styles.bookAnotherText}>Book another court</Text></Pressable>
+        </>}
       </View>
       </View>}
 
@@ -807,6 +879,14 @@ function SetupScreen({ courts, nearbyPlayers, nearbyPresence, currentUserName, c
       </View>}
 
       {setupStage === 3 && !joinedInvite && <>
+      <View style={styles.scoringMethodSection}>
+        <View style={styles.sectionHeadingRow}><View><Text style={styles.sectionLabel}>SCORING METHOD</Text><Text style={styles.sectionHelper}>Choose how score updates are delivered courtside</Text></View><View style={styles.scoringMethodSelected}><Icon name={scoringMethod === 'voice' ? 'volume-high' : scoringMethod === 'shout' ? 'mic' : 'hand-left'} size={13} color={C.teal} /><Text style={styles.scoringMethodSelectedText}>{scoringMethod === 'shout' ? 'VOICE SCORE' : scoringMethod.toUpperCase()}</Text></View></View>
+        <View accessibilityRole="radiogroup" style={styles.scoringMethodChoices}>
+          <Pressable accessibilityRole="radio" accessibilityState={{ checked: scoringMethod === 'voice' }} onPress={() => setScoringMethod('voice')} style={({ pressed }) => [styles.scoringMethodChoice, scoringMethod === 'voice' && styles.scoringMethodChoiceActive, pressed && styles.pressed]}><View style={[styles.scoringMethodChoiceIcon, scoringMethod === 'voice' && styles.scoringMethodChoiceIconActive]}><Icon name="volume-high-outline" size={21} color={scoringMethod === 'voice' ? '#0E2321' : C.teal} /></View><Text style={styles.scoringMethodChoiceTitle}>Voice assisted</Text><Text style={styles.scoringMethodChoiceMeta}>Tap the rally winner and Peakle announces the score and next server aloud.</Text><View style={[styles.scoringMethodRadio, scoringMethod === 'voice' && styles.scoringMethodRadioActive]}>{scoringMethod === 'voice' ? <View style={styles.scoringMethodRadioDot} /> : null}</View></Pressable>
+          <Pressable accessibilityRole="radio" accessibilityState={{ checked: scoringMethod === 'manual' }} onPress={() => setScoringMethod('manual')} style={({ pressed }) => [styles.scoringMethodChoice, scoringMethod === 'manual' && styles.scoringMethodChoiceActive, pressed && styles.pressed]}><View style={[styles.scoringMethodChoiceIcon, scoringMethod === 'manual' && styles.scoringMethodChoiceIconActive]}><Icon name="hand-left-outline" size={21} color={scoringMethod === 'manual' ? '#0E2321' : C.teal} /></View><Text style={styles.scoringMethodChoiceTitle}>Manual</Text><Text style={styles.scoringMethodChoiceMeta}>Use quiet one-tap controls for every rally, side-out, and correction.</Text><View style={[styles.scoringMethodRadio, scoringMethod === 'manual' && styles.scoringMethodRadioActive]}>{scoringMethod === 'manual' ? <View style={styles.scoringMethodRadioDot} /> : null}</View></Pressable>
+          <Pressable accessibilityRole="radio" accessibilityState={{ checked: scoringMethod === 'shout' }} onPress={() => setScoringMethod('shout')} style={({ pressed }) => [styles.scoringMethodChoice, scoringMethod === 'shout' && styles.scoringMethodChoiceActive, pressed && styles.pressed]}><View style={[styles.scoringMethodChoiceIcon, scoringMethod === 'shout' && styles.scoringMethodChoiceIconActive]}><Icon name="mic-outline" size={21} color={scoringMethod === 'shout' ? '#0E2321' : C.teal} /></View><Text style={styles.scoringMethodChoiceTitle}>Voice scoring</Text><Text style={styles.scoringMethodChoiceMeta}>Say an explicit command such as “Point team one,” “[player name] serving,” or “Score two one two.”</Text><View style={[styles.scoringMethodRadio, scoringMethod === 'shout' && styles.scoringMethodRadioActive]}>{scoringMethod === 'shout' ? <View style={styles.scoringMethodRadioDot} /> : null}</View></Pressable>
+        </View>
+      </View>
       <Pressable accessibilityRole="button" accessibilityState={{ expanded: showAdvanced }} onPress={() => setShowAdvanced((value) => !value)} style={({ pressed }) => [styles.advancedToggle, pressed && styles.pressed]}>
         <View style={styles.advancedIcon}><Icon name="options-outline" color={C.teal} /></View>
         <View style={styles.flex}><Text style={styles.advancedTitle}>Match options</Text><Text style={styles.advancedMeta}>{mode === 'ranked' ? 'Ranked' : 'Casual'} · {target} points · {bestOf === 1 ? '1 game' : 'best of 3'} · {scorer || 'choose scorer'}</Text></View>
@@ -889,7 +969,7 @@ function SetupScreen({ courts, nearbyPlayers, nearbyPresence, currentUserName, c
           </Pressable>
         </View>
       </View>}
-      <CourtPicker courts={courts} visible={showCourts} selected={court} onClose={() => setShowCourts(false)} onSelect={(selected) => { setCourt(selected); setShowCourts(false); }} />
+      <CourtPicker courts={courts} visible={showCourts} selected={court} onClose={() => setShowCourts(false)} onSelect={(selected) => { setCourt(selected); setBookingClock(Date.now()); setShowCourts(false); }} />
     </ScrollView>
   );
 }
@@ -943,6 +1023,7 @@ function PreGameScreen({ match, onBack, onStart }) {
       <View style={styles.preGameSummary}>
         <View style={styles.preGameSummaryRow}><Icon name="location-outline" color={C.teal} /><View style={styles.flex}><Text style={styles.preGameSummaryLabel}>COURT</Text><Text style={styles.preGameSummaryValue}>{match.court.name}</Text></View></View>
         <View style={styles.preGameSummaryRow}><Icon name={match.scorerSource === 'host' ? 'phone-portrait-outline' : 'person-outline'} color={C.teal} /><View style={styles.flex}><Text style={styles.preGameSummaryLabel}>{match.scorerSource === 'host' ? 'HOST SCORING' : 'PLAYER SCORER'}</Text><Text style={styles.preGameSummaryValue}>{match.scorer}</Text></View><View style={styles.scorerReady}><View style={styles.liveDot} /><Text style={styles.scorerReadyText}>READY</Text></View></View>
+        <View style={styles.preGameSummaryRow}><Icon name={match.scoringMethod === 'voice' ? 'volume-high-outline' : match.scoringMethod === 'shout' ? 'mic-outline' : 'hand-left-outline'} color={C.teal} /><View style={styles.flex}><Text style={styles.preGameSummaryLabel}>SCORING METHOD</Text><Text style={styles.preGameSummaryValue}>{match.scoringMethod === 'voice' ? 'Voice assisted' : match.scoringMethod === 'shout' ? 'Voice scoring' : 'Manual controls'}</Text></View></View>
       </View>
 
       <Pressable accessibilityRole="button" disabled={!serveChoice} onPress={() => onStart(serveChoice)} style={({ pressed }) => [styles.primaryButton, !serveChoice && styles.disabled, pressed && serveChoice && styles.pressed]}><Icon name="play" size={19} color="#0E2321" /><Text style={styles.primaryText}>{serveChoice ? `Start with ${serveChoice.player}` : 'Select a first server'}</Text><Icon name="arrow-forward" size={18} color="#0E2321" /></Pressable>
@@ -1068,11 +1149,16 @@ function ServerSelectionModal({ visible, teamName, players, onCancel, onSelect }
       <Pressable accessibilityLabel="Cancel server selection" style={styles.modalBackdrop} onPress={onCancel}>
         <Pressable accessibilityRole="dialog" style={styles.dialog} onPress={(event) => event.stopPropagation()}>
           <View style={[styles.dialogIcon, { backgroundColor: '#E5F0ED' }]}><Icon name="tennisball-outline" size={26} color={C.teal} /></View>
-          <Text style={styles.dialogTitle}>Who scored the point?</Text>
-          <Text style={styles.dialogBody}>Select the player from {teamName} to manually award the rally and set them as the server.</Text>
-          <View style={styles.dialogActions}>
-            <Pressable onPress={() => onSelect(0)} style={({ pressed }) => [styles.secondaryButton, pressed && styles.pressed, { backgroundColor: C.optic, borderColor: C.optic }]}><Text style={[styles.secondaryText, { color: '#0E2321' }]}>{players[0]}</Text></Pressable>
-            {players.length > 1 && <Pressable onPress={() => onSelect(1)} style={({ pressed }) => [styles.secondaryButton, pressed && styles.pressed, { backgroundColor: C.optic, borderColor: C.optic }]}><Text style={[styles.secondaryText, { color: '#0E2321' }]}>{players[1]}</Text></Pressable>}
+          <Text style={styles.dialogTitle}>Who is serving?</Text>
+          <Text style={styles.dialogBody}>Correct the serving player and server number for {teamName}. This does not award a point.</Text>
+          <View style={styles.serverChoiceList}>
+            {players.map((player, playerIndex) => (
+              <View key={`${player}-${playerIndex}`} style={styles.serverChoiceRow}>
+                <Text numberOfLines={1} style={styles.serverChoiceName}>{player}</Text>
+                <Pressable onPress={() => onSelect(playerIndex, 1)} style={({ pressed }) => [styles.serverChoiceButton, pressed && styles.pressed]}><Text style={styles.serverChoiceButtonText}>SERVER 1</Text></Pressable>
+                {players.length > 1 ? <Pressable onPress={() => onSelect(playerIndex, 2)} style={({ pressed }) => [styles.serverChoiceButton, pressed && styles.pressed]}><Text style={styles.serverChoiceButtonText}>SERVER 2</Text></Pressable> : null}
+              </View>
+            ))}
           </View>
         </Pressable>
       </Pressable>
@@ -1216,12 +1302,21 @@ function RallyBoxScore({ rallies }) {
 
 function LiveMatch({ match, sharedSession = null, currentUserId, onSyncSharedState, onHandoffScorer, onFinish }) {
   const initialSharedState = sharedSession?.state || match.sharedState || {};
+  const configuredFirstServerTeam = match.firstServer ?? 0;
+  const configuredFirstServerPlayerIndex = Math.max(0, match.players[configuredFirstServerTeam].indexOf(match.firstServerPlayer));
+  const configuredEvenSidePlayerIndexes = match.evenSidePlayerIndexes || [
+    configuredFirstServerTeam === 0 ? configuredFirstServerPlayerIndex : 0,
+    configuredFirstServerTeam === 1 ? configuredFirstServerPlayerIndex : 0,
+  ];
   const [scores, setScores] = useState(() => initialSharedState.scores ? [...initialSharedState.scores] : match.scores ? [...match.scores] : [0, 0]);
   const [games, setGames] = useState(() => initialSharedState.games ? [...initialSharedState.games] : match.games ? [...match.games] : [0, 0]);
   const [gameScores, setGameScores] = useState(() => (initialSharedState.gameScores || match.gameScores || []).map((item) => [...item]));
-  const [server, setServer] = useState(initialSharedState.server ?? match.server ?? match.firstServer ?? 0);
-  const [servingPlayerIndex, setServingPlayerIndex] = useState(() => initialSharedState.servingPlayerIndex ?? match.servingPlayerIndex ?? Math.max(0, match.players[match.firstServer ?? 0].indexOf(match.firstServerPlayer)));
+  const [server, setServer] = useState(initialSharedState.server ?? match.server ?? configuredFirstServerTeam);
+  const [servingPlayerIndex, setServingPlayerIndex] = useState(() => initialSharedState.servingPlayerIndex ?? match.servingPlayerIndex ?? configuredFirstServerPlayerIndex);
   const [serviceNumber, setServiceNumber] = useState(initialSharedState.serviceNumber ?? match.serviceNumber ?? (match.matchType === 'doubles' ? 2 : 1));
+  const [evenSidePlayerIndexes, setEvenSidePlayerIndexes] = useState(() => [
+    ...(initialSharedState.evenSidePlayerIndexes || configuredEvenSidePlayerIndexes),
+  ]);
   const [paused, setPaused] = useState(initialSharedState.paused ?? false);
   const [pointPause, setPointPause] = useState(false);
   const [pointAnnouncement, setPointAnnouncement] = useState(null);
@@ -1240,6 +1335,8 @@ function LiveMatch({ match, sharedSession = null, currentUserId, onSyncSharedSta
   const [manualServeTeam, setManualServeTeam] = useState(null);
   const [showEnd, setShowEnd] = useState(false);
   const [focusReturns, setFocusReturns] = useState(match.focusReturns || []);
+  const [scoringMethod, setScoringMethod] = useState(match.scoringMethod === 'voice' ? 'voice' : match.scoringMethod === 'shout' ? 'shout' : 'manual');
+  const [shoutFeedback, setShoutFeedback] = useState(null);
   const [scorerMessage, setScorerMessage] = useState(initialSharedState.scorerMessage || (match.reason === 'unfinished' ? 'Match resumed from the saved score.' : `Match started — ${match.firstServerPlayer || teamName(match.players[match.firstServer ?? 0])} serves first.`));
   const finishedRef = useRef(false);
   const ballBounce = useRef(new Animated.Value(0)).current;
@@ -1261,6 +1358,7 @@ function LiveMatch({ match, sharedSession = null, currentUserId, onSyncSharedSta
     server: initialSharedState.server ?? server,
     servingPlayerIndex: initialSharedState.servingPlayerIndex ?? servingPlayerIndex,
     serviceNumber: initialSharedState.serviceNumber ?? serviceNumber,
+    evenSidePlayerIndexes: initialSharedState.evenSidePlayerIndexes || evenSidePlayerIndexes,
     paused: initialSharedState.paused ?? paused,
     scorerMessage: initialSharedState.scorerMessage || scorerMessage,
     pointEvent: initialSharedState.pointEvent || pointEvent,
@@ -1285,6 +1383,8 @@ function LiveMatch({ match, sharedSession = null, currentUserId, onSyncSharedSta
 
   const playPointAnnouncement = useCallback((announcement, onComplete) => {
     setPointAnnouncement(announcement);
+    if (scoringMethod === 'voice' && canScore) speakScoreAnnouncement(announcement);
+    else announceScoreForVoiceOver(announcement);
     setPointPause(true);
     celebration.stopAnimation();
     celebration.setValue(0);
@@ -1294,12 +1394,19 @@ function LiveMatch({ match, sharedSession = null, currentUserId, onSyncSharedSta
       celebration.setValue(0);
       onComplete?.();
     });
-  }, [celebration]);
+  }, [canScore, celebration, scoringMethod]);
 
   useEffect(() => {
     bounceBall(3);
-    return () => { ballBounce.stopAnimation(); celebration.stopAnimation(); };
+    return () => { ballBounce.stopAnimation(); celebration.stopAnimation(); stopScoreAnnouncement(); };
   }, [ballBounce, bounceBall, celebration]);
+
+  const changeScoringMethod = (method) => {
+    if (method === scoringMethod) return;
+    stopScoreAnnouncement();
+    setShoutFeedback(null);
+    setScoringMethod(method);
+  };
 
   useEffect(() => {
     if (!sharedSession?.id || sharedSession.revision <= appliedSharedRevision.current || !sharedSession.state) return;
@@ -1312,6 +1419,7 @@ function LiveMatch({ match, sharedSession = null, currentUserId, onSyncSharedSta
     if (Number.isInteger(state.server)) setServer(state.server);
     if (Number.isInteger(state.servingPlayerIndex)) setServingPlayerIndex(state.servingPlayerIndex);
     if (Number.isInteger(state.serviceNumber)) setServiceNumber(state.serviceNumber);
+    if (Array.isArray(state.evenSidePlayerIndexes)) setEvenSidePlayerIndexes([...state.evenSidePlayerIndexes]);
     if (typeof state.paused === 'boolean') setPaused(state.paused);
     if (typeof state.scorerMessage === 'string') setScorerMessage(state.scorerMessage);
     if (state.pointEvent) {
@@ -1333,6 +1441,7 @@ function LiveMatch({ match, sharedSession = null, currentUserId, onSyncSharedSta
       server: state.server ?? server,
       servingPlayerIndex: state.servingPlayerIndex ?? servingPlayerIndex,
       serviceNumber: state.serviceNumber ?? serviceNumber,
+      evenSidePlayerIndexes: state.evenSidePlayerIndexes || evenSidePlayerIndexes,
       paused: state.paused ?? paused,
       scorerMessage: state.scorerMessage || scorerMessage,
       pointEvent: state.pointEvent || pointEvent,
@@ -1353,7 +1462,7 @@ function LiveMatch({ match, sharedSession = null, currentUserId, onSyncSharedSta
       return () => clearTimeout(readyTimer);
     }
     if (applyingSharedState.current) return undefined;
-    const nextState = { scores, games, gameScores, server, servingPlayerIndex, serviceNumber, paused, scorerMessage, pointEvent, rallyLog, gameDurations, gameBreak, matchStartedAt, gameStartedAt };
+    const nextState = { scores, games, gameScores, server, servingPlayerIndex, serviceNumber, evenSidePlayerIndexes, paused, scorerMessage, pointEvent, rallyLog, gameDurations, gameBreak, matchStartedAt, gameStartedAt };
     const snapshot = JSON.stringify(nextState);
     if (snapshot === lastSharedSnapshot.current) return undefined;
     const syncTimer = setTimeout(() => {
@@ -1361,7 +1470,7 @@ function LiveMatch({ match, sharedSession = null, currentUserId, onSyncSharedSta
       onSyncSharedState(nextState).catch(() => { lastSharedSnapshot.current = ''; });
     }, 180);
     return () => clearTimeout(syncTimer);
-  }, [canScore, gameBreak, gameDurations, gameScores, gameStartedAt, games, isShared, matchStartedAt, onSyncSharedState, paused, pointEvent, rallyLog, scorerMessage, scores, server, serviceNumber, servingPlayerIndex]);
+  }, [canScore, evenSidePlayerIndexes, gameBreak, gameDurations, gameScores, gameStartedAt, games, isShared, matchStartedAt, onSyncSharedState, paused, pointEvent, rallyLog, scorerMessage, scores, server, serviceNumber, servingPlayerIndex]);
 
   useEffect(() => {
     rallyTravel.stopAnimation();
@@ -1415,7 +1524,7 @@ function LiveMatch({ match, sharedSession = null, currentUserId, onSyncSharedSta
     const endedAtTimestamp = finalState.endedAtTimestamp ?? Date.now();
     const finalElapsed = finalState.elapsed ?? Math.max(0, Math.floor((endedAtTimestamp - matchStartedAt) / 1000));
     const finalGameElapsed = finalState.gameElapsed ?? Math.max(0, Math.floor((endedAtTimestamp - gameStartedAt) / 1000));
-    onFinish({ ...match, ...finalState, rallyLog: finalState.rallyLog || rallyLog, gameDurations: finalState.gameDurations || gameDurations, gameElapsed: finalGameElapsed, elapsed: finalElapsed, matchStartedAt, endedAtTimestamp, reason, focusReturns });
+    onFinish({ ...match, scoringMethod, ...finalState, rallyLog: finalState.rallyLog || rallyLog, gameDurations: finalState.gameDurations || gameDurations, gameElapsed: finalGameElapsed, elapsed: finalElapsed, matchStartedAt, endedAtTimestamp, reason, focusReturns });
   };
 
   const runPointCelebration = (announcement, onComplete) => {
@@ -1425,24 +1534,38 @@ function LiveMatch({ match, sharedSession = null, currentUserId, onSyncSharedSta
     playPointAnnouncement(event, onComplete);
   };
 
-  const nextServeState = () => {
-    if (match.matchType === 'doubles' && serviceNumber === 1) {
-      return { server, servingPlayerIndex: servingPlayerIndex === 0 ? 1 : 0, serviceNumber: 2 };
-    }
-    return { server: 1 - server, servingPlayerIndex: 0, serviceNumber: 1 };
-  };
+  const captureScoringSnapshot = () => ({
+    scores: [...scores],
+    games: [...games],
+    gameScores: gameScores.map((item) => [...item]),
+    gameDurations: [...gameDurations],
+    gameElapsed,
+    gameBreak,
+    rallyLog: rallyLog.map((item) => ({ ...item, score: [...item.score] })),
+    server,
+    servingPlayerIndex,
+    serviceNumber,
+    evenSidePlayerIndexes: [...evenSidePlayerIndexes],
+  });
 
-  const recordRally = (team, forcePlayerIndex = null) => {
+  const recordRally = (team) => {
     if (paused || pointPause || finishedRef.current) return;
-    const snapshot = { scores: [...scores], games: [...games], gameScores: gameScores.map((item) => [...item]), gameDurations: [...gameDurations], gameElapsed, gameBreak, rallyLog: rallyLog.map((item) => ({ ...item, score: [...item.score] })), server, servingPlayerIndex, serviceNumber };
-    setHistory((items) => [...items, snapshot]);
+    setHistory((items) => [...items, captureScoringSnapshot()]);
     bounceBall();
 
+    const rallyState = resolveRallyState({
+      matchType: match.matchType,
+      scores,
+      server,
+      servingPlayerIndex,
+      serviceNumber,
+      evenSidePlayerIndexes,
+    }, team);
+
     if (team !== server) {
-      const next = nextServeState();
-      const newServer = team;
-      const newPlayerIndex = forcePlayerIndex !== null ? forcePlayerIndex : next.servingPlayerIndex;
-      const newServiceNumber = forcePlayerIndex !== null ? 1 : next.serviceNumber;
+      const newServer = rallyState.server;
+      const newPlayerIndex = rallyState.servingPlayerIndex;
+      const newServiceNumber = rallyState.serviceNumber;
 
       setServer(newServer);
       setServingPlayerIndex(newPlayerIndex);
@@ -1455,27 +1578,22 @@ function LiveMatch({ match, sharedSession = null, currentUserId, onSyncSharedSta
         game: gameScores.length + 1,
         team,
         winner: teamName(match.players[team]),
-        action: newServiceNumber === 2 ? 'Second server' : 'Side out',
+        action: rallyState.action,
         score: [...scores],
         nextServe: `${nextPlayer} serving · Server ${newServiceNumber}`,
       }];
       setRallyLog(nextRallyLog);
       setScorerMessage(`${teamName(match.players[team])} won the rally · ${nextPlayer} serves next`);
-      runPointCelebration({ player: teamName(match.players[team]), team: 'wins the rally', action: newServiceNumber === 2 ? 'SECOND SERVER' : 'SIDE OUT', score: `${scores[0]} – ${scores[1]}`, nextServe: `${nextPlayer} serves for ${nextTeam}` });
+      runPointCelebration({ player: teamName(match.players[team]), team: 'wins the rally', action: rallyState.action.toUpperCase(), score: `${scores[0]} – ${scores[1]}`, nextServe: `${nextPlayer} serves for ${nextTeam}` });
       return;
     }
 
-    const nextScores = [...scores];
-    nextScores[team] += 1;
+    const nextScores = rallyState.scores;
     const lead = nextScores[team] - nextScores[1 - team];
     const wonGame = nextScores[team] >= match.target && lead >= (match.winByTwo ? 2 : 1);
     setScores(nextScores);
     
-    if (forcePlayerIndex !== null) {
-      setServingPlayerIndex(forcePlayerIndex);
-    }
-    
-    const announcementPlayer = forcePlayerIndex !== null ? match.players[team][forcePlayerIndex] : match.players[team][servingPlayerIndex];
+    const announcementPlayer = match.players[team][servingPlayerIndex];
     const announcement = { player: announcementPlayer, team: teamName(match.players[team]), action: 'SCORES!', score: `${nextScores[0]} – ${nextScores[1]}` };
     const nextRallyLog = [...rallyLog, {
       id: `rally-${Date.now().toString(36)}-${rallyLog.length + 1}`,
@@ -1534,12 +1652,27 @@ function LiveMatch({ match, sharedSession = null, currentUserId, onSyncSharedSta
     }
   };
 
+  const recordRallyRef = useRef(recordRally);
+  recordRallyRef.current = recordRally;
+  useEffect(() => {
+    if (!DEMO_MODE) return undefined;
+    let rallies = 0;
+    const teamSequence = [0, 0, 1, 0, 1, 1, 0, 1];
+    const timer = setInterval(() => {
+      if (rallies >= teamSequence.length) { clearInterval(timer); return; }
+      recordRallyRef.current(teamSequence[rallies]);
+      rallies += 1;
+    }, 2500);
+    return () => clearInterval(timer);
+  }, []);
+
   const continueAfterBreak = () => {
     if (!canScore || !gameBreak) return;
     setScores([0, 0]);
     setServer(gameBreak.nextServer);
     setServingPlayerIndex(gameBreak.nextPlayerIndex);
     setServiceNumber(gameBreak.nextServiceNumber);
+    setEvenSidePlayerIndexes([0, 0]);
     setGameStartedAt(Date.now());
     setGameElapsed(0);
     setGameBreak(null);
@@ -1547,7 +1680,103 @@ function LiveMatch({ match, sharedSession = null, currentUserId, onSyncSharedSta
     bounceBall(2);
   };
 
+  const applyServeCorrection = (team, playerIndex, requestedServiceNumber = 1, source = 'Manual') => {
+    if (scoringLocked || finishedRef.current) return false;
+    const player = match.players?.[team]?.[playerIndex];
+    if (!player) return false;
+    const nextServiceNumber = match.matchType === 'doubles' && requestedServiceNumber === 2 ? 2 : 1;
+    setHistory((items) => [...items, captureScoringSnapshot()]);
+    setServer(team);
+    setServingPlayerIndex(playerIndex);
+    setServiceNumber(nextServiceNumber);
+    setEvenSidePlayerIndexes((current) => current.map((value, index) => (
+      index === team
+        ? evenSidePlayerFromCurrentServer(scores[team], playerIndex, match.matchType)
+        : value
+    )));
+    setScorerMessage(`${source}: ${player} serving · Server ${nextServiceNumber} · ${scores[0]}–${scores[1]}`);
+    bounceBall(2);
+    return true;
+  };
 
+  const applyScoreCorrection = (nextScores, requestedServiceNumber, transcript) => {
+    if (scoringLocked || finishedRef.current) return false;
+    if (!Array.isArray(nextScores) || nextScores.some((score) => !Number.isInteger(score) || score < 0)) return false;
+    const nextServiceNumber = match.matchType === 'doubles' && requestedServiceNumber === 2 ? 2 : 1;
+    setHistory((items) => [...items, captureScoringSnapshot()]);
+    setScores([...nextScores]);
+    setServiceNumber(nextServiceNumber);
+    const nextPlayer = match.players[server][servingPlayerIndex];
+    setScorerMessage(`Voice score confirmed · ${nextScores[0]}–${nextScores[1]} · ${nextPlayer} serving · Server ${nextServiceNumber}`);
+    setShoutFeedback({ accepted: true, message: `Applied “${transcript}”` });
+    bounceBall(2);
+    return true;
+  };
+
+  const handleVoiceTranscript = (transcripts, primaryTranscript, metadata) => {
+    for (const transcript of transcripts) {
+      const command = parseVoiceMatchCommand(transcript, match.players, server);
+      if (!command) continue;
+
+      if (command.type === 'rally') {
+        setShoutFeedback({ accepted: true, message: `Applied “${transcript}”` });
+        recordRally(command.team);
+        return true;
+      }
+
+      if (command.type === 'serve') {
+        const playerIndex = command.playerExplicit
+          ? command.servingPlayerIndex
+          : playerForSideOut(
+            scores[command.server],
+            evenSidePlayerIndexes[command.server],
+            match.matchType,
+          );
+        const applied = applyServeCorrection(
+          command.server,
+          playerIndex,
+          command.serviceNumber,
+          'Voice command',
+        );
+        if (applied) setShoutFeedback({ accepted: true, message: `Applied “${transcript}”` });
+        return applied;
+      }
+
+      if (command.type === 'score') {
+        return applyScoreCorrection(command.scores, command.serviceNumber, transcript);
+      }
+    }
+
+    if (metadata?.pending) return false;
+    const reason = metadata?.reason === 'low-confidence'
+      ? 'Recognition was uncertain. Please repeat the full command.'
+      : 'Not applied. Say “point,” “serving,” or start with “score.”';
+    setShoutFeedback({ accepted: false, message: reason });
+    setScorerMessage(`Heard “${primaryTranscript}” · No score or serve change applied`);
+    return true;
+  };
+
+  const shoutScoringActive = scoringMethod === 'shout' && !scoringLocked;
+  const {
+    listening: shoutListening,
+    lastHeard: shoutLastHeard,
+    unavailable: shoutUnavailable,
+    errorMessage: shoutErrorMessage,
+  } = useShoutScoring({
+    active: shoutScoringActive,
+    players: match.players,
+    onTranscript: handleVoiceTranscript,
+    strictConfidence: false,
+    minimumAudibleVolume: null,
+    fragmentBufferMs: 1600,
+  });
+
+  useEffect(() => {
+    if (scoringMethod === 'shout' && shoutUnavailable) {
+      Alert.alert('Voice scoring unavailable', `${shoutErrorMessage}\n\nSwitching to manual scoring.`);
+      changeScoringMethod('manual');
+    }
+  }, [scoringMethod, shoutUnavailable, shoutErrorMessage]);
 
   const undo = () => {
     if (!history.length || paused || pointPause || finishedRef.current) return;
@@ -1563,6 +1792,7 @@ function LiveMatch({ match, sharedSession = null, currentUserId, onSyncSharedSta
     setServer(previous.server);
     setServingPlayerIndex(previous.servingPlayerIndex);
     setServiceNumber(previous.serviceNumber);
+    setEvenSidePlayerIndexes(previous.evenSidePlayerIndexes || configuredEvenSidePlayerIndexes);
     setHistory((items) => items.slice(0, -1));
     setScorerMessage(`Last rally removed · ${previous.scores[0]}–${previous.scores[1]}`);
     bounceBall();
@@ -1577,7 +1807,20 @@ function LiveMatch({ match, sharedSession = null, currentUserId, onSyncSharedSta
 
   const saveUnfinished = () => {
     setShowEnd(false);
-    finish({ scores, games, gameScores, server, servingPlayerIndex, serviceNumber, winner: null }, 'unfinished');
+    finish({ scores, games, gameScores, server, servingPlayerIndex, serviceNumber, evenSidePlayerIndexes, winner: null }, 'unfinished');
+  };
+
+  const openManualServeCorrection = () => {
+    if (scoringLocked) return;
+    Alert.alert(
+      'Correct serving team',
+      'Choose the team that should be serving. You’ll select the player and server number next.',
+      [
+        { text: `Team 1 · ${teamName(match.players[0])}`, onPress: () => setManualServeTeam(0) },
+        { text: `Team 2 · ${teamName(match.players[1])}`, onPress: () => setManualServeTeam(1) },
+        { text: 'Cancel', style: 'cancel' },
+      ],
+    );
   };
 
   return (
@@ -1603,7 +1846,46 @@ function LiveMatch({ match, sharedSession = null, currentUserId, onSyncSharedSta
 
       <FocusTracker challenge={match.focusChallenge} returns={focusReturns} paused={scoringLocked} onRecord={(deep) => setFocusReturns((items) => items.length < match.focusChallenge.attempts ? [...items, deep] : items)} onUndo={() => setFocusReturns((items) => items.slice(0, -1))} />
 
-      {canScore && !gameBreak && <><View style={styles.scorerActions}><View style={styles.scorerActionHead}><View><Text style={styles.eyebrow}>WHO WON THE RALLY?</Text><Text style={styles.scorerActionTitle}>One tap updates score and serve</Text><Text style={styles.scorerActionMeta}>{match.players[server][servingPlayerIndex]} serving · Server {serviceNumber}</Text></View><View style={[styles.teamBadge, server === 1 && styles.teamBadgeAway]}><Text style={styles.teamBadgeText}>T{server + 1}</Text></View></View><View style={styles.rallyWinnerButtons}>{[0, 1].map((team) => <Pressable key={team} accessibilityLabel={`${teamName(match.players[team])} won the rally`} disabled={scoringLocked} onPress={() => recordRally(team)} onLongPress={() => { if (match.matchType === 'doubles') setManualServeTeam(team); else recordRally(team, 0); }} style={({ pressed }) => [styles.rallyWinnerButton, team === 1 && styles.rallyWinnerButtonAway, scoringLocked && styles.pointDisabled, pressed && !scoringLocked && styles.pressed]}><Text style={styles.rallyWinnerTag}>TEAM {team + 1}</Text><Text numberOfLines={2} style={styles.rallyWinnerName}>{teamName(match.players[team])}</Text><Text style={styles.rallyWinnerAction}>WON RALLY</Text></Pressable>)}</View><Text style={styles.autoServeHint}><Icon name="flash-outline" size={11} color={C.teal} /> Serving rotation updates automatically</Text></View>
+      {canScore && !gameBreak && <>
+        <View style={styles.liveScoringMethod}>
+          <View style={styles.liveScoringMethodCopy}>
+            <Text style={styles.liveScoringMethodLabel}>SCORING METHOD</Text>
+            <Text numberOfLines={2} style={styles.liveScoringMethodMeta}>
+              {scoringMethod === 'voice'
+                ? 'Score and next server are announced aloud'
+                : scoringMethod === 'shout'
+                  ? (shoutListening ? (shoutLastHeard ? 'Heard: "' + shoutLastHeard + '"' : 'Listening for a complete command…') : 'Starting the microphone…')
+                  : 'Quiet one-tap courtside controls'}
+            </Text>
+          </View>
+          <View accessibilityRole="radiogroup" style={styles.liveScoringMethodSwitch}>
+            {[{ value: 'manual', label: 'Manual', icon: 'hand-left-outline' }, { value: 'voice', label: 'Voice', icon: 'volume-high-outline' }, { value: 'shout', label: 'Mic', icon: 'mic-outline' }].map((option) => {
+              const active = scoringMethod === option.value;
+              return <Pressable key={option.value} accessibilityRole="radio" accessibilityState={{ checked: active }} onPress={() => changeScoringMethod(option.value)} style={[styles.liveScoringMethodOption, active && styles.liveScoringMethodOptionActive]}><Icon name={active && option.value === 'shout' && shoutListening ? 'mic' : option.icon} size={13} color={active ? '#0E2321' : C.ink40} /><Text style={[styles.liveScoringMethodText, active && styles.liveScoringMethodTextActive]}>{option.label}</Text></Pressable>;
+            })}
+          </View>
+        </View>
+        {scoringMethod === 'shout' && shoutFeedback ? (
+          <View accessibilityLiveRegion="polite" style={[styles.shoutFeedback, shoutFeedback.accepted ? styles.shoutFeedbackAccepted : styles.shoutFeedbackRejected]}>
+            <Icon name={shoutFeedback.accepted ? 'checkmark-circle' : 'alert-circle'} size={15} color={shoutFeedback.accepted ? C.teal : C.brick} />
+            <Text numberOfLines={2} style={styles.shoutFeedbackText}>{shoutFeedback.message}</Text>
+          </View>
+        ) : null}
+        <View style={styles.scorerActions}>
+          <View style={styles.scorerActionHead}>
+            <View>
+              <Text style={styles.eyebrow}>WHO WON THE RALLY?</Text>
+              <Text style={styles.scorerActionTitle}>{scoringMethod === 'shout' ? 'Say a safe command, or tap to score' : 'One tap updates score and serve'}</Text>
+              <Text style={styles.scorerActionMeta}>{match.players[server][servingPlayerIndex]} serving · Server {serviceNumber}</Text>
+            </View>
+            <View style={[styles.teamBadge, server === 1 && styles.teamBadgeAway]}><Text style={styles.teamBadgeText}>T{server + 1}</Text></View>
+          </View>
+          <View style={styles.rallyWinnerButtons}>
+            {[0, 1].map((team) => <Pressable key={team} accessibilityLabel={teamName(match.players[team]) + ' won the rally'} disabled={scoringLocked} onPress={() => recordRally(team)} style={({ pressed }) => [styles.rallyWinnerButton, team === 1 && styles.rallyWinnerButtonAway, scoringLocked && styles.pointDisabled, pressed && !scoringLocked && styles.pressed]}><Text style={styles.rallyWinnerTag}>TEAM {team + 1}</Text><Text numberOfLines={2} style={styles.rallyWinnerName}>{teamName(match.players[team])}</Text><Text style={styles.rallyWinnerAction}>WON RALLY</Text></Pressable>)}
+          </View>
+          <Pressable accessibilityRole="button" accessibilityLabel="Correct serving player and server number" onPress={openManualServeCorrection} style={({ pressed }) => [styles.correctServerButton, pressed && styles.pressed]}><Icon name="swap-horizontal-outline" size={14} color={C.teal} /><Text style={styles.correctServerText}>Correct serving player or server number</Text></Pressable>
+          <Text style={styles.autoServeHint}><Icon name={scoringMethod === 'voice' ? 'volume-high-outline' : scoringMethod === 'shout' ? 'mic-outline' : 'flash-outline'} size={11} color={C.teal} /> {scoringMethod === 'voice' ? 'Voice announcements are on' : scoringMethod === 'shout' ? 'Say “Point team one,” “[player] serving,” or “Score two one two”' : 'Serving rotation updates automatically'}</Text>
+        </View>
 
       <View style={styles.controls}>
         <Pressable accessibilityLabel="Undo last point" disabled={!history.length || scoringLocked} onPress={undo} style={({ pressed }) => [styles.controlButton, (!history.length || scoringLocked) && styles.controlDisabled, pressed && styles.pressed]}><Icon name="arrow-undo-outline" color={!history.length || scoringLocked ? C.ink40 : C.teal} /><Text style={[styles.controlText, (!history.length || scoringLocked) && styles.controlTextDisabled]}>Undo</Text></Pressable>
@@ -1616,7 +1898,7 @@ function LiveMatch({ match, sharedSession = null, currentUserId, onSyncSharedSta
 
       {(canScore || isHost) && <Pressable onPress={() => setShowEnd(true)} style={({ pressed }) => [styles.endLink, pressed && styles.pressed]}><Icon name="flag-outline" size={17} color={C.brick} /><Text style={styles.endLinkText}>End match early</Text></Pressable>}
       <ConfirmEndModal visible={showEnd} onCancel={() => setShowEnd(false)} onConfirm={endEarly} onSaveUnfinished={saveUnfinished} />
-      <ServerSelectionModal visible={manualServeTeam !== null} teamName={manualServeTeam !== null ? teamName(match.players[manualServeTeam]) : ''} players={manualServeTeam !== null ? match.players[manualServeTeam] : []} onCancel={() => setManualServeTeam(null)} onSelect={(playerIndex) => { recordRally(manualServeTeam, playerIndex); setManualServeTeam(null); }} />
+      <ServerSelectionModal visible={manualServeTeam !== null} teamName={manualServeTeam !== null ? teamName(match.players[manualServeTeam]) : ''} players={manualServeTeam !== null ? match.players[manualServeTeam] : []} onCancel={() => setManualServeTeam(null)} onSelect={(playerIndex, selectedServiceNumber) => { applyServeCorrection(manualServeTeam, playerIndex, selectedServiceNumber, 'Manual correction'); setManualServeTeam(null); }} />
     </ScrollView>
   );
 }
@@ -1643,13 +1925,22 @@ function ResultScreen({ result, saveState = 'saved', saveError = '', onRetrySave
     try {
       const uri = await captureRef(storyCardRef, { format: 'png', quality: 1, result: 'tmpfile' });
       if (action === 'save') {
-        const permission = await MediaLibrary.requestPermissionsAsync(true, ['photo']);
-        if (!permission.granted) {
-          Alert.alert('Photo access needed', 'Allow Peakle to add the match card to your photos, then try again.');
-          return;
+        if (Platform.OS === 'android') {
+          if (Number(Platform.Version) <= 28) {
+            await Sharing.shareAsync(uri, { dialogTitle: 'Save your Peakle match card', mimeType: 'image/png' });
+          } else {
+            await MediaLibrary.saveToLibraryAsync(uri);
+            Alert.alert('Saved to photos', 'Your match card is ready for My Day or Stories.');
+          }
+        } else {
+          const permission = await MediaLibrary.requestPermissionsAsync(true, ['photo']);
+          if (!permission.granted) {
+            Alert.alert('Photo access needed', 'Allow Peakle to add the match card to your photos, then try again.');
+            return;
+          }
+          await MediaLibrary.createAssetAsync(uri);
+          Alert.alert('Saved to photos', 'Your match card is ready for My Day or Stories.');
         }
-        await MediaLibrary.createAssetAsync(uri);
-        Alert.alert('Saved to photos', 'Your match card is ready for My Day or Stories.');
         return;
       }
       if (!(await Sharing.isAvailableAsync())) {
@@ -1679,7 +1970,7 @@ function ResultScreen({ result, saveState = 'saved', saveError = '', onRetrySave
       <View ref={storyCardRef} collapsable={false} style={styles.resultPoster}>
         <View style={styles.posterGlow} />
         <View style={styles.posterBrandRow}>
-          <View style={styles.posterBrand}><View style={styles.posterBall}><View style={styles.posterBallHoleOne} /><View style={styles.posterBallHoleTwo} /><View style={styles.posterBallHoleThree} /></View><Text style={styles.posterBrandText}>PEAKLE</Text></View>
+          <View style={styles.posterBrand}><Image source={BALL_IMAGE} style={{ width: 24, height: 24, tintColor: C.optic }} resizeMode="contain" /><Text style={styles.posterBrandText}>PEAKLE</Text></View>
           <View style={styles.posterFinalPill}><View style={styles.posterFinalDot} /><Text style={styles.posterFinalText}>FINAL</Text></View>
         </View>
         <Text style={styles.posterMeta}>{formatLabel}</Text>
@@ -1687,11 +1978,7 @@ function ResultScreen({ result, saveState = 'saved', saveError = '', onRetrySave
         <View style={styles.posterVenueRow}><Icon name="location" size={13} color={C.optic} /><Text numberOfLines={1} style={styles.posterVenue}>{result.court.name}</Text></View>
 
         <View style={styles.posterScoreboard}>
-          <View style={styles.posterScoreHead}>
-            <Text style={[styles.posterScoreLabel, styles.posterTeamLabel]}>TEAM</Text>
-            {completeScores.map((_, index) => <Text key={`poster-head-${index}`} style={styles.posterScoreLabel}>G{index + 1}</Text>)}
-            <Text style={[styles.posterScoreLabel, styles.posterMatchLabel]}>W</Text>
-          </View>
+          <View style={styles.posterScoreHead}><Text style={[styles.posterScoreLabel, styles.posterTeamLabel]}>TEAM</Text>{completeScores.map((_, index) => <Text key={`poster-head-${index}`} style={styles.posterScoreLabel}>G{index + 1}</Text>)}<View style={styles.posterMatchBadge}><Text style={styles.posterMatchBadgeText}>W</Text></View></View>
           {[0, 1].map((team) => (
             <View key={`poster-team-${team}`} style={[styles.posterTeamRow, team === 1 && styles.posterTeamRowBorder]}>
               <View style={[styles.posterTeamMark, team === 1 && styles.posterTeamMarkAway]}><Text style={styles.posterTeamMarkText}>T{team + 1}</Text></View>
@@ -1751,6 +2038,8 @@ export default function PlayScreen({ route, navigation }) {
   const { user } = useAuth();
   const nearbyPresence = useNearbyPlayersContext();
   const [courts, setCourts] = useState([]);
+  const [courtsLoading, setCourtsLoading] = useState(true);
+  const [courtsError, setCourtsError] = useState('');
   const [screen, setScreen] = useState('choice');
   const [match, setMatch] = useState(null);
   const [result, setResult] = useState(null);
@@ -1831,17 +2120,57 @@ export default function PlayScreen({ route, navigation }) {
     };
   }, [confirmLeaveJoinedMatch, navigation, nearbyPresence.joinedInvite?.id]);
 
-  useEffect(() => {
-    listVenues().then((venues) => {
-      setCourts(venues.flatMap((venue) => venue.courts.filter((court) => court.active).map((court) => ({ id: court.id, name: venue.name, detail: `${court.name} · ${court.environment}`, distance: venue.area, next: 'Available by booking schedule', color: venue.color || C.teal }))));
-    }).catch((error) => console.warn('Play setup data failed:', error.message));
-  }, []);
+  const refreshCourtBookings = useCallback(async () => {
+    setCourtsLoading(true);
+    setCourtsError('');
+    try {
+      setCourts(playableCourtsFromBookings(await listMyBookings()));
+    } catch (error) {
+      setCourts([]);
+      setCourtsError(error.message || 'Check your connection and try again.');
+    } finally {
+      setCourtsLoading(false);
+    }
+  }, [user?.id]);
+
+  useFocusEffect(useCallback(() => {
+    refreshCourtBookings();
+  }, [refreshCourtBookings]));
 
   useEffect(() => {
     loadUnfinishedMatch().then(setUnfinishedMatch).catch((error) => console.warn('Unfinished match load failed:', error.message));
   }, [user?.id]);
 
-  const startMatch = (configuration) => {
+  const verifyActiveCourtBooking = useCallback(async (selectedCourt) => {
+    if (!selectedCourt?.bookingId) return false;
+    const bookings = await listMyBookings();
+    const booking = bookings.find((item) => item.id === selectedCourt.bookingId && item.court_id === selectedCourt.id);
+    const now = Date.now();
+    return Boolean(booking && booking.status === 'confirmed' && new Date(booking.starts_at).getTime() <= now && now < new Date(booking.ends_at).getTime());
+  }, [user?.id]);
+
+  const openCourtBooking = useCallback(() => {
+    navigation.navigate('Book', { findCourtsToken: Date.now(), returnToPlay: true });
+  }, [navigation]);
+
+  const showCourtBookingRequired = useCallback((message = 'Book and confirm a court for the current time before starting this match.') => {
+    Alert.alert('Active court booking required', message, [
+      { text: 'Not now', style: 'cancel' },
+      { text: 'Book a court', onPress: openCourtBooking },
+    ]);
+  }, [openCourtBooking]);
+
+  const startMatch = async (configuration) => {
+    try {
+      if (!await verifyActiveCourtBooking(configuration.court)) {
+        showCourtBookingRequired('The selected reservation is not active yet, has expired, or was cancelled. Choose an active booking before continuing.');
+        await refreshCourtBookings();
+        return;
+      }
+    } catch (error) {
+      showCourtBookingRequired(error.message || 'Peakle could not verify this reservation.');
+      return;
+    }
     setMatch(configuration);
     setResult(null);
     setResultSaveState('idle');
@@ -1850,6 +2179,15 @@ export default function PlayScreen({ route, navigation }) {
   };
 
   const startLiveMatch = async (serveDraw) => {
+    try {
+      if (!await verifyActiveCourtBooking(match?.court)) {
+        showCourtBookingRequired('Your court reservation is no longer active. Return to setup or book another court.');
+        return;
+      }
+    } catch (error) {
+      showCourtBookingRequired(error.message || 'Peakle could not verify this reservation.');
+      return;
+    }
     handledSharedCompletion.current = null;
     const nextMatch = { ...match, firstServer: serveDraw.team, firstServerPlayer: serveDraw.player };
     const hasConnectedPlayers = (nextMatch.registeredPlayers || []).some((player) => player.id && player.id !== user?.id);
@@ -2069,6 +2407,17 @@ export default function PlayScreen({ route, navigation }) {
     setOpenPlayMode(null);
   }, [route?.params?.nearbyPlayersToken]);
 
+  const handledDemoLiveToken = useRef(null);
+  useEffect(() => {
+    if (!DEMO_MODE) return;
+    const token = route?.params?.demoLiveToken;
+    if (!token || handledDemoLiveToken.current === token) return;
+    handledDemoLiveToken.current = token;
+    setResult(null);
+    setMatch(DEMO_LIVE_MATCH);
+    setScreen('live');
+  }, [route?.params?.demoLiveToken]);
+
   useEffect(() => {
     const openPlayCode = route?.params?.openPlayCode;
     if (!openPlayCode) return;
@@ -2097,9 +2446,9 @@ export default function PlayScreen({ route, navigation }) {
       <StatusBar style={screen === 'live' || isDark ? 'light' : 'dark'} backgroundColor={screen === 'live' ? '#0E2321' : C.paper} />
       {openPlayMode === 'join' ? <PlayerOpenPlayScreen initialCode={route?.params?.openPlayCode || ''} initialSessionId={route?.params?.openPlaySessionId || null} navigationToken={route?.params?.openPlayToken || null} onBack={leaveOpenPlay} onDetailBack={route?.params?.openPlayDirect ? leaveOpenPlay : null} /> : <>
       {screen === 'choice' && <PlayChoiceScreen onFindPlay={() => navigation.navigate('Pickleball', { openTab: 'Find play', ownerTab: 'Play' })} onSetupMatch={() => { setShowSetupBackToChoices(true); setScreen('setup'); }} unfinishedMatch={unfinishedMatch} onResume={resumeMatch} />}
-      {screen === 'setup' && <SetupScreen courts={courts} nearbyPlayers={nearbyPresence.players} nearbyPresence={nearbyPresence} currentUserName={user?.name} currentUserId={user?.id} currentUserAvatar={user?.picture} onStart={startMatch} focusChallenge={focusChallenge} onBackToChoices={showPlayChoices} showBackToChoices={showSetupBackToChoices} onFindPlay={() => navigation.navigate('Pickleball', { openTab: 'Find play', ownerTab: 'Play' })} onMessagePlayer={(player) => navigation.navigate('DirectChat', { player: { id: player.id, name: player.name, avatar: player.avatar || null, area: player.area || null }, ownerTab: 'Play' })} onLeaveJoined={confirmLeaveJoinedMatch} unfinishedMatch={unfinishedMatch} onResume={resumeMatch} openNearbyPlayersToken={route?.params?.nearbyPlayersToken} />}
+      {screen === 'setup' && <SetupScreen courts={courts} courtsLoading={courtsLoading} courtsError={courtsError} onRefreshCourts={refreshCourtBookings} onBookCourt={openCourtBooking} nearbyPlayers={nearbyPresence.players} nearbyPresence={nearbyPresence} currentUserName={user?.name} currentUserId={user?.id} currentUserAvatar={user?.picture} onStart={startMatch} focusChallenge={focusChallenge} onBackToChoices={showPlayChoices} showBackToChoices={showSetupBackToChoices} onFindPlay={() => navigation.navigate('Pickleball', { openTab: 'Find play', ownerTab: 'Play' })} onMessagePlayer={(player) => navigation.navigate('DirectChat', { player: { id: player.id, name: player.name, avatar: player.avatar || null, area: player.area || null }, ownerTab: 'Play' })} onLeaveJoined={confirmLeaveJoinedMatch} unfinishedMatch={unfinishedMatch} onResume={resumeMatch} openNearbyPlayersToken={route?.params?.nearbyPlayersToken} />}
       {screen === 'pregame' && match && <PreGameScreen match={match} onBack={() => setScreen('setup')} onStart={startLiveMatch} />}
-      {screen === 'live' && match && <LiveMatch match={match} sharedSession={match.sharedLiveMatchId ? nearbyPresence.sharedLiveMatch : null} currentUserId={user?.id} onSyncSharedState={syncSharedScore} onHandoffScorer={handoffSharedScorer} onFinish={finishMatch} />}
+      {screen === 'live' && match && <LiveMatch key={DEMO_MODE ? `demo-${route?.params?.demoLiveToken || 0}` : 'live'} match={match} sharedSession={match.sharedLiveMatchId ? nearbyPresence.sharedLiveMatch : null} currentUserId={user?.id} onSyncSharedState={syncSharedScore} onHandoffScorer={handoffSharedScorer} onFinish={finishMatch} />}
       {screen === 'result' && result && <ResultScreen result={result} saveState={resultSaveState === 'idle' ? 'saved' : resultSaveState} saveError={resultSaveError} onRetrySave={() => recordCompletedResult(result)} onRematch={!match?.sharedLiveMatchId || nearbyPresence.sharedLiveMatch?.host_id === user?.id ? () => startMatch(match) : null} onNewMatch={reset} />}
       </>}
       <LeaveMatchDialog
@@ -2119,8 +2468,8 @@ const shadow = Platform.select({ ios: { shadowColor: C.ink, shadowOpacity: .09, 
 const lightStyles = createMobileStyleSheet({
   safe: { flex: 1, backgroundColor: C.paper },
   flex: { flex: 1 },
-  content: { paddingHorizontal: 20, paddingTop: 21, paddingBottom: 42 },
-  playChoiceContent: { paddingBottom: 54 },
+  content: { paddingHorizontal: 20, paddingTop: 18, paddingBottom: 126 },
+  playChoiceContent: { paddingBottom: 126 },
   choiceHelpBadge: { minHeight: 34, paddingHorizontal: 10, flexDirection: 'row', alignItems: 'center', gap: 5, borderRadius: 17, backgroundColor: '#E5F0ED' },
   choiceHelpBadgeText: { color: C.teal, fontSize: 7, fontWeight: '900', letterSpacing: .65 },
   choiceIntro: { marginTop: -2, marginBottom: 16 },
@@ -2150,12 +2499,11 @@ const lightStyles = createMobileStyleSheet({
   choiceTip: { marginTop: 14, paddingHorizontal: 5, flexDirection: 'row', alignItems: 'flex-start', gap: 7 },
   choiceTipText: { flex: 1, color: C.ink40, fontSize: 9, lineHeight: 14 },
   choiceTipStrong: { color: C.ink, fontWeight: '900' },
-  playChoiceBack: { alignSelf: 'flex-start', minHeight: 38, marginBottom: 4, paddingRight: 10, flexDirection: 'row', alignItems: 'center', gap: 3 },
-  playChoiceBackText: { color: C.teal, fontSize: 9, fontWeight: '900' },
   resumeCard: { marginTop: 14, padding: 13, flexDirection: 'row', alignItems: 'center', gap: 10, borderRadius: 17, borderWidth: 1, borderColor: '#B9D22C', backgroundColor: '#FAFCEB' }, resumeIcon: { width: 40, height: 40, borderRadius: 12, alignItems: 'center', justifyContent: 'center', backgroundColor: C.optic }, resumeEyebrow: { color: C.teal, fontSize: 7, fontWeight: '900', letterSpacing: .7 }, resumeTitle: { marginTop: 2, color: C.ink, fontSize: 10, fontWeight: '900' }, resumeMeta: { marginTop: 2, color: C.ink40, fontSize: 7, lineHeight: 11 }, resumeButton: { minHeight: 34, paddingHorizontal: 10, flexDirection: 'row', alignItems: 'center', gap: 4, borderRadius: 10, backgroundColor: C.teal }, resumeButtonText: { color: C.surface, fontSize: 8, fontWeight: '900' },
-  header: { minHeight: 52, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 12 }, headerCopy: { flex: 1 },
-  eyebrow: { color: C.ink40, fontSize: 10, lineHeight: 15, fontWeight: '800', letterSpacing: 1 }, h1: { color: C.ink, fontSize: 29, lineHeight: 35, fontWeight: '800', letterSpacing: -.8 },
-  kitchen: { height: 7, marginTop: 18, marginBottom: 20 }, solid: { height: 2, backgroundColor: C.ink }, dashed: { marginTop: 4, borderTopWidth: 1, borderStyle: 'dashed', borderColor: C.ink40 }, solidLight: { backgroundColor: 'rgba(255,255,255,.78)' }, dashedLight: { borderColor: 'rgba(255,255,255,.38)' },
+  header: { minHeight: 44, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 10 }, headerCopy: { flex: 1, minWidth: 0 }, headerBack: { width: 40, height: 40, flexShrink: 0, alignItems: 'center', justifyContent: 'center', borderRadius: 13, borderWidth: 1, borderColor: C.line, backgroundColor: C.surface },
+  eyebrow: { color: C.ink40, fontSize: 9, lineHeight: 13, fontWeight: '900', letterSpacing: .9 }, h1: { color: C.ink, fontSize: 22, lineHeight: 27, fontWeight: '900', letterSpacing: -.45 },
+  playHeaderBall: { width: 40, height: 40, flexShrink: 0, alignItems: 'center', justifyContent: 'center', borderRadius: 13, backgroundColor: C.optic }, playHeaderBallImage: { width: 26, height: 26 },
+  kitchen: { height: 7, marginTop: 18, marginBottom: 20 }, headerLine: { marginTop: 10, marginBottom: 16 }, solid: { height: 2, backgroundColor: C.ink }, dashed: { marginTop: 4, borderTopWidth: 1, borderStyle: 'dashed', borderColor: C.ink40 }, solidLight: { backgroundColor: 'rgba(255,255,255,.78)' }, dashedLight: { borderColor: 'rgba(255,255,255,.38)' },
   liveChip: { minHeight: 34, paddingHorizontal: 10, flexDirection: 'row', alignItems: 'center', gap: 6, borderRadius: 18, backgroundColor: '#E5F0ED' }, liveDot: { width: 7, height: 7, borderRadius: 4, backgroundColor: C.teal }, liveChipText: { color: C.teal, fontSize: 8, fontWeight: '900', letterSpacing: .7 }, joinedChip: { minHeight: 34, paddingHorizontal: 10, flexDirection: 'row', alignItems: 'center', gap: 5, borderRadius: 18, backgroundColor: C.optic }, joinedChipText: { color: '#0E2321', fontSize: 8, fontWeight: '900', letterSpacing: .7 },
   invitesCard: { marginBottom: 12, padding: 13, borderRadius: 17, borderWidth: 1, borderColor: '#B9D22C', backgroundColor: '#FAFCEB' }, invitesTitleRow: { flexDirection: 'row', alignItems: 'center', gap: 9 }, inviteBell: { width: 36, height: 36, borderRadius: 11, alignItems: 'center', justifyContent: 'center', backgroundColor: C.optic }, invitesEyebrow: { color: C.teal, fontSize: 7, fontWeight: '900', letterSpacing: .7 }, invitesTitle: { marginTop: 2, color: C.ink, fontSize: 11, fontWeight: '900' }, inviteRequest: { minHeight: 52, marginTop: 9, paddingTop: 9, flexDirection: 'row', alignItems: 'center', gap: 7, borderTopWidth: 1, borderColor: '#DFE8AD' }, inviteRequestCopy: { flex: 1, minWidth: 0 }, inviteSender: { color: C.ink, fontSize: 10, fontWeight: '900' }, inviteDetail: { marginTop: 2, color: C.ink40, fontSize: 7, lineHeight: 10 }, declineInvite: { width: 34, height: 34, borderRadius: 10, alignItems: 'center', justifyContent: 'center', borderWidth: 1, borderColor: '#E8C7BF', backgroundColor: C.surface }, acceptInvite: { minWidth: 62, height: 34, paddingHorizontal: 9, borderRadius: 10, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 3, backgroundColor: C.optic }, acceptInviteText: { color: C.ink, fontSize: 8, fontWeight: '900' },
   introCard: { padding: 14, flexDirection: 'row', alignItems: 'center', gap: 12, borderRadius: 18, borderBottomLeftRadius: 8, borderBottomRightRadius: 8, backgroundColor: C.optic }, introIcon: { width: 48, height: 48, alignItems: 'center', justifyContent: 'center', borderRadius: 14, backgroundColor: 'rgba(255,255,255,.48)' }, introCopy: { flex: 1 }, introTitle: { color: C.ink, fontSize: 14, fontWeight: '800' }, bodySmall: { marginTop: 3, color: C.ink40, fontSize: 10, lineHeight: 15 },
@@ -2170,6 +2518,7 @@ const lightStyles = createMobileStyleSheet({
   segment: { padding: 4, flexDirection: 'row', gap: 4, borderRadius: 14, backgroundColor: C.surface }, segmentItem: { flex: 1, minHeight: 44, paddingHorizontal: 8, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6, borderRadius: 10 }, segmentActive: { backgroundColor: C.optic, ...shadow }, segmentText: { color: C.ink40, fontSize: 11, fontWeight: '700' }, segmentTextActive: { color: C.ink, fontWeight: '800' },
   nearbyCard: { marginTop: 14, padding: 14, borderRadius: 18, borderWidth: 1, borderColor: C.line, backgroundColor: C.surface }, nearbyHead: { paddingBottom: 11, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 8 }, nearbySubtitle: { marginTop: -4, color: C.ink40, fontSize: 9, lineHeight: 13 }, visibilityButton: { minWidth: 80, minHeight: 34, paddingHorizontal: 9, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 5, borderRadius: 17, backgroundColor: C.paper }, visibilityButtonOn: { backgroundColor: C.optic }, visibilityDot: { width: 7, height: 7, borderRadius: 4, backgroundColor: C.ink40 }, visibilityDotOn: { backgroundColor: '#0E2321' }, visibilityText: { color: C.ink40, fontSize: 6, fontWeight: '900', letterSpacing: .45 }, visibilityTextOn: { color: '#0E2321' }, playerSearch: { minHeight: 44, marginBottom: 8, paddingHorizontal: 12, flexDirection: 'row', alignItems: 'center', gap: 9, borderWidth: 1, borderColor: C.line, borderRadius: 12, backgroundColor: C.surface }, playerSearchInput: { minWidth: 0, flex: 1, paddingVertical: 10, color: C.ink, fontSize: 11, fontWeight: '700' }, nearbyCountRow: { paddingVertical: 5, borderTopWidth: 1, borderColor: C.line }, nearbyCount: { alignSelf: 'flex-start', paddingHorizontal: 7, minHeight: 23, flexDirection: 'row', alignItems: 'center', gap: 4, borderRadius: 12, backgroundColor: '#E5F0ED' }, nearbyCountText: { color: C.teal, fontSize: 6, fontWeight: '900', letterSpacing: .4 }, nearbyError: { marginBottom: 6, padding: 9, flexDirection: 'row', alignItems: 'center', gap: 6, borderRadius: 11, backgroundColor: '#F9ECE8' }, nearbyErrorText: { flex: 1, color: C.brick, fontSize: 8, lineHeight: 12 }, nearbyEmpty: { paddingVertical: 15, alignItems: 'center', borderTopWidth: 1, borderColor: C.line }, nearbyEmptyTitle: { marginTop: 5, color: C.ink, fontSize: 10, fontWeight: '900' }, nearbyEmptyText: { maxWidth: 250, marginTop: 3, color: C.ink40, fontSize: 8, lineHeight: 12, textAlign: 'center' }, nearbyPlayer: { minHeight: 61, flexDirection: 'row', alignItems: 'center', gap: 7 }, nearbyPlayerBorder: { borderTopWidth: 1, borderColor: C.line }, nearbyAvatar: { width: 38, height: 38, alignItems: 'center', justifyContent: 'center', borderRadius: 19 }, nearbyAvatarText: { color: C.surface, fontSize: 9, fontWeight: '900' }, nearbyCopy: { flex: 1 }, nearbyName: { color: C.ink, fontSize: 11, fontWeight: '800' }, nearbyMeta: { marginTop: 3, color: C.ink40, fontSize: 8 }, nearbyMessageButton: { width: 34, height: 34, alignItems: 'center', justifyContent: 'center', borderRadius: 11, borderWidth: 1, borderColor: C.line, backgroundColor: C.surface }, inviteButton: { minWidth: 58, minHeight: 32, paddingHorizontal: 7, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 3, borderRadius: 10, backgroundColor: C.optic }, inviteButtonAdded: { borderWidth: 1, borderColor: '#BFD8D2', backgroundColor: '#E5F0ED' }, inviteButtonRemove: { width: 34, minWidth: 34, height: 34, minHeight: 34, paddingHorizontal: 0, borderWidth: 1, borderColor: '#E8C7BF', borderRadius: 11, backgroundColor: '#FFF5F2' }, inviteButtonDisabled: { backgroundColor: C.paper }, inviteButtonText: { color: '#0E2321', fontSize: 8, fontWeight: '900' }, inviteButtonTextAdded: { color: C.teal }, inviteButtonTextDisabled: { color: C.ink40 },
   courtSelect: { minHeight: 70, padding: 12, flexDirection: 'row', alignItems: 'center', gap: 11, borderRadius: 16, borderWidth: 1, borderStyle: 'dashed', borderColor: C.teal, backgroundColor: C.surface }, courtSelectChosen: { borderStyle: 'solid', borderColor: C.line }, courtSelectIcon: { width: 44, height: 44, alignItems: 'center', justifyContent: 'center', borderRadius: 13, backgroundColor: '#E5F0ED' }, courtSelectCopy: { flex: 1 }, courtSelectName: { color: C.ink, fontSize: 12, fontWeight: '800' }, courtSelectDetail: { marginTop: 4, color: C.ink40, fontSize: 8, lineHeight: 12 },
+  bookingGateCard: { minHeight: 112, padding: 14, flexDirection: 'row', alignItems: 'center', gap: 11, borderRadius: 17, borderWidth: 1, borderColor: C.line, backgroundColor: C.surface }, bookingGateIcon: { width: 44, height: 44, alignItems: 'center', justifyContent: 'center', borderRadius: 13, backgroundColor: '#E5F0ED' }, bookingGateTitle: { color: C.ink, fontSize: 12, fontWeight: '900' }, bookingGateText: { marginTop: 4, color: C.ink40, fontSize: 8, lineHeight: 12 }, bookingGateLink: { alignSelf: 'flex-start', marginTop: 7, paddingVertical: 3 }, bookingGateLinkText: { color: C.teal, fontSize: 9, fontWeight: '900' }, bookCourtButton: { alignSelf: 'flex-start', minHeight: 38, marginTop: 10, paddingHorizontal: 11, flexDirection: 'row', alignItems: 'center', gap: 6, borderRadius: 11, backgroundColor: C.optic }, bookCourtButtonText: { color: '#0E2321', fontSize: 9, fontWeight: '900' }, bookingVerifiedNote: { marginTop: 9, paddingHorizontal: 4, flexDirection: 'row', alignItems: 'center', gap: 6 }, bookingVerifiedText: { flex: 1, color: C.ink40, fontSize: 8, lineHeight: 12 }, bookAnotherButton: { alignSelf: 'flex-start', minHeight: 36, marginTop: 5, paddingHorizontal: 4, flexDirection: 'row', alignItems: 'center', gap: 5 }, bookAnotherText: { color: C.teal, fontSize: 9, fontWeight: '900' },
   scorerPicker: { marginTop: 9, paddingHorizontal: 11, borderRadius: 17, borderWidth: 1, borderColor: C.line, backgroundColor: C.surface }, scorerOption: { minHeight: 64, flexDirection: 'row', alignItems: 'center', gap: 10, borderBottomWidth: 1, borderColor: C.line }, scorerOptionSelected: { marginHorizontal: -11, paddingHorizontal: 11, borderRadius: 14, borderBottomColor: 'transparent', backgroundColor: '#F4F9F7' }, scorerOptionAvatar: { width: 38, height: 38, alignItems: 'center', justifyContent: 'center', borderRadius: 12 }, scorerOptionInitials: { color: C.surface, fontSize: 9, fontWeight: '900' }, scorerOptionCopy: { flex: 1 }, scorerOptionName: { color: C.ink, fontSize: 11, fontWeight: '900' }, scorerOptionMeta: { marginTop: 3, color: C.ink40, fontSize: 8 }, scorerHint: { marginTop: 8, paddingHorizontal: 4, flexDirection: 'row', alignItems: 'center', gap: 6 }, scorerHintText: { flex: 1, color: C.ink40, fontSize: 8, lineHeight: 12 }, scorerReady: { paddingHorizontal: 7, minHeight: 25, flexDirection: 'row', alignItems: 'center', gap: 4, borderRadius: 13, backgroundColor: '#E5F0ED' }, scorerReadyText: { color: C.teal, fontSize: 6, fontWeight: '900', letterSpacing: .4 }, emptyScorerText: { marginTop: 8, color: C.brick, fontSize: 8, lineHeight: 12, textAlign: 'center' },
   courtModel: { height: 250, padding: 10, overflow: 'hidden', borderRadius: 22, borderBottomLeftRadius: 9, borderBottomRightRadius: 9, ...shadow },
   courtGlow: { position: 'absolute', width: 260, height: 260, top: -150, right: -85, borderRadius: 130, backgroundColor: 'rgba(255,255,255,.08)' },
@@ -2193,7 +2542,7 @@ const lightStyles = createMobileStyleSheet({
   focusTracker: { marginHorizontal: 20, marginTop: 14, padding: 14, borderRadius: 18, borderWidth: 1, borderColor: C.line, backgroundColor: C.surface, ...shadow }, focusTrackerAchieved: { borderColor: '#B9D22C', backgroundColor: '#FAFCEB' }, focusTrackerMissed: { borderColor: '#E2B5A9', backgroundColor: '#FFF9F7' }, focusTrackerHead: { flexDirection: 'row', alignItems: 'center', gap: 9 }, focusTrackerIcon: { width: 38, height: 38, borderRadius: 12, alignItems: 'center', justifyContent: 'center', backgroundColor: C.optic }, focusTrackerCopy: { flex: 1 }, focusTrackerEyebrow: { color: C.teal, fontSize: 7, fontWeight: '900', letterSpacing: .7 }, focusTrackerTitle: { marginTop: 3, color: C.ink, fontSize: 10, lineHeight: 14, fontWeight: '800' }, focusTrackerScore: { color: C.ink, fontSize: 21, fontWeight: '900' }, returnDots: { marginTop: 13, flexDirection: 'row', justifyContent: 'space-between', gap: 3 }, returnDot: { flex: 1, aspectRatio: 1, maxWidth: 28, alignItems: 'center', justifyContent: 'center', borderRadius: 14, borderWidth: 1, borderColor: C.line, backgroundColor: C.paper }, returnDotDeep: { borderColor: C.teal, backgroundColor: C.teal }, returnDotShort: { borderColor: '#E2B5A9', backgroundColor: '#F7EAE6' }, returnDotText: { color: C.ink40, fontSize: 7, fontWeight: '900' }, returnDotTextRecorded: { color: C.surface }, returnActions: { marginTop: 13, flexDirection: 'row', gap: 8 }, returnButton: { flex: 1, minHeight: 45, paddingHorizontal: 9, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 5, borderRadius: 12 }, returnButtonDeep: { backgroundColor: C.teal }, returnButtonShort: { borderWidth: 1, borderColor: '#E2B5A9', backgroundColor: '#F7EAE6' }, returnButtonText: { color: C.surface, fontSize: 9, fontWeight: '900' }, returnButtonShortText: { color: C.brick, fontSize: 9, fontWeight: '900' }, returnUndo: { alignSelf: 'center', minHeight: 34, paddingHorizontal: 9, flexDirection: 'row', alignItems: 'center', gap: 4 }, returnUndoText: { color: C.ink40, fontSize: 8, fontWeight: '700' }, focusTrackerResult: { marginTop: 12, color: C.ink70, fontSize: 9, lineHeight: 14, fontWeight: '700', textAlign: 'center' },
   liveCourtCard: { marginHorizontal: 20, marginTop: 16, overflow: 'hidden', borderRadius: 22, borderBottomLeftRadius: 9, borderBottomRightRadius: 9, borderWidth: 1, borderColor: C.line, backgroundColor: C.surface }, liveCourtHead: { minHeight: 62, paddingHorizontal: 14, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }, liveCourtEyebrow: { color: C.ink40, fontSize: 7, fontWeight: '900', letterSpacing: .8 }, liveCourtTitle: { marginTop: 1, color: C.ink, fontSize: 17, fontWeight: '900' }, liveNowPill: { minHeight: 27, paddingHorizontal: 9, flexDirection: 'row', alignItems: 'center', gap: 5, borderRadius: 14, backgroundColor: C.ink }, liveNowDot: { width: 7, height: 7, borderRadius: 4, backgroundColor: C.optic }, liveNowText: { color: C.surface, fontSize: 7, fontWeight: '900', letterSpacing: .6 },
   liveCourt: { height: 220, marginHorizontal: 10, overflow: 'hidden', borderRadius: 15 }, liveCourtBounds: { ...StyleSheet.absoluteFillObject, margin: 13, borderWidth: 2, borderColor: 'rgba(255,255,255,.72)' }, liveCourtCenterTop: { position: 'absolute', top: 13, alignSelf: 'center', width: 2, height: 68, backgroundColor: 'rgba(255,255,255,.55)' }, liveCourtCenterBottom: { position: 'absolute', top: 139, bottom: 13, alignSelf: 'center', width: 2, backgroundColor: 'rgba(255,255,255,.55)' }, liveCourtKitchenTop: { position: 'absolute', top: 80, left: 13, right: 13, height: 2, backgroundColor: 'rgba(255,255,255,.72)' }, liveCourtKitchenBottom: { position: 'absolute', top: 138, left: 13, right: 13, height: 2, backgroundColor: 'rgba(255,255,255,.72)' }, liveCourtNet: { position: 'absolute', zIndex: 2, top: 107, left: 5, right: 5, height: 7, borderTopWidth: 3, borderBottomWidth: 1, borderColor: C.surface, backgroundColor: 'rgba(14,35,33,.42)' },
-  liveCourtTeam: { position: 'absolute', zIndex: 3, top: 20, left: 24, right: 24, height: 52, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-around' }, liveCourtTeamAway: { top: 148 }, liveCourtPlayer: { maxWidth: '46%', alignItems: 'center' }, livePlayerMarker: { width: 34, height: 34, alignItems: 'center', justifyContent: 'center', borderRadius: 17, borderWidth: 2, borderColor: C.surface, backgroundColor: C.ink }, livePlayerMarkerAway: { backgroundColor: C.brick }, livePlayerServing: { borderWidth: 4, borderColor: C.optic }, livePlayerInitials: { color: C.surface, fontSize: 8, fontWeight: '900' }, livePlayerName: { maxWidth: 105, marginTop: 3, paddingHorizontal: 6, paddingVertical: 2, overflow: 'hidden', borderRadius: 7, color: C.surface, backgroundColor: 'rgba(14,35,33,.78)', fontSize: 6, fontWeight: '800' }, courtScoreBar: { position: 'absolute', zIndex: 8, top: 90, alignSelf: 'center', minWidth: 150, height: 40, paddingHorizontal: 8, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', borderRadius: 20, borderWidth: 2, borderColor: 'rgba(255,255,255,.35)', backgroundColor: 'rgba(14,35,33,.9)' }, courtScoreTeam: { flexDirection: 'row', alignItems: 'center', gap: 6 }, courtScoreTag: { color: C.optic, fontSize: 7, fontWeight: '900' }, courtScoreTagAway: { color: '#F5A58F' }, courtScoreNumber: { width: 25, color: C.surface, textAlign: 'center', fontSize: 21, fontWeight: '900' }, courtGamePill: { marginHorizontal: 6, paddingHorizontal: 6, paddingVertical: 4, borderRadius: 6, backgroundColor: 'rgba(255,255,255,.1)' }, courtGameText: { color: 'rgba(255,255,255,.62)', fontSize: 5, fontWeight: '900', letterSpacing: .4 }, pointAnnouncement: { position: 'absolute', zIndex: 12, left: 22, right: 22, top: 35, bottom: 35, alignItems: 'center', justifyContent: 'center', borderRadius: 18, backgroundColor: 'rgba(14,35,33,.92)' }, pointAnnouncementPlayer: { color: C.optic, fontSize: 16, fontWeight: '900', textAlign: 'center' }, pointAnnouncementTeam: { maxWidth: '90%', marginTop: 3, color: C.surface, fontSize: 10, fontWeight: '800', textAlign: 'center' }, pointAnnouncementText: { marginTop: 6, color: 'rgba(255,255,255,.58)', fontSize: 8, fontWeight: '900', letterSpacing: 1.2 }, pointAnnouncementScore: { marginTop: 3, color: C.surface, fontSize: 25, fontWeight: '900' }, pointAnnouncementServe: { maxWidth: '92%', marginTop: 5, color: C.optic, textAlign: 'center', fontSize: 8, fontWeight: '800' },
+  liveCourtTeam: { position: 'absolute', zIndex: 3, top: 20, left: 24, right: 24, height: 52, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-around' }, liveCourtTeamAway: { top: 148 }, liveCourtPlayer: { maxWidth: '46%', alignItems: 'center' }, livePlayerMarker: { width: 34, height: 34, alignItems: 'center', justifyContent: 'center', borderRadius: 17, borderWidth: 2, borderColor: C.surface, backgroundColor: C.ink }, livePlayerMarkerAway: { backgroundColor: C.brick }, livePlayerServing: { borderWidth: 4, borderColor: C.optic }, livePlayerInitials: { color: C.surface, fontSize: 8, fontWeight: '900' }, livePlayerName: { maxWidth: 105, marginTop: 3, paddingHorizontal: 6, paddingVertical: 2, overflow: 'hidden', borderRadius: 7, color: C.surface, backgroundColor: 'rgba(14,35,33,.78)', fontSize: 6, fontWeight: '800' }, courtScoreBar: { position: 'absolute', zIndex: 8, top: 90, alignSelf: 'center', minWidth: 150, height: 40, paddingHorizontal: 8, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', borderRadius: 20, borderWidth: 2, borderColor: 'rgba(255,255,255,.35)', backgroundColor: 'rgba(14,35,33,.9)' }, courtScoreTeam: { flexDirection: 'row', alignItems: 'center', gap: 6 }, courtScoreTag: { color: C.optic, fontSize: 7, fontWeight: '900' }, courtScoreTagAway: { color: '#F5A58F' }, courtScoreNumber: { minWidth: 25, color: C.surface, textAlign: 'center', fontSize: 21, fontWeight: '900' }, courtGamePill: { marginHorizontal: 6, paddingHorizontal: 6, paddingVertical: 4, borderRadius: 6, backgroundColor: 'rgba(255,255,255,.1)' }, courtGameText: { color: 'rgba(255,255,255,.62)', fontSize: 5, fontWeight: '900', letterSpacing: .4 }, pointAnnouncement: { position: 'absolute', zIndex: 12, left: 22, right: 22, top: 35, bottom: 35, alignItems: 'center', justifyContent: 'center', borderRadius: 18, backgroundColor: 'rgba(14,35,33,.92)' }, pointAnnouncementPlayer: { color: C.optic, fontSize: 16, fontWeight: '900', textAlign: 'center' }, pointAnnouncementTeam: { maxWidth: '90%', marginTop: 3, color: C.surface, fontSize: 10, fontWeight: '800', textAlign: 'center' }, pointAnnouncementText: { marginTop: 6, color: 'rgba(255,255,255,.58)', fontSize: 8, fontWeight: '900', letterSpacing: 1.2 }, pointAnnouncementScore: { marginTop: 3, color: C.surface, fontSize: 25, fontWeight: '900' }, pointAnnouncementServe: { maxWidth: '92%', marginTop: 5, color: C.optic, textAlign: 'center', fontSize: 8, fontWeight: '800' },
   liveBall: { position: 'absolute', zIndex: 6, top: 98, left: '50%', marginLeft: -12, width: 25, height: 25, borderRadius: 13, borderWidth: 2, borderColor: 'rgba(14,35,33,.18)', backgroundColor: C.optic }, liveBallShadow: { position: 'absolute', zIndex: 5, top: 119, left: '50%', marginLeft: -13, width: 26, height: 7, borderRadius: 13, backgroundColor: C.ink }, ballHoleOne: { position: 'absolute', top: 5, left: 6, width: 3, height: 3, borderRadius: 2, backgroundColor: 'rgba(14,35,33,.36)' }, ballHoleTwo: { position: 'absolute', top: 12, right: 5, width: 3, height: 3, borderRadius: 2, backgroundColor: 'rgba(14,35,33,.36)' }, ballHoleThree: { position: 'absolute', bottom: 4, left: 8, width: 3, height: 3, borderRadius: 2, backgroundColor: 'rgba(14,35,33,.36)' },
   scorerBooth: { minHeight: 86, padding: 12, flexDirection: 'row', alignItems: 'center', gap: 10 }, scorerBoothAvatar: { width: 46, height: 46, alignItems: 'center', justifyContent: 'center', borderRadius: 15, backgroundColor: C.ink }, scorerBoothInitials: { color: C.surface, fontSize: 11, fontWeight: '900' }, scorerOnline: { position: 'absolute', right: -2, bottom: -2, width: 13, height: 13, borderRadius: 7, borderWidth: 3, borderColor: C.surface, backgroundColor: C.optic }, scorerBoothCopy: { flex: 1, minWidth: 0 }, scorerBoothLabel: { color: C.teal, fontSize: 6, fontWeight: '900', letterSpacing: .7 }, scorerBoothName: { marginTop: 2, color: C.ink, fontSize: 11, fontWeight: '900' }, scorerMessage: { marginTop: 3, color: C.ink40, fontSize: 7 }, scorerServing: { marginTop: 3, color: C.teal, fontSize: 7, fontWeight: '800' }, scorerControlBadge: { paddingHorizontal: 7, minHeight: 27, flexDirection: 'row', alignItems: 'center', gap: 3, borderRadius: 9, backgroundColor: '#E5F0ED' }, scorerControlText: { color: C.teal, fontSize: 5, fontWeight: '900', letterSpacing: .4 }, scorerChangeButton: { minHeight: 32, paddingHorizontal: 8, flexDirection: 'row', alignItems: 'center', gap: 4, borderWidth: 1, borderColor: C.line, borderRadius: 10, backgroundColor: C.surface }, scorerChangeText: { color: C.teal, fontSize: 6, fontWeight: '900', letterSpacing: .4 },
   scoreboard: { marginHorizontal: 20, marginTop: 16, flexDirection: 'row', gap: 10 }, scoreTeam: { flex: 1, minHeight: 310, padding: 13, alignItems: 'center', borderRadius: 22, borderBottomLeftRadius: 9, borderBottomRightRadius: 9, borderWidth: 1, borderColor: C.line, backgroundColor: C.surface, ...shadow }, scoreTeamAway: { backgroundColor: '#FFFDFC' }, scoreTeamWinner: { borderColor: C.optic, borderWidth: 2 }, scoreTeamHead: { width: '100%', minHeight: 58, flexDirection: 'row', alignItems: 'flex-start', gap: 8 }, teamBadge: { width: 31, height: 31, borderRadius: 9, alignItems: 'center', justifyContent: 'center', backgroundColor: C.teal }, teamBadgeAway: { backgroundColor: C.brick }, teamBadgeText: { color: C.surface, fontSize: 8, fontWeight: '900' }, scoreNameWrap: { flex: 1 }, scoreName: { color: C.ink, fontSize: 11, lineHeight: 15, fontWeight: '800' }, gamesText: { marginTop: 3, color: C.ink40, fontSize: 8 }, score: { marginTop: 8, color: C.ink, fontSize: 72, lineHeight: 80, fontWeight: '900', letterSpacing: -4, fontVariant: ['tabular-nums'] }, serveRow: { height: 24, flexDirection: 'row', alignItems: 'center', gap: 5 }, serveDot: { width: 7, height: 7, borderRadius: 4, backgroundColor: C.optic }, serveText: { color: C.teal, fontSize: 8, fontWeight: '900', letterSpacing: .7 }, receiveText: { color: C.ink40, fontSize: 8, fontWeight: '800', letterSpacing: .5 }, pointButton: { width: '100%', minHeight: 55, marginTop: 'auto', flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 3, borderRadius: 14, backgroundColor: C.teal }, pointButtonAway: { backgroundColor: C.brick }, pointDisabled: { opacity: .4 }, pointText: { color: C.surface, fontSize: 10, fontWeight: '900', letterSpacing: .8 },
@@ -2203,26 +2552,53 @@ const lightStyles = createMobileStyleSheet({
   boxScoreCard: { marginHorizontal: 20, marginTop: 12, overflow: 'hidden', borderRadius: 17, borderWidth: 1, borderColor: '#304743', backgroundColor: C.ink }, boxScoreHeader: { minHeight: 44, paddingHorizontal: 13, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', borderBottomWidth: 1, borderColor: 'rgba(255,255,255,.1)', backgroundColor: '#17302D' }, boxScoreHeaderText: { color: C.surface, fontSize: 9, fontWeight: '900', letterSpacing: .8 }, boxScoreHeaderMeta: { color: '#9FB3AC', fontSize: 6, fontWeight: '900', letterSpacing: .45 }, boxScoreColumns: { minHeight: 28, paddingHorizontal: 12, flexDirection: 'row', alignItems: 'center', borderBottomWidth: 1, borderColor: 'rgba(255,255,255,.08)' }, boxScoreColumn: { width: 36, color: '#9FB3AC', textAlign: 'center', fontSize: 5, fontWeight: '900', letterSpacing: .45 }, boxScoreTeamColumn: { minWidth: 0, flex: 1, textAlign: 'left' }, boxScoreTeamRow: { minHeight: 58, paddingHorizontal: 12, flexDirection: 'row', alignItems: 'center', borderBottomWidth: 1, borderColor: 'rgba(255,255,255,.08)' }, boxScoreTeamMark: { width: 28, height: 28, marginRight: 8, alignItems: 'center', justifyContent: 'center', borderRadius: 8, backgroundColor: C.teal }, boxScoreTeamMarkAway: { backgroundColor: C.brick }, boxScoreTeamMarkText: { color: C.surface, fontSize: 7, fontWeight: '900' }, boxScoreTeamName: { minWidth: 0, flex: 1, paddingRight: 7, color: C.surface, fontSize: 10, lineHeight: 14, fontWeight: '900' }, boxScoreSetValue: { width: 36, color: C.surface, textAlign: 'center', fontSize: 15, fontWeight: '900' }, boxScoreGameValue: { width: 36, color: '#9FB3AC', textAlign: 'center', fontSize: 14, fontWeight: '800', fontVariant: ['tabular-nums'] }, boxScoreGameValueLive: { color: C.optic }, boxScoreTimeRow: { minHeight: 46, paddingHorizontal: 12, flexDirection: 'row', alignItems: 'center', justifyContent: 'flex-end' }, boxScoreTimeLabel: { minWidth: 0, flex: 1, color: '#9FB3AC', textAlign: 'right', fontSize: 6, fontWeight: '900', letterSpacing: .55 }, boxScoreTimeTotal: { width: 46, color: C.surface, textAlign: 'center', fontSize: 8, fontWeight: '900', fontVariant: ['tabular-nums'] }, boxScoreTimeValue: { width: 36, color: '#9FB3AC', textAlign: 'center', fontSize: 7, fontWeight: '800', fontVariant: ['tabular-nums'] },
   rallyLogCard: { marginHorizontal: 20, marginTop: 12, padding: 14, borderRadius: 17, borderWidth: 1, borderColor: C.line, backgroundColor: C.surface }, rallyLogHead: { paddingBottom: 11, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 8, borderBottomWidth: 1, borderColor: C.line }, rallyLogTitle: { marginTop: 2, color: C.ink, fontSize: 15, fontWeight: '900' }, rallyLogCount: { minHeight: 26, paddingHorizontal: 8, alignItems: 'center', justifyContent: 'center', borderRadius: 13, backgroundColor: '#E5F0ED' }, rallyLogCountText: { color: C.teal, fontSize: 6, fontWeight: '900', letterSpacing: .45 }, rallyLogEmpty: { minHeight: 74, alignItems: 'center', justifyContent: 'center', gap: 5 }, rallyLogEmptyText: { color: C.ink40, textAlign: 'center', fontSize: 8, lineHeight: 12 }, rallyLogRow: { minHeight: 58, flexDirection: 'row', alignItems: 'center', gap: 9, borderBottomWidth: 1, borderColor: C.line }, rallyLogNumber: { width: 30, height: 30, alignItems: 'center', justifyContent: 'center', borderRadius: 10, backgroundColor: C.teal }, rallyLogNumberAway: { backgroundColor: C.brick }, rallyLogNumberText: { color: C.surface, fontSize: 8, fontWeight: '900' }, rallyLogCopy: { minWidth: 0, flex: 1 }, rallyLogResult: { color: C.ink, fontSize: 9, fontWeight: '900' }, rallyLogServe: { marginTop: 3, color: C.ink40, fontSize: 7 }, rallyLogScore: { alignItems: 'flex-end' }, rallyLogScoreText: { color: C.ink, fontSize: 13, fontWeight: '900', fontVariant: ['tabular-nums'] }, rallyLogGame: { marginTop: 2, color: C.teal, fontSize: 6, fontWeight: '900' }, rallyLogMore: { minHeight: 40, paddingTop: 9, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 4 }, rallyLogMoreText: { color: C.teal, fontSize: 8, fontWeight: '900' },
   modalBackdrop: { flex: 1, paddingHorizontal: 16, paddingTop: 16, alignItems: 'center', justifyContent: 'flex-end', backgroundColor: 'rgba(14,35,33,.7)' }, dialog: { width: '100%', maxWidth: 390, padding: 22, alignItems: 'center', borderRadius: 22, backgroundColor: C.surface }, dialogIcon: { width: 54, height: 54, alignItems: 'center', justifyContent: 'center', borderRadius: 17, backgroundColor: '#F7EAE6' }, dialogTitle: { marginTop: 13, color: C.ink, fontSize: 21, fontWeight: '800' }, dialogBody: { marginTop: 6, color: C.ink40, fontSize: 11, lineHeight: 17, textAlign: 'center' }, dialogActions: { width: '100%', marginTop: 20, flexDirection: 'row', gap: 8 }, secondaryButton: { flex: 1, minHeight: 48, alignItems: 'center', justifyContent: 'center', borderRadius: 13, borderWidth: 1, borderColor: C.line }, secondaryText: { color: C.teal, fontSize: 10, fontWeight: '800' }, endConfirmButton: { flex: 1, minHeight: 48, alignItems: 'center', justifyContent: 'center', borderRadius: 13, backgroundColor: C.brick }, endConfirmText: { color: C.surface, fontSize: 10, fontWeight: '800' },
+  serverChoiceList: { width: '100%', marginTop: 18, gap: 9 }, serverChoiceRow: { minHeight: 50, padding: 7, flexDirection: 'row', alignItems: 'center', gap: 6, borderRadius: 13, borderWidth: 1, borderColor: C.line, backgroundColor: C.paper }, serverChoiceName: { minWidth: 0, flex: 1, color: C.ink, fontSize: 9, fontWeight: '900' }, serverChoiceButton: { minHeight: 35, paddingHorizontal: 9, alignItems: 'center', justifyContent: 'center', borderRadius: 10, backgroundColor: C.optic }, serverChoiceButtonText: { color: '#0E2321', fontSize: 7, fontWeight: '900' },
   saveUnfinishedButton: { width: '100%', minHeight: 50, marginTop: 18, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 7, borderRadius: 13, backgroundColor: C.optic }, saveUnfinishedText: { color: '#0E2321', fontSize: 10, fontWeight: '900' },
   courtSheet: { width: '100%', maxWidth: 420, minHeight: 220, padding: 16, overflow: 'hidden', borderRadius: 24, backgroundColor: C.paper }, courtList: { flex: 1, minHeight: 0 }, courtListContent: { paddingBottom: 6 }, sheetHandle: { alignSelf: 'center', width: 38, height: 4, marginBottom: 10, borderRadius: 2, backgroundColor: C.line }, sheetHead: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }, sheetTitle: { color: C.ink, fontSize: 22, fontWeight: '800' }, sheetClose: { width: 38, height: 38, alignItems: 'center', justifyContent: 'center', borderRadius: 19, backgroundColor: C.surface }, sheetLead: { marginTop: 4, marginBottom: 2, color: C.ink40, fontSize: 10 }, courtOption: { minHeight: 70, marginTop: 8, padding: 8, flexDirection: 'row', alignItems: 'center', gap: 9, borderRadius: 14, borderWidth: 1, borderColor: C.line, backgroundColor: C.surface }, courtOptionActive: { borderColor: C.teal, backgroundColor: '#F7FAF7' }, courtThumb: { width: 44, height: 50, alignItems: 'center', justifyContent: 'center', overflow: 'hidden', borderRadius: 10 }, courtThumbLine: { position: 'absolute', left: 6, right: 6, top: '50%', height: 1, backgroundColor: 'rgba(255,255,255,.58)' }, courtOptionCopy: { flex: 1, minWidth: 0 }, courtOptionName: { color: C.ink, fontSize: 11, fontWeight: '800' }, courtOptionDetail: { marginTop: 2, color: C.ink40, fontSize: 8 }, courtAvailable: { marginTop: 3, color: C.teal, fontSize: 8, fontWeight: '800' },
-  resultContent: { alignItems: 'center', paddingTop: 12, paddingBottom: 32 },
+  scoringMethodSection: { marginTop: 5 },
+  scoringMethodSelected: { minHeight: 27, marginTop: 18, paddingHorizontal: 8, flexDirection: 'row', alignItems: 'center', gap: 4, borderRadius: 14, backgroundColor: '#E5F0ED' },
+  scoringMethodSelectedText: { color: C.teal, fontSize: 6, fontWeight: '900', letterSpacing: .55 },
+  scoringMethodChoices: { flexDirection: 'row', flexWrap: 'wrap', gap: 9 },
+  scoringMethodChoice: { minHeight: 156, flexBasis: '47%', flexGrow: 1, padding: 13, overflow: 'hidden', borderRadius: 18, borderWidth: 1, borderColor: C.line, backgroundColor: C.surface },
+  scoringMethodChoiceActive: { borderWidth: 2, borderColor: C.teal, backgroundColor: '#F4F9F7' },
+  scoringMethodChoiceIcon: { width: 42, height: 42, alignItems: 'center', justifyContent: 'center', borderRadius: 13, backgroundColor: '#E5F0ED' },
+  scoringMethodChoiceIconActive: { backgroundColor: C.optic },
+  scoringMethodChoiceTitle: { marginTop: 11, color: C.ink, fontSize: 12, fontWeight: '900' },
+  scoringMethodChoiceMeta: { marginTop: 5, color: C.ink40, fontSize: 8, lineHeight: 12 },
+  scoringMethodRadio: { position: 'absolute', top: 13, right: 13, width: 19, height: 19, alignItems: 'center', justifyContent: 'center', borderRadius: 10, borderWidth: 1, borderColor: C.line, backgroundColor: C.surface },
+  scoringMethodRadioActive: { borderColor: C.teal },
+  scoringMethodRadioDot: { width: 9, height: 9, borderRadius: 5, backgroundColor: C.teal },
+  liveScoringMethod: { minHeight: 67, marginHorizontal: 20, marginTop: 14, paddingHorizontal: 12, flexDirection: 'row', alignItems: 'center', gap: 10, borderRadius: 17, borderWidth: 1, borderColor: C.line, backgroundColor: C.surface },
+  liveScoringMethodCopy: { minWidth: 0, flex: 1 },
+  liveScoringMethodLabel: { color: C.teal, fontSize: 6, fontWeight: '900', letterSpacing: .65 },
+  liveScoringMethodMeta: { marginTop: 3, color: C.ink40, fontSize: 7, lineHeight: 10 },
+  liveScoringMethodSwitch: { width: 204, height: 42, padding: 3, flexDirection: 'row', borderRadius: 11, backgroundColor: '#E7EBE6' },
+  liveScoringMethodOption: { flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 3, borderRadius: 8 },
+  liveScoringMethodOptionActive: { backgroundColor: C.optic },
+  liveScoringMethodText: { color: C.ink40, fontSize: 7, fontWeight: '800' },
+  liveScoringMethodTextActive: { color: '#0E2321', fontWeight: '900' },
+  shoutFeedback: { minHeight: 40, marginHorizontal: 20, marginTop: 8, paddingHorizontal: 11, paddingVertical: 8, flexDirection: 'row', alignItems: 'center', gap: 7, borderRadius: 12, borderWidth: 1 },
+  shoutFeedbackAccepted: { borderColor: '#CFE2D7', backgroundColor: '#EDF5E5' },
+  shoutFeedbackRejected: { borderColor: '#F1CFC5', backgroundColor: '#FFF0EC' },
+  shoutFeedbackText: { minWidth: 0, flex: 1, color: C.ink, fontSize: 8, lineHeight: 11, fontWeight: '800' },
+  resultContent: { alignItems: 'center', paddingTop: 12, paddingBottom: 126 },
   resultIcon: { width: 72, height: 72, marginBottom: 15, alignItems: 'center', justifyContent: 'center', borderRadius: 23, borderBottomLeftRadius: 9, borderBottomRightRadius: 9, backgroundColor: C.optic },
   resultTopBar: { width: '100%', minHeight: 54, marginBottom: 14, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
   resultTopButton: { width: 42, height: 42, alignItems: 'center', justifyContent: 'center', borderRadius: 14, borderWidth: 1, borderColor: C.line, backgroundColor: C.surface },
   resultTopCopy: { alignItems: 'center' }, resultTopEyebrow: { color: C.teal, fontSize: 7, fontWeight: '900', letterSpacing: 1.1 }, resultTopTitle: { marginTop: 2, color: C.ink, fontSize: 15, fontWeight: '900' },
-  resultPoster: { width: '100%', aspectRatio: 9 / 16, padding: 20, overflow: 'hidden', borderRadius: 26, borderBottomLeftRadius: 10, borderBottomRightRadius: 10, backgroundColor: '#0E2321', ...shadow },
+  resultPoster: { width: '100%', padding: 20, overflow: 'hidden', borderRadius: 26, borderBottomLeftRadius: 10, borderBottomRightRadius: 10, backgroundColor: '#0E2321', ...shadow },
   posterGlow: { position: 'absolute', top: -90, right: -80, width: 250, height: 250, borderRadius: 125, backgroundColor: 'rgba(214,233,74,.09)' },
   posterBrandRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }, posterBrand: { flexDirection: 'row', alignItems: 'center', gap: 8 }, posterBrandText: { color: C.surface, fontSize: 12, fontWeight: '900', letterSpacing: 2 },
   posterBall: { width: 24, height: 24, borderRadius: 12, backgroundColor: C.optic }, posterBallHoleOne: { position: 'absolute', top: 5, left: 6, width: 3, height: 3, borderRadius: 2, backgroundColor: 'rgba(14,35,33,.44)' }, posterBallHoleTwo: { position: 'absolute', top: 11, right: 5, width: 3, height: 3, borderRadius: 2, backgroundColor: 'rgba(14,35,33,.44)' }, posterBallHoleThree: { position: 'absolute', bottom: 4, left: 8, width: 3, height: 3, borderRadius: 2, backgroundColor: 'rgba(14,35,33,.44)' },
   posterFinalPill: { minHeight: 28, paddingHorizontal: 10, flexDirection: 'row', alignItems: 'center', gap: 6, borderRadius: 14, borderWidth: 1, borderColor: 'rgba(255,255,255,.15)', backgroundColor: 'rgba(255,255,255,.06)' }, posterFinalDot: { width: 6, height: 6, borderRadius: 3, backgroundColor: C.optic }, posterFinalText: { color: C.surface, fontSize: 7, fontWeight: '900', letterSpacing: 1 },
-  posterMeta: { marginTop: 30, color: C.optic, fontSize: 8, fontWeight: '900', letterSpacing: 1.3 }, posterHeadline: { maxWidth: '90%', marginTop: 7, color: C.surface, fontSize: 27, lineHeight: 32, fontWeight: '900', letterSpacing: -.65 }, posterVenueRow: { marginTop: 10, flexDirection: 'row', alignItems: 'center', gap: 5 }, posterVenue: { minWidth: 0, color: '#ABC0B9', fontSize: 9, fontWeight: '700' },
-  posterScoreboard: { marginTop: 24, overflow: 'hidden', borderRadius: 16, borderWidth: 1, borderColor: 'rgba(255,255,255,.13)', backgroundColor: 'rgba(255,255,255,.045)' }, posterScoreHead: { minHeight: 30, paddingHorizontal: 10, flexDirection: 'row', alignItems: 'center', borderBottomWidth: 1, borderColor: 'rgba(255,255,255,.1)' }, posterScoreLabel: { width: 29, color: '#82968F', textAlign: 'center', fontSize: 6, fontWeight: '900', letterSpacing: .6 }, posterTeamLabel: { minWidth: 0, flex: 1, textAlign: 'left' }, posterMatchLabel: { marginLeft: 4, color: C.optic },
+  posterMeta: { marginTop: 30, color: C.optic, fontSize: 8, fontWeight: '900', letterSpacing: 1.3 }, posterHeadline: { maxWidth: '90%', marginTop: 7, color: C.surface, fontSize: 27, lineHeight: 32, fontWeight: '900', letterSpacing: -.65 }, posterVenueRow: { marginTop: 10, marginBottom: 16, flexDirection: 'row', alignItems: 'center', gap: 5 }, posterVenue: { minWidth: 0, color: '#ABC0B9', fontSize: 9, fontWeight: '700' },
+  posterScoreboard: { marginTop: 'auto', marginBottom: 'auto', overflow: 'hidden', borderRadius: 16, borderWidth: 1, borderColor: 'rgba(255,255,255,.13)', backgroundColor: 'rgba(255,255,255,.045)' }, posterScoreHead: { minHeight: 30, paddingHorizontal: 10, flexDirection: 'row', alignItems: 'center', borderBottomWidth: 1, borderColor: 'rgba(255,255,255,.1)' }, posterScoreLabel: { width: 29, color: '#82968F', textAlign: 'center', fontSize: 6, fontWeight: '900', letterSpacing: .6 }, posterTeamLabel: { minWidth: 0, flex: 1, textAlign: 'left' }, posterMatchLabel: { marginLeft: 4, color: C.optic }, posterMatchBadge: { width: 20, height: 14, marginLeft: 8, marginRight: 5, alignItems: 'center', justifyContent: 'center', borderRadius: 4, backgroundColor: C.optic, shadowColor: C.optic, shadowOffset: { width: 0, height: 0 }, shadowOpacity: 0.4, shadowRadius: 4 }, posterMatchBadgeText: { color: '#0E2321', fontSize: 7, fontWeight: '900', letterSpacing: .5 },
   posterTeamRow: { minHeight: 72, paddingHorizontal: 10, flexDirection: 'row', alignItems: 'center' }, posterTeamRowBorder: { borderTopWidth: 1, borderColor: 'rgba(255,255,255,.1)' }, posterTeamMark: { width: 30, height: 30, marginRight: 9, alignItems: 'center', justifyContent: 'center', borderRadius: 9, backgroundColor: C.teal }, posterTeamMarkAway: { backgroundColor: C.brick }, posterTeamMarkText: { color: C.surface, fontSize: 7, fontWeight: '900' }, posterTeamNameWrap: { minWidth: 0, flex: 1, paddingRight: 6 }, posterTeamName: { color: C.surface, fontSize: 10, lineHeight: 14, fontWeight: '900' }, posterWinnerTag: { marginTop: 3, color: C.optic, fontSize: 5, fontWeight: '900', letterSpacing: .7 }, posterGameScore: { width: 29, color: '#8EA19B', textAlign: 'center', fontSize: 16, fontWeight: '800', fontVariant: ['tabular-nums'] }, posterGameScoreWon: { color: C.surface }, posterMatchScore: { width: 29, marginLeft: 4, color: '#8EA19B', textAlign: 'center', fontSize: 20, fontWeight: '900', fontVariant: ['tabular-nums'] }, posterMatchScoreWon: { color: C.optic },
-  posterFooter: { marginTop: 'auto', paddingTop: 17, flexDirection: 'row', alignItems: 'flex-end', justifyContent: 'space-between', borderTopWidth: 1, borderColor: 'rgba(255,255,255,.12)' }, posterDuration: { alignItems: 'flex-end' }, posterFooterLabel: { color: '#71867F', fontSize: 5, fontWeight: '900', letterSpacing: .8 }, posterFooterValue: { marginTop: 4, color: C.surface, fontSize: 8, fontWeight: '900', fontVariant: ['tabular-nums'] },
+  posterFooter: { paddingTop: 17, flexDirection: 'row', alignItems: 'flex-end', justifyContent: 'space-between', borderTopWidth: 1, borderColor: 'rgba(255,255,255,.12)' }, posterDuration: { alignItems: 'flex-end' }, posterFooterLabel: { color: '#71867F', fontSize: 5, fontWeight: '900', letterSpacing: .8 }, posterFooterValue: { marginTop: 4, color: C.surface, fontSize: 8, fontWeight: '900', fontVariant: ['tabular-nums'] },
   resultSectionHead: { width: '100%', marginTop: 24, flexDirection: 'row', alignItems: 'flex-end', justifyContent: 'space-between' }, resultSectionEyebrow: { color: C.teal, fontSize: 7, fontWeight: '900', letterSpacing: 1 }, resultSectionTitle: { marginTop: 4, color: C.ink, fontSize: 18, fontWeight: '900' }, resultSectionMeta: { color: C.ink40, fontSize: 8, fontWeight: '800' },
   resultStats: { width: '100%', marginTop: 12, paddingVertical: 15, flexDirection: 'row', borderRadius: 18, borderWidth: 1, borderColor: C.line, backgroundColor: C.surface }, resultStat: { flex: 1, alignItems: 'center', borderRightWidth: 1, borderColor: C.line }, resultStatLast: { borderRightWidth: 0 }, resultStatIcon: { width: 32, height: 32, alignItems: 'center', justifyContent: 'center', borderRadius: 10, backgroundColor: '#E5F0ED' }, resultStatValue: { marginTop: 7, color: C.ink, fontSize: 13, fontWeight: '900', fontVariant: ['tabular-nums'] }, resultStatLabel: { marginTop: 3, color: C.ink40, fontSize: 5, fontWeight: '900', letterSpacing: .55 },
   focusResultCard: { width: '100%', marginTop: 12, padding: 14, flexDirection: 'row', alignItems: 'center', gap: 10, borderRadius: 16, borderWidth: 1, borderColor: C.line, backgroundColor: C.surface }, focusResultAchieved: { borderColor: '#B9D22C', backgroundColor: '#FAFCEB' }, focusResultIcon: { width: 42, height: 42, borderRadius: 13, alignItems: 'center', justifyContent: 'center', backgroundColor: C.optic }, focusResultTitle: { marginTop: 3, color: C.ink, fontSize: 11, lineHeight: 15, fontWeight: '900' }, focusResultMeta: { marginTop: 3, color: C.ink40, fontSize: 8, lineHeight: 12 },
-  resultSaveStatus: { width: '100%', minHeight: 62, marginTop: 12, paddingHorizontal: 14, flexDirection: 'row', alignItems: 'center', gap: 10, borderRadius: 16, borderWidth: 1, borderColor: C.line, backgroundColor: C.surface }, resultSaveFailed: { borderColor: '#E8C8BF', backgroundColor: '#FFF8F6' }, resultSaveIcon: { width: 34, height: 34, alignItems: 'center', justifyContent: 'center', borderRadius: 11, backgroundColor: '#E5F0ED' }, resultDetailsTitle: { color: C.ink, fontSize: 10, fontWeight: '900' }, resultDetailsMeta: { marginTop: 3, color: C.ink40, fontSize: 8, lineHeight: 11 }, resultRetryText: { color: C.brick, fontSize: 7, fontWeight: '900', letterSpacing: .7 },
+  resultSaveStatus: { width: '100%', minHeight: 62, marginTop: 12, paddingHorizontal: 14, flexDirection: 'row', alignItems: 'center', gap: 10, borderRadius: 16, borderWidth: 1, borderColor: C.line, backgroundColor: C.surface }, resultSaveFailed: { borderColor: '#E2B5A9', backgroundColor: '#FFF9F7' }, resultSaveIcon: { width: 34, height: 34, alignItems: 'center', justifyContent: 'center', borderRadius: 11, backgroundColor: '#E5F0ED' }, resultDetailsTitle: { color: C.ink, fontSize: 10, fontWeight: '900' }, resultDetailsMeta: { marginTop: 3, color: C.ink40, fontSize: 8, lineHeight: 11 }, resultRetryText: { color: C.brick, fontSize: 7, fontWeight: '900', letterSpacing: .7 },
   resultActions: { width: '100%', marginTop: 14, flexDirection: 'row', gap: 9 }, resultPrimaryAction: { minHeight: 52, flex: 1.35, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 7, borderRadius: 15, backgroundColor: C.optic }, resultPrimaryActionText: { color: '#0E2321', fontSize: 10, fontWeight: '900' }, resultSecondaryAction: { minHeight: 52, flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6, borderRadius: 15, borderWidth: 1, borderColor: C.line, backgroundColor: C.surface }, resultSecondaryActionText: { color: C.teal, fontSize: 10, fontWeight: '900' },
   resultActionsBackdrop: { flex: 1, paddingHorizontal: 16, paddingBottom: 18, justifyContent: 'flex-end', backgroundColor: 'rgba(14,35,33,.68)' }, resultActionsSheet: { width: '100%', maxWidth: 420, alignSelf: 'center', padding: 18, borderRadius: 24, backgroundColor: C.paper }, resultActionsHandle: { alignSelf: 'center', width: 38, height: 4, marginBottom: 14, borderRadius: 2, backgroundColor: C.line }, resultActionsHeader: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }, resultActionsTitle: { marginTop: 3, color: C.ink, fontSize: 21, fontWeight: '900' }, resultActionsClose: { width: 36, height: 36, alignItems: 'center', justifyContent: 'center', borderRadius: 12, backgroundColor: C.surface }, resultActionsLead: { marginTop: 7, marginBottom: 6, color: C.ink40, fontSize: 9, lineHeight: 14 }, resultActionRow: { minHeight: 68, marginTop: 8, paddingHorizontal: 12, flexDirection: 'row', alignItems: 'center', gap: 10, borderRadius: 15, borderWidth: 1, borderColor: C.line, backgroundColor: C.surface }, resultActionIcon: { width: 38, height: 38, alignItems: 'center', justifyContent: 'center', borderRadius: 12, backgroundColor: '#E5F0ED' }, resultActionTitle: { color: C.ink, fontSize: 10, fontWeight: '900' }, resultActionMeta: { marginTop: 3, color: C.ink40, fontSize: 7, lineHeight: 11 },
 });

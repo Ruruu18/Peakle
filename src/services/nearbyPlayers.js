@@ -1,4 +1,6 @@
 import { requireSupabase } from '../lib/supabase';
+import { DEMO_MODE } from '../config/demoMode';
+import { DEMO_NEARBY_PLAYERS } from '../config/demoData';
 
 export const INVITE_WINDOW_MS = 60 * 1000;
 const JOINED_INVITE_WINDOW_MS = 15 * 60 * 1000;
@@ -22,6 +24,7 @@ function accuracyLabel(accuracyM) {
 }
 
 export async function publishPresence(userId, location, { visible = true, availability = 'available' } = {}) {
+  if (DEMO_MODE) return { user_id: userId, is_visible: true, availability, last_seen_at: new Date().toISOString() };
   if (!userId || ![location?.latitude, location?.longitude].every(Number.isFinite)) return;
   const now = new Date().toISOString();
   const client = requireSupabase();
@@ -64,6 +67,7 @@ export async function publishPresence(userId, location, { visible = true, availa
 }
 
 export async function stopPresence(userId, { disable = false } = {}) {
+  if (DEMO_MODE) return;
   if (!userId) return;
   const changes = { availability: 'offline', updated_at: new Date().toISOString() };
   if (disable) changes.is_visible = false;
@@ -72,6 +76,7 @@ export async function stopPresence(userId, { disable = false } = {}) {
 }
 
 export async function listNearbyOnlinePlayers(location, radiusKm = 25) {
+  if (DEMO_MODE) return DEMO_NEARBY_PLAYERS;
   if (![location?.latitude, location?.longitude].every(Number.isFinite)) return [];
   const { data, error } = await requireSupabase().rpc('nearby_online_players', {
     p_latitude: location.latitude,
@@ -124,6 +129,7 @@ export async function sendMatchInvite(recipientId, matchPayload) {
 }
 
 export async function listMatchInvites() {
+  if (DEMO_MODE) return { incoming: [], outgoing: [], joinedInvite: null, removedInvite: null };
   const client = requireSupabase();
   const { data: auth, error: authError } = await client.auth.getUser();
   if (authError || !auth.user) return { incoming: [], outgoing: [], joinedInvite: null, removedInvite: null };
@@ -131,10 +137,10 @@ export async function listMatchInvites() {
   const historyCutoff = new Date(Date.now() - JOINED_INVITE_WINDOW_MS).toISOString();
   const [incomingResult, outgoingResult] = await Promise.all([
     client.from('match_invites')
-      .select('*, sender:profiles!match_invites_sender_id_fkey(id, display_name, avatar_url, skill_rating)')
+      .select('*, sender:profiles!match_invites_sender_id_fkey(id, display_name, avatar_url)')
       .eq('recipient_id', auth.user.id).gte('created_at', historyCutoff).order('created_at', { ascending: false }),
     client.from('match_invites')
-      .select('*, recipient:profiles!match_invites_recipient_id_fkey(id, display_name, avatar_url, skill_rating)')
+      .select('*, recipient:profiles!match_invites_recipient_id_fkey(id, display_name, avatar_url)')
       .eq('sender_id', auth.user.id).gte('created_at', historyCutoff).order('created_at', { ascending: false }),
   ]);
   const error = incomingResult.error || outgoingResult.error;
@@ -181,7 +187,7 @@ export async function startNearbyLiveMatch({ setupId, configuration, initialStat
 }
 
 export async function getNearbyLiveMatch(matchId) {
-  if (!matchId) return null;
+  if (!matchId || DEMO_MODE) return null;
   const { data, error } = await requireSupabase().from('nearby_live_matches')
     .select('*, nearby_live_match_members(user_id,role,profiles(display_name,avatar_url))')
     .eq('id', matchId)

@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import { ActivityIndicator, Alert, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { ActivityIndicator, Alert, Image, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { StatusBar } from 'expo-status-bar';
 import Ionicons from '@expo/vector-icons/Ionicons';
@@ -36,6 +36,7 @@ const DARK_CONTENT_COLORS = {
 };
 
 let C = LIGHT_C;
+const BALL_IMAGE = require('../../public/images/ball.png');
 
 function Icon({ name, size = 24, color = C.ink, style }) {
   return <Ionicons name={name} size={size} color={color} style={style} />;
@@ -220,94 +221,141 @@ export default function PublicProfileScreen({ navigation, route }) {
   };
 
   const openChat = () => {
-    navigation.navigate('DirectChat', { player, ownerTab: 'Home' });
+    navigation.navigate('DirectChat', { player, ownerTab: route.params?.ownerTab || 'Home' });
   };
+
+  const playerName = player.name || 'Peakle player';
+  const area = profileDetails.area || player.area || 'Location not shared';
+  const numericRating = Number(profileDetails.rating);
+  const hasRating = profileDetails.rating != null && profileDetails.rating !== '' && Number.isFinite(numericRating);
+  const rating = hasRating ? numericRating.toFixed(1) : 'Unrated';
+  const playPreference = profileDetails.playPreference || 'Not set yet';
+  const isFollowed = following || followRequestPending;
 
   return (
     <SafeAreaView style={currentStyles.safe}>
       <StatusBar style={isDark ? 'light' : 'dark'} backgroundColor={C.paper} />
       <ScrollView contentContainerStyle={currentStyles.content} showsVerticalScrollIndicator={false}>
-        <View style={currentStyles.topbar}>
-          <Pressable onPress={() => navigation.goBack()} style={currentStyles.backButton}>
-            <Icon name="arrow-back" size={24} color={C.ink} />
-          </Pressable>
-        </View>
-
-        <View style={currentStyles.identity}>
-          <View style={currentStyles.avatarContainer}>
-            <ProfilePhoto photo={player.avatar} name={player.name} size={90} />
-          </View>
-
-          <Text numberOfLines={1} style={currentStyles.playerName}>{player.name}</Text>
-
-          <View style={currentStyles.locationRow}>
-            <Icon name="location-outline" size={14} color={C.ink40} />
-            <Text numberOfLines={1} style={currentStyles.locationText}>{player.area || 'Unknown location'}</Text>
-            {player.rating ? (
-              <>
-                <Text style={currentStyles.locationDivider}>·</Text>
-                <Icon name="star-outline" size={14} color={C.teal} />
-                <Text style={currentStyles.ratingText}>{player.rating.toFixed(1)}</Text>
-              </>
-            ) : null}
-          </View>
-
-          {player.reason ? (
-            <View style={currentStyles.reasonRow}>
-              <Icon name="sparkles-outline" size={14} color={C.teal} />
-              <Text numberOfLines={1} style={currentStyles.reasonText}>{player.reason}</Text>
+        <View style={currentStyles.page}>
+          <View style={currentStyles.topbar}>
+            <Pressable
+              accessibilityRole="button"
+              accessibilityLabel="Go back"
+              hitSlop={8}
+              onPress={() => navigation.goBack()}
+              style={({ pressed }) => [currentStyles.backButton, pressed && currentStyles.buttonPressed]}
+            >
+              <Icon name="arrow-back" size={22} color={C.ink} />
+            </Pressable>
+            <View style={currentStyles.topbarTitle}>
+              <Text style={currentStyles.topbarEyebrow}>PLAYER PROFILE</Text>
+              <Text style={currentStyles.topbarSubtitle}>Peakle community</Text>
             </View>
-          ) : null}
+            <View style={currentStyles.topbarSpacer} />
+          </View>
 
-          <View style={currentStyles.socialStats}>
-            {mutualCount > 0 && (
-              <>
+          <View style={currentStyles.heroCard}>
+            <View style={currentStyles.heroCover}>
+              <View style={currentStyles.heroBrand}>
+                <View style={currentStyles.heroBrandIcon}>
+                  <Image accessibilityIgnoresInvertColors accessible={false} source={BALL_IMAGE} resizeMode="contain" style={currentStyles.heroBallImage} />
+                </View>
+                <Text style={currentStyles.heroBrandText}>READY TO RALLY</Text>
+              </View>
+              <Image
+                accessibilityIgnoresInvertColors
+                accessible={false}
+                pointerEvents="none"
+                source={BALL_IMAGE}
+                resizeMode="contain"
+                style={currentStyles.heroBallArtwork}
+              />
+            </View>
+
+            <View style={currentStyles.heroBody}>
+              <View style={currentStyles.avatarRing}>
+                <ProfilePhoto photo={player.avatar} name={playerName} size={96} />
+              </View>
+
+              <Text numberOfLines={2} style={currentStyles.playerName}>{playerName}</Text>
+              <View style={currentStyles.locationPill}>
+                <Icon name="location-outline" size={14} color={C.teal} />
+                <Text numberOfLines={1} style={currentStyles.locationText}>{area}</Text>
+              </View>
+
+              {player.reason ? (
+                <View style={currentStyles.reasonRow}>
+                  <Icon name="sparkles" size={14} color={C.teal} />
+                  <Text numberOfLines={2} style={currentStyles.reasonText}>{player.reason}</Text>
+                </View>
+              ) : null}
+
+              <View style={currentStyles.socialStats}>
+                <View style={currentStyles.socialStat}>
+                  <Text style={currentStyles.socialValue}>{formatSocialCount(followCounts.followers)}</Text>
+                  <Text style={currentStyles.socialLabel}>Followers</Text>
+                </View>
+                <View style={currentStyles.socialDivider} />
+                <View style={currentStyles.socialStat}>
+                  <Text style={currentStyles.socialValue}>{formatSocialCount(followCounts.following)}</Text>
+                  <Text style={currentStyles.socialLabel}>Following</Text>
+                </View>
+                <View style={currentStyles.socialDivider} />
                 <View style={currentStyles.socialStat}>
                   <Text style={currentStyles.socialValue}>{formatSocialCount(mutualCount)}</Text>
                   <Text style={currentStyles.socialLabel}>Mutuals</Text>
                 </View>
-                <View style={currentStyles.socialDivider} />
-              </>
-            )}
-            <View style={currentStyles.socialStat}>
-              <Text style={currentStyles.socialValue}>{formatSocialCount(followCounts.followers)}</Text>
-              <Text style={currentStyles.socialLabel}>Followers</Text>
-            </View>
-            <View style={currentStyles.socialDivider} />
-            <View style={currentStyles.socialStat}>
-              <Text style={currentStyles.socialValue}>{formatSocialCount(followCounts.following)}</Text>
-              <Text style={currentStyles.socialLabel}>Following</Text>
-            </View>
-          </View>
+              </View>
 
-          <View style={currentStyles.actionButtons}>
-            <Pressable
-              accessibilityRole="button"
-              accessibilityLabel={following ? `Unfollow ${player.name}` : followRequestPending ? `Cancel follow request to ${player.name}` : `Follow ${player.name}`}
-              accessibilityState={{ busy: followBusy, disabled: followBusy }}
-              disabled={followBusy}
-              onPress={handleFollow}
-              style={[currentStyles.actionButton, currentStyles.primaryButton, (following || followRequestPending) && currentStyles.secondaryButton, followBusy && { opacity: 0.65 }]}
-            >
-              {followBusy ? (
-                <ActivityIndicator size="small" color={following || followRequestPending ? C.ink : C.surface} />
-              ) : (
-                <>
-                  <Icon name={following ? "person-remove-outline" : followRequestPending ? "time-outline" : "person-add-outline"} size={18} color={following || followRequestPending ? C.ink : C.surface} />
-                  <Text style={[currentStyles.actionButtonText, currentStyles.primaryButtonText, (following || followRequestPending) && currentStyles.secondaryButtonText]}>
-                    {following ? 'Following' : followRequestPending ? 'Requested' : 'Follow'}
-                  </Text>
-                </>
-              )}
-            </Pressable>
-            <Pressable onPress={openChat} style={[currentStyles.actionButton, currentStyles.secondaryButton]}>
-              <Icon name="chatbubble-ellipses-outline" size={18} color={C.ink} />
-              <Text style={[currentStyles.actionButtonText, currentStyles.secondaryButtonText]}>Message</Text>
-            </Pressable>
+              <View style={currentStyles.actionButtons}>
+                <Pressable
+                  accessibilityRole="button"
+                  accessibilityLabel={following ? `Unfollow ${playerName}` : followRequestPending ? `Cancel follow request to ${playerName}` : `Follow ${playerName}`}
+                  accessibilityState={{ busy: followBusy, disabled: followBusy }}
+                  disabled={followBusy}
+                  onPress={handleFollow}
+                  style={({ pressed }) => [
+                    currentStyles.actionButton,
+                    currentStyles.primaryButton,
+                    isFollowed && currentStyles.secondaryButton,
+                    pressed && currentStyles.buttonPressed,
+                    followBusy && currentStyles.buttonBusy,
+                  ]}
+                >
+                  {followBusy ? (
+                    <ActivityIndicator size="small" color={isFollowed ? C.ink : (isDark ? '#0E2321' : C.surface)} />
+                  ) : (
+                    <>
+                      <Icon name={following ? 'checkmark-circle' : followRequestPending ? 'time' : 'person-add'} size={18} color={isFollowed ? C.ink : (isDark ? '#0E2321' : C.surface)} />
+                      <Text style={[currentStyles.actionButtonText, currentStyles.primaryButtonText, isFollowed && currentStyles.secondaryButtonText]}>
+                        {following ? 'Following' : followRequestPending ? 'Requested' : 'Follow'}
+                      </Text>
+                    </>
+                  )}
+                </Pressable>
+                <Pressable
+                  accessibilityRole="button"
+                  accessibilityLabel={`Message ${playerName}`}
+                  onPress={openChat}
+                  style={({ pressed }) => [currentStyles.actionButton, currentStyles.secondaryButton, pressed && currentStyles.buttonPressed]}
+                >
+                  <Icon name="chatbubble-ellipses" size={17} color={C.ink} />
+                  <Text style={[currentStyles.actionButtonText, currentStyles.secondaryButtonText]}>Message</Text>
+                </Pressable>
+              </View>
+            </View>
           </View>
 
           <View style={currentStyles.profileContent}>
-            <Text style={currentStyles.sectionLabel}>CONNECTION</Text>
+            <View style={currentStyles.sectionHeading}>
+              <View>
+                <Text style={currentStyles.sectionLabel}>SHARED CIRCLE</Text>
+                <Text style={currentStyles.sectionTitle}>Your connection</Text>
+              </View>
+              <View style={currentStyles.countBadge}>
+                <Text style={currentStyles.countBadgeText}>{mutualCount}</Text>
+              </View>
+            </View>
             <View
               accessible
               accessibilityLabel={`${mutualCount} mutual ${mutualCount === 1 ? 'connection' : 'connections'}. ${mutualCopy}`}
@@ -329,42 +377,46 @@ export default function PublicProfileScreen({ navigation, route }) {
                 ) : null}
               </View>
               <View style={currentStyles.mutualDetails}>
-                <Text style={currentStyles.mutualEyebrow}>MUTUAL CONNECTIONS</Text>
+                <Text style={currentStyles.mutualEyebrow}>{mutualCount ? 'PEOPLE YOU BOTH KNOW' : 'GROW YOUR CIRCLE'}</Text>
                 <Text style={currentStyles.mutualText}>{mutualCopy}</Text>
               </View>
-              <Icon name="git-network-outline" size={20} color={C.teal} />
+              <View style={currentStyles.mutualIcon}>
+                <Icon name="git-network-outline" size={19} color={C.teal} />
+              </View>
             </View>
 
-            <Text style={currentStyles.sectionLabel}>PLAYER SNAPSHOT</Text>
-            <View style={currentStyles.snapshotCard}>
-              <View style={currentStyles.snapshotRow}>
-                <View style={currentStyles.snapshotIcon}>
-                  <Icon name="star-outline" size={18} color={C.teal} />
-                </View>
-                <View style={currentStyles.snapshotDetails}>
-                  <Text style={currentStyles.snapshotLabel}>SKILL RATING</Text>
-                  <Text style={currentStyles.snapshotValue}>
-                    {profileDetails.rating != null ? `${Number(profileDetails.rating).toFixed(1)} rating` : 'Not rated yet'}
-                  </Text>
-                </View>
+            <View style={currentStyles.sectionHeading}>
+              <View>
+                <Text style={currentStyles.sectionLabel}>ON THE COURT</Text>
+                <Text style={currentStyles.sectionTitle}>Player snapshot</Text>
               </View>
-              <View style={[currentStyles.snapshotRow, currentStyles.snapshotRowBorder]}>
-                <View style={currentStyles.snapshotIcon}>
-                  <Icon name="tennisball-outline" size={18} color={C.teal} />
+            </View>
+            <View style={currentStyles.detailsGrid}>
+              <View style={currentStyles.detailCard}>
+                <View style={currentStyles.detailIcon}>
+                  <Icon name="star" size={18} color={C.teal} />
                 </View>
-                <View style={currentStyles.snapshotDetails}>
-                  <Text style={currentStyles.snapshotLabel}>PREFERRED PLAY</Text>
-                  <Text style={currentStyles.snapshotValue}>{profileDetails.playPreference || 'Not set yet'}</Text>
-                </View>
+                <Text style={currentStyles.detailLabel}>PERFORMANCE RATING</Text>
+                <Text style={currentStyles.detailValue}>{rating}</Text>
+                <Text style={currentStyles.detailMeta}>{hasRating ? 'Based on match scores' : 'No completed matches'}</Text>
               </View>
-              <View style={[currentStyles.snapshotRow, currentStyles.snapshotRowBorder]}>
-                <View style={currentStyles.snapshotIcon}>
-                  <Icon name="people-outline" size={18} color={C.teal} />
+              <View style={[currentStyles.detailCard, currentStyles.detailCardAccent]}>
+                <View style={currentStyles.detailIconAccent}>
+                  <Image accessibilityIgnoresInvertColors accessible={false} source={BALL_IMAGE} resizeMode="contain" style={currentStyles.detailBallImage} />
                 </View>
-                <View style={currentStyles.snapshotDetails}>
-                  <Text style={currentStyles.snapshotLabel}>HOW YOU’RE CONNECTED</Text>
-                  <Text style={currentStyles.snapshotValue}>{player.reason || 'Peakle player'}</Text>
+                <Text style={currentStyles.detailLabelAccent}>PREFERRED PLAY</Text>
+                <Text numberOfLines={2} style={currentStyles.detailValueAccent}>{playPreference}</Text>
+                <Text style={currentStyles.detailMetaAccent}>Court style</Text>
+              </View>
+              <View style={currentStyles.detailWideCard}>
+                <View style={currentStyles.detailWideIcon}>
+                  <Icon name="navigate" size={18} color={C.teal} />
                 </View>
+                <View style={currentStyles.detailWideCopy}>
+                  <Text style={currentStyles.detailLabel}>PLAYS AROUND</Text>
+                  <Text numberOfLines={2} style={currentStyles.detailWideValue}>{area}</Text>
+                </View>
+                <Icon name="location-outline" size={20} color={C.ink40} />
               </View>
             </View>
           </View>
@@ -376,77 +428,114 @@ export default function PublicProfileScreen({ navigation, route }) {
 
 const lightStyles = StyleSheet.create({
   safe: { flex: 1, backgroundColor: LIGHT_C.paper },
-  content: { paddingHorizontal: 20, paddingBottom: 40 },
-  topbar: { height: 60, flexDirection: 'row', alignItems: 'center' },
-  backButton: { width: 48, height: 48, justifyContent: 'center', alignItems: 'center', borderRadius: 16, borderWidth: 1, borderColor: LIGHT_C.line, backgroundColor: LIGHT_C.surface },
-  identity: { alignItems: 'center', marginTop: 10 },
-  avatarContainer: { marginBottom: 16, shadowColor: LIGHT_C.ink, shadowOpacity: 0.1, shadowRadius: 10, shadowOffset: { width: 0, height: 4 }, elevation: 5 },
-  playerName: { color: LIGHT_C.ink, fontSize: 28, fontWeight: '900', letterSpacing: -0.5, marginBottom: 8 },
-  locationRow: { flexDirection: 'row', alignItems: 'center', marginBottom: 6 },
-  locationText: { color: LIGHT_C.ink40, fontSize: 13, fontWeight: '600', marginLeft: 4 },
-  locationDivider: { color: LIGHT_C.ink40, fontSize: 13, marginHorizontal: 8 },
-  ratingText: { color: LIGHT_C.teal, fontSize: 13, fontWeight: '800', marginLeft: 4 },
-  reasonRow: { flexDirection: 'row', alignItems: 'center', marginBottom: 24, paddingHorizontal: 12, paddingVertical: 6, backgroundColor: LIGHT_C.surface, borderRadius: 12, borderWidth: 1, borderColor: LIGHT_C.line },
-  reasonText: { color: LIGHT_C.teal, fontSize: 12, fontWeight: '800', marginLeft: 6 },
-  socialStats: { flexDirection: 'row', alignItems: 'center', marginBottom: 24, paddingVertical: 16, paddingHorizontal: 24, backgroundColor: LIGHT_C.surface, borderRadius: 16, borderWidth: 1, borderColor: LIGHT_C.line },
-  socialStat: { alignItems: 'center' },
-  socialValue: { color: LIGHT_C.ink, fontSize: 18, fontWeight: '900' },
-  socialLabel: { color: LIGHT_C.ink40, fontSize: 10, fontWeight: '700', marginTop: 2, textTransform: 'uppercase', letterSpacing: 0.5 },
-  socialDivider: { width: 1, height: 24, backgroundColor: LIGHT_C.line, marginHorizontal: 20 },
-  profileContent: { width: '100%', marginTop: 28 },
-  sectionLabel: { alignSelf: 'flex-start', color: LIGHT_C.ink40, fontSize: 10, fontWeight: '900', letterSpacing: 1.1, marginBottom: 8, marginLeft: 2 },
-  mutualCard: { width: '100%', minHeight: 76, flexDirection: 'row', alignItems: 'center', marginBottom: 24, paddingHorizontal: 16, paddingVertical: 14, backgroundColor: LIGHT_C.surface, borderRadius: 16, borderWidth: 1, borderColor: LIGHT_C.line },
-  mutualAvatars: { minWidth: 52, flexDirection: 'row', alignItems: 'center' },
-  mutualAvatar: { width: 44, height: 44, padding: 2, borderRadius: 22, backgroundColor: LIGHT_C.surface },
-  mutualAvatarOverlap: { marginLeft: -17 },
-  mutualFallbackIcon: { width: 44, height: 44, alignItems: 'center', justifyContent: 'center', borderRadius: 22, backgroundColor: LIGHT_C.paper },
-  mutualDetails: { flex: 1, marginHorizontal: 12 },
-  mutualEyebrow: { color: LIGHT_C.teal, fontSize: 9, fontWeight: '900', letterSpacing: 0.8, marginBottom: 4 },
-  mutualText: { color: LIGHT_C.ink, fontSize: 13, fontWeight: '700', lineHeight: 18 },
-  snapshotCard: { width: '100%', paddingHorizontal: 16, backgroundColor: LIGHT_C.surface, borderRadius: 16, borderWidth: 1, borderColor: LIGHT_C.line },
-  snapshotRow: { minHeight: 66, flexDirection: 'row', alignItems: 'center' },
-  snapshotRowBorder: { borderTopWidth: 1, borderTopColor: LIGHT_C.line },
-  snapshotIcon: { width: 38, height: 38, alignItems: 'center', justifyContent: 'center', marginRight: 12, borderRadius: 12, backgroundColor: LIGHT_C.paper },
-  snapshotDetails: { flex: 1 },
-  snapshotLabel: { color: LIGHT_C.ink40, fontSize: 9, fontWeight: '800', letterSpacing: 0.7, marginBottom: 3 },
-  snapshotValue: { color: LIGHT_C.ink, fontSize: 14, fontWeight: '800' },
-  actionButtons: { flexDirection: 'row', width: '100%', gap: 12 },
-  actionButton: { flex: 1, height: 50, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', borderRadius: 16, gap: 8 },
-  actionButtonText: { fontSize: 15, fontWeight: '800' },
+  content: { paddingHorizontal: 18, paddingBottom: 48 },
+  page: { width: '100%', maxWidth: 680, alignSelf: 'center' },
+  topbar: { minHeight: 66, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
+  topbarTitle: { alignItems: 'center' },
+  topbarEyebrow: { color: LIGHT_C.teal, fontSize: 9, fontWeight: '900', letterSpacing: 1.5 },
+  topbarSubtitle: { color: LIGHT_C.ink, fontSize: 13, fontWeight: '800', marginTop: 2 },
+  topbarSpacer: { width: 44 },
+  backButton: { width: 44, height: 44, justifyContent: 'center', alignItems: 'center', borderRadius: 15, borderWidth: 1, borderColor: LIGHT_C.line, backgroundColor: LIGHT_C.surface },
+  buttonPressed: { opacity: 0.72, transform: [{ scale: 0.98 }] },
+  buttonBusy: { opacity: 0.62 },
+  heroCard: { overflow: 'hidden', backgroundColor: LIGHT_C.surface, borderRadius: 28, borderWidth: 1, borderColor: LIGHT_C.line, shadowColor: LIGHT_C.ink, shadowOpacity: 0.08, shadowRadius: 18, shadowOffset: { width: 0, height: 8 }, elevation: 4 },
+  heroCover: { height: 126, overflow: 'hidden', paddingHorizontal: 20, paddingTop: 18, backgroundColor: LIGHT_C.ink },
+  heroBrand: { flexDirection: 'row', alignItems: 'center', gap: 8 },
+  heroBrandIcon: { width: 28, height: 28, alignItems: 'center', justifyContent: 'center', borderRadius: 10, backgroundColor: LIGHT_C.optic },
+  heroBallImage: { width: 17, height: 17, tintColor: '#0E2321' },
+  heroBrandText: { color: LIGHT_C.surface, fontSize: 9, fontWeight: '900', letterSpacing: 1.4 },
+  heroBallArtwork: { position: 'absolute', right: -42, top: -34, width: 210, height: 210, tintColor: LIGHT_C.optic, opacity: 0.16, transform: [{ rotate: '-12deg' }] },
+  heroBody: { alignItems: 'center', paddingHorizontal: 18, paddingBottom: 20 },
+  avatarRing: { width: 108, height: 108, alignItems: 'center', justifyContent: 'center', marginTop: -54, borderRadius: 54, backgroundColor: LIGHT_C.surface, shadowColor: LIGHT_C.ink, shadowOpacity: 0.16, shadowRadius: 12, shadowOffset: { width: 0, height: 5 }, elevation: 6 },
+  playerName: { maxWidth: '94%', color: LIGHT_C.ink, fontSize: 28, lineHeight: 34, fontWeight: '900', letterSpacing: -0.7, textAlign: 'center', marginTop: 14 },
+  locationPill: { maxWidth: '90%', flexDirection: 'row', alignItems: 'center', marginTop: 8, paddingHorizontal: 11, paddingVertical: 6, borderRadius: 999, backgroundColor: LIGHT_C.paper },
+  locationText: { flexShrink: 1, color: '#3C4A45', fontSize: 12, fontWeight: '700', marginLeft: 5 },
+  reasonRow: { maxWidth: '94%', flexDirection: 'row', alignItems: 'center', marginTop: 12, paddingHorizontal: 12, paddingVertical: 8, backgroundColor: '#E5F0ED', borderRadius: 12 },
+  reasonText: { flexShrink: 1, color: LIGHT_C.teal, fontSize: 12, lineHeight: 16, fontWeight: '800', marginLeft: 6, textAlign: 'center' },
+  socialStats: { width: '100%', flexDirection: 'row', alignItems: 'center', marginTop: 20, paddingVertical: 16, backgroundColor: LIGHT_C.paper, borderRadius: 18 },
+  socialStat: { flex: 1, alignItems: 'center' },
+  socialValue: { color: LIGHT_C.ink, fontSize: 19, fontWeight: '900', letterSpacing: -0.25 },
+  socialLabel: { color: LIGHT_C.ink40, fontSize: 9, fontWeight: '800', marginTop: 3, textTransform: 'uppercase', letterSpacing: 0.65 },
+  socialDivider: { width: 1, height: 28, backgroundColor: LIGHT_C.line },
+  actionButtons: { flexDirection: 'row', width: '100%', marginTop: 14, gap: 10 },
+  actionButton: { flex: 1, minHeight: 50, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', borderRadius: 16, gap: 8 },
+  actionButtonText: { fontSize: 14, fontWeight: '900' },
   primaryButton: { backgroundColor: LIGHT_C.ink },
   primaryButtonText: { color: LIGHT_C.surface },
   secondaryButton: { backgroundColor: LIGHT_C.surface, borderWidth: 1, borderColor: LIGHT_C.line },
   secondaryButtonText: { color: LIGHT_C.ink },
+  profileContent: { width: '100%', marginTop: 32 },
+  sectionHeading: { minHeight: 46, flexDirection: 'row', alignItems: 'flex-end', justifyContent: 'space-between', marginBottom: 12, paddingHorizontal: 2 },
+  sectionLabel: { color: LIGHT_C.teal, fontSize: 9, fontWeight: '900', letterSpacing: 1.35, marginBottom: 3 },
+  sectionTitle: { color: LIGHT_C.ink, fontSize: 21, fontWeight: '900', letterSpacing: -0.4 },
+  countBadge: { minWidth: 30, height: 30, alignItems: 'center', justifyContent: 'center', paddingHorizontal: 8, borderRadius: 15, backgroundColor: LIGHT_C.ink },
+  countBadgeText: { color: LIGHT_C.surface, fontSize: 12, fontWeight: '900' },
+  mutualCard: { width: '100%', minHeight: 92, flexDirection: 'row', alignItems: 'center', marginBottom: 30, paddingHorizontal: 16, paddingVertical: 16, backgroundColor: LIGHT_C.surface, borderRadius: 20, borderWidth: 1, borderColor: LIGHT_C.line },
+  mutualAvatars: { minWidth: 48, flexDirection: 'row', alignItems: 'center' },
+  mutualAvatar: { width: 44, height: 44, padding: 2, borderRadius: 22, backgroundColor: LIGHT_C.surface },
+  mutualAvatarOverlap: { marginLeft: -17 },
+  mutualFallbackIcon: { width: 44, height: 44, alignItems: 'center', justifyContent: 'center', borderRadius: 22, backgroundColor: LIGHT_C.paper },
+  mutualDetails: { flex: 1, marginHorizontal: 12 },
+  mutualEyebrow: { color: LIGHT_C.teal, fontSize: 9, fontWeight: '900', letterSpacing: 0.85, marginBottom: 5 },
+  mutualText: { color: LIGHT_C.ink, fontSize: 13, fontWeight: '700', lineHeight: 18 },
+  mutualIcon: { width: 34, height: 34, alignItems: 'center', justifyContent: 'center', borderRadius: 12, backgroundColor: LIGHT_C.paper },
+  detailsGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 10 },
+  detailCard: { flex: 1, minWidth: 140, minHeight: 148, justifyContent: 'flex-end', padding: 16, backgroundColor: LIGHT_C.surface, borderRadius: 20, borderWidth: 1, borderColor: LIGHT_C.line },
+  detailCardAccent: { backgroundColor: LIGHT_C.optic, borderColor: LIGHT_C.optic },
+  detailIcon: { width: 38, height: 38, alignItems: 'center', justifyContent: 'center', marginBottom: 18, borderRadius: 12, backgroundColor: LIGHT_C.paper },
+  detailIconAccent: { width: 38, height: 38, alignItems: 'center', justifyContent: 'center', marginBottom: 18, borderRadius: 12, backgroundColor: 'rgba(255,255,255,0.52)' },
+  detailBallImage: { width: 21, height: 21, tintColor: '#0E2321' },
+  detailLabel: { color: LIGHT_C.ink40, fontSize: 9, fontWeight: '900', letterSpacing: 0.85, marginBottom: 5 },
+  detailValue: { color: LIGHT_C.ink, fontSize: 25, lineHeight: 28, fontWeight: '900', letterSpacing: -0.5 },
+  detailMeta: { color: LIGHT_C.ink40, fontSize: 11, fontWeight: '700', marginTop: 3 },
+  detailLabelAccent: { color: '#3C4A45', fontSize: 9, fontWeight: '900', letterSpacing: 0.85, marginBottom: 5 },
+  detailValueAccent: { color: '#0E2321', fontSize: 18, lineHeight: 22, fontWeight: '900', letterSpacing: -0.35 },
+  detailMetaAccent: { color: '#3C4A45', fontSize: 11, fontWeight: '700', marginTop: 3 },
+  detailWideCard: { width: '100%', minHeight: 80, flexDirection: 'row', alignItems: 'center', paddingHorizontal: 16, paddingVertical: 14, backgroundColor: LIGHT_C.surface, borderRadius: 20, borderWidth: 1, borderColor: LIGHT_C.line },
+  detailWideIcon: { width: 42, height: 42, alignItems: 'center', justifyContent: 'center', marginRight: 12, borderRadius: 14, backgroundColor: LIGHT_C.paper },
+  detailWideCopy: { flex: 1, marginRight: 10 },
+  detailWideValue: { color: LIGHT_C.ink, fontSize: 15, lineHeight: 20, fontWeight: '900' },
 });
 
 const darkStyles = StyleSheet.create({
   ...lightStyles,
   safe: { ...lightStyles.safe, backgroundColor: DARK_CONTENT_COLORS.paper },
   backButton: { ...lightStyles.backButton, backgroundColor: DARK_CONTENT_COLORS.surface, borderColor: DARK_CONTENT_COLORS.line },
-  avatarContainer: { ...lightStyles.avatarContainer, shadowColor: '#000000', shadowOpacity: 0.3 },
+  topbarEyebrow: { ...lightStyles.topbarEyebrow, color: DARK_CONTENT_COLORS.teal },
+  topbarSubtitle: { ...lightStyles.topbarSubtitle, color: DARK_CONTENT_COLORS.ink },
+  heroCard: { ...lightStyles.heroCard, backgroundColor: DARK_CONTENT_COLORS.surface, borderColor: DARK_CONTENT_COLORS.line, shadowColor: '#000000', shadowOpacity: 0.28 },
+  heroCover: { ...lightStyles.heroCover, backgroundColor: '#102825' },
+  avatarRing: { ...lightStyles.avatarRing, backgroundColor: DARK_CONTENT_COLORS.surface, shadowColor: '#000000', shadowOpacity: 0.34 },
   playerName: { ...lightStyles.playerName, color: DARK_CONTENT_COLORS.ink },
+  locationPill: { ...lightStyles.locationPill, backgroundColor: DARK_CONTENT_COLORS.paper },
   locationText: { ...lightStyles.locationText, color: DARK_CONTENT_COLORS.ink40 },
-  locationDivider: { ...lightStyles.locationDivider, color: DARK_CONTENT_COLORS.ink40 },
-  ratingText: { ...lightStyles.ratingText, color: DARK_CONTENT_COLORS.teal },
-  reasonRow: { ...lightStyles.reasonRow, backgroundColor: DARK_CONTENT_COLORS.surface, borderColor: DARK_CONTENT_COLORS.line },
+  reasonRow: { ...lightStyles.reasonRow, backgroundColor: '#203B37' },
   reasonText: { ...lightStyles.reasonText, color: DARK_CONTENT_COLORS.teal },
-  socialStats: { ...lightStyles.socialStats, backgroundColor: DARK_CONTENT_COLORS.surface, borderColor: DARK_CONTENT_COLORS.line },
+  socialStats: { ...lightStyles.socialStats, backgroundColor: DARK_CONTENT_COLORS.paper },
   socialValue: { ...lightStyles.socialValue, color: DARK_CONTENT_COLORS.ink },
   socialLabel: { ...lightStyles.socialLabel, color: DARK_CONTENT_COLORS.ink40 },
   socialDivider: { ...lightStyles.socialDivider, backgroundColor: DARK_CONTENT_COLORS.line },
+  sectionLabel: { ...lightStyles.sectionLabel, color: DARK_CONTENT_COLORS.teal },
+  sectionTitle: { ...lightStyles.sectionTitle, color: DARK_CONTENT_COLORS.ink },
+  countBadge: { ...lightStyles.countBadge, backgroundColor: DARK_CONTENT_COLORS.optic },
+  countBadgeText: { ...lightStyles.countBadgeText, color: '#0E2321' },
   mutualCard: { ...lightStyles.mutualCard, backgroundColor: DARK_CONTENT_COLORS.surface, borderColor: DARK_CONTENT_COLORS.line },
   mutualAvatar: { ...lightStyles.mutualAvatar, backgroundColor: DARK_CONTENT_COLORS.surface },
   mutualFallbackIcon: { ...lightStyles.mutualFallbackIcon, backgroundColor: DARK_CONTENT_COLORS.paper },
   mutualEyebrow: { ...lightStyles.mutualEyebrow, color: DARK_CONTENT_COLORS.teal },
   mutualText: { ...lightStyles.mutualText, color: DARK_CONTENT_COLORS.ink },
-  sectionLabel: { ...lightStyles.sectionLabel, color: DARK_CONTENT_COLORS.ink40 },
-  snapshotCard: { ...lightStyles.snapshotCard, backgroundColor: DARK_CONTENT_COLORS.surface, borderColor: DARK_CONTENT_COLORS.line },
-  snapshotRowBorder: { ...lightStyles.snapshotRowBorder, borderTopColor: DARK_CONTENT_COLORS.line },
-  snapshotIcon: { ...lightStyles.snapshotIcon, backgroundColor: DARK_CONTENT_COLORS.paper },
-  snapshotLabel: { ...lightStyles.snapshotLabel, color: DARK_CONTENT_COLORS.ink40 },
-  snapshotValue: { ...lightStyles.snapshotValue, color: DARK_CONTENT_COLORS.ink },
-  primaryButton: { backgroundColor: DARK_CONTENT_COLORS.optic },
-  primaryButtonText: { color: '#0E2321' }, // always dark ink on optic
-  secondaryButton: { backgroundColor: DARK_CONTENT_COLORS.surface, borderColor: DARK_CONTENT_COLORS.line },
+  mutualIcon: { ...lightStyles.mutualIcon, backgroundColor: DARK_CONTENT_COLORS.paper },
+  detailCard: { ...lightStyles.detailCard, backgroundColor: DARK_CONTENT_COLORS.surface, borderColor: DARK_CONTENT_COLORS.line },
+  detailCardAccent: { ...lightStyles.detailCardAccent, backgroundColor: '#D6E94A', borderColor: '#D6E94A' },
+  detailIcon: { ...lightStyles.detailIcon, backgroundColor: DARK_CONTENT_COLORS.paper },
+  detailLabel: { ...lightStyles.detailLabel, color: DARK_CONTENT_COLORS.ink40 },
+  detailValue: { ...lightStyles.detailValue, color: DARK_CONTENT_COLORS.ink },
+  detailMeta: { ...lightStyles.detailMeta, color: DARK_CONTENT_COLORS.ink40 },
+  detailWideCard: { ...lightStyles.detailWideCard, backgroundColor: DARK_CONTENT_COLORS.surface, borderColor: DARK_CONTENT_COLORS.line },
+  detailWideIcon: { ...lightStyles.detailWideIcon, backgroundColor: DARK_CONTENT_COLORS.paper },
+  detailWideValue: { ...lightStyles.detailWideValue, color: DARK_CONTENT_COLORS.ink },
+  primaryButton: { backgroundColor: '#D6E94A' }, // lime accent — readable with dark ink
+  primaryButtonText: { color: '#0E2321' }, // dark ink on lime
+  secondaryButton: { backgroundColor: DARK_CONTENT_COLORS.paper, borderColor: DARK_CONTENT_COLORS.line },
   secondaryButtonText: { color: DARK_CONTENT_COLORS.ink },
 });

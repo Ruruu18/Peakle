@@ -2,10 +2,15 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as Crypto from 'expo-crypto';
 import * as ImageManipulator from 'expo-image-manipulator';
 import { requireSupabase } from '../lib/supabase';
+import { DEMO_MODE } from '../config/demoMode';
+import {
+  DEMO_VENUE_ROWS, DEMO_QUOTE, DEMO_TEAMS, DEMO_MATCHES, DEMO_TEAM_ID,
+  DEMO_TEAM_MESSAGE_ROWS,
+} from '../config/demoData';
 
 const unfinishedMatchKey = (userId) => `@peakle/unfinished-match/${userId}`;
-const LEGACY_DEMO_VENUE_IDS = new Set(['yard', 'rockwell', 'valley']);
-const excludeLegacyDemoVenues = (venues) => (venues || []).filter((venue) => !LEGACY_DEMO_VENUE_IDS.has(venue.id));
+const LEGACY_PLACEHOLDER_VENUE_IDS = new Set(['yard', 'rockwell', 'valley']);
+const excludeLegacyPlaceholderVenues = (venues) => (venues || []).filter((venue) => !LEGACY_PLACEHOLDER_VENUE_IDS.has(venue.id));
 
 function isMissingResumeState(error) {
   return error?.code === '42703' || error?.message?.includes('resume_state') && error.message.includes('does not exist');
@@ -52,6 +57,7 @@ export function bookingDateRange(dateIso, time, duration) {
 const oneRow = (data) => Array.isArray(data) ? data[0] : data;
 
 export async function quoteCourtBooking({ courtIds, dateIso, time, duration, promoCode = '' }) {
+  if (DEMO_MODE) return { ...DEMO_QUOTE };
   const { startsAt, endsAt } = bookingDateRange(dateIso, time, duration);
   if (startsAt.getTime() <= Date.now()) throw new Error('Choose a future booking time. This time has already started.');
   const { data, error } = await requireSupabase().rpc('quote_booking', {
@@ -100,7 +106,39 @@ export async function cancelBooking(bookingId, expectedRevision, reason = '') {
     p_reason: reason.trim() || null,
   });
   if (error) throw error;
+  const cancelled = oneRow(data);
+  // Best-effort: if nothing is owed back (e.g. still pay-at-venue, or the
+  // cancellation forfeits the full amount) the edge function is a no-op.
+  // A failure here shouldn't surface as "the cancellation failed" — the
+  // booking is already cancelled; admin can retry the refund manually.
+  try { await triggerBookingRefund(bookingId); } catch { /* retried from the admin refund queue */ }
+  return cancelled;
+}
+
+export async function cancelUnpaidBooking(bookingId, expectedRevision) {
+  const { data, error } = await requireSupabase().rpc('cancel_unpaid_booking', {
+    p_booking_id: bookingId,
+    p_expected_revision: expectedRevision,
+  });
+  if (error) throw error;
   return oneRow(data);
+}
+
+export async function startBookingCheckout(bookingId, paymentMethodType) {
+  const { data, error } = await requireSupabase().functions.invoke('create-checkout-session', {
+    body: { booking_id: bookingId, payment_method_type: paymentMethodType },
+  });
+  if (error) throw new Error(error.message || 'Could not start checkout.');
+  if (!data?.checkout_url) throw new Error(data?.error || 'Checkout is unavailable right now.');
+  return data;
+}
+
+export async function triggerBookingRefund(bookingId) {
+  const { data, error } = await requireSupabase().functions.invoke('process-refund', {
+    body: { booking_id: bookingId },
+  });
+  if (error) throw new Error(error.message || 'Could not process the refund.');
+  return data;
 }
 
 export async function joinCourtWaitlist({ courtId, dateIso, time, duration }) {
@@ -141,11 +179,12 @@ export async function createBooking({ userId, venue, court, booking }) {
 }
 
 export async function listVenues({ signal } = {}) {
+  if (DEMO_MODE) return DEMO_VENUE_ROWS;
   let query = requireSupabase().from('venues').select('*, courts(*)').eq('active', true).eq('verification_status', 'verified').eq('courts.active', true).order('name');
   if (signal) query = query.abortSignal(signal);
   const { data, error } = await query;
   if (error) throw error;
-  return excludeLegacyDemoVenues(data);
+  return excludeLegacyPlaceholderVenues(data);
 }
 
 export async function listManagedVenues() {
@@ -159,7 +198,7 @@ export async function listManagedVenues() {
   if (adminAccess) {
     const { data: venues, error: venueError } = await client.from('venues').select('*, courts(*)').order('name');
     if (venueError) throw venueError;
-    return excludeLegacyDemoVenues(venues).map((venue) => ({
+    return excludeLegacyPlaceholderVenues(venues).map((venue) => ({
       ...venue,
       role: 'admin',
       courts: [...(venue.courts || [])].sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true })),
@@ -172,12 +211,23 @@ export async function listManagedVenues() {
   if (error) throw error;
   return (data || [])
     .filter((membership) => membership.venues)
-    .filter((membership) => !LEGACY_DEMO_VENUE_IDS.has(membership.venues.id))
+    .filter((membership) => !LEGACY_PLACEHOLDER_VENUE_IDS.has(membership.venues.id))
     .map((membership) => ({
       ...membership.venues,
       role: membership.role,
       courts: [...(membership.venues.courts || [])].sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true })),
     }));
+}
+
+export async function hasAnyVenueMembership(userId) {
+  if (!userId) return false;
+  const { data, error } = await requireSupabase()
+    .from('venue_members')
+    .select('venue_id')
+    .eq('user_id', userId)
+    .limit(1);
+  if (error) throw error;
+  return Boolean(data && data.length);
 }
 
 export function verifiedPublishingVenues(venues = []) {
@@ -227,7 +277,7 @@ export async function createManagedCourt({ venueId, name, environment, surface, 
     p_name: name,
     p_environment: environment,
     p_surface: surface,
-    p_hourly_price: hourlyPrice,
+    p_owner_hourly_price: hourlyPrice,
   });
   if (error) throw error;
   return Array.isArray(data) ? data[0] : data;
@@ -238,7 +288,7 @@ export async function updateManagedCourt(courtId, changes) {
   if (changes.name !== undefined) payload.name = changes.name.trim();
   if (changes.environment !== undefined) payload.environment = changes.environment;
   if (changes.surface !== undefined) payload.surface = changes.surface.trim();
-  if (changes.hourlyPrice !== undefined) payload.hourly_price = changes.hourlyPrice;
+  if (changes.hourlyPrice !== undefined) payload.owner_hourly_price = changes.hourlyPrice;
   if (changes.active !== undefined) payload.active = changes.active;
   const { data, error } = await requireSupabase().from('courts').update(payload).eq('id', courtId).select().single();
   if (error) throw error;
@@ -246,16 +296,23 @@ export async function updateManagedCourt(courtId, changes) {
 }
 
 export async function listMyBookingsPage({ historyPage = 0, historyPageSize = 30, signal } = {}) {
+  if (DEMO_MODE) return { bookings: [], hasMoreHistory: false };
   const client = requireSupabase();
+  const { data: sessionData, error: sessionError } = await client.auth.getSession();
+  if (sessionError) throw sessionError;
+  const userId = sessionData.session?.user?.id;
+  if (!userId) throw new Error('Sign in before loading your bookings.');
   const now = new Date().toISOString();
   const historyFrom = historyPage * historyPageSize;
   const historyTo = historyFrom + historyPageSize;
   const fields = '*, venues(*), courts(*)';
   let upcomingQuery = client.from('bookings').select(fields)
+    .eq('user_id', userId)
     .in('status', ['pending', 'confirmed'])
     .gt('ends_at', now)
     .order('starts_at', { ascending: true });
   let historyQuery = client.from('bookings').select(fields)
+    .eq('user_id', userId)
     .or(`status.in.(cancelled,completed,no_show),ends_at.lte.${now}`)
     .order('starts_at', { ascending: false })
     .range(historyFrom, historyTo);
@@ -269,9 +326,10 @@ export async function listMyBookingsPage({ historyPage = 0, historyPageSize = 30
   ]);
   if (upcomingResult.error) throw upcomingResult.error;
   if (historyResult.error) throw historyResult.error;
-  const history = historyResult.data || [];
+  const upcoming = (upcomingResult.data || []).filter((booking) => booking.user_id === userId);
+  const history = (historyResult.data || []).filter((booking) => booking.user_id === userId);
   return {
-    bookings: [...(upcomingResult.data || []), ...history.slice(0, historyPageSize)],
+    bookings: [...upcoming, ...history.slice(0, historyPageSize)],
     hasMoreHistory: history.length > historyPageSize,
   };
 }
@@ -279,6 +337,29 @@ export async function listMyBookingsPage({ historyPage = 0, historyPageSize = 30
 export async function listMyBookings(options) {
   const result = await listMyBookingsPage(options);
   return result.bookings;
+}
+
+export async function listMyPaymentHistory({ page = 0, pageSize = 20, signal } = {}) {
+  const client = requireSupabase();
+  const { data: sessionData, error: sessionError } = await client.auth.getSession();
+  if (sessionError) throw sessionError;
+  const userId = sessionData.session?.user?.id;
+  if (!userId) throw new Error('Sign in before loading your payment history.');
+  const from = page * pageSize;
+  const to = from + pageSize;
+  let query = client.from('bookings')
+    .select('id, amount, currency, payment_status, payment_method, refund_status, created_at, starts_at, venues(name)')
+    .eq('user_id', userId)
+    .order('created_at', { ascending: false })
+    .range(from, to);
+  if (signal) query = query.abortSignal(signal);
+  const { data, error } = await query;
+  if (error) throw error;
+  const rows = data || [];
+  return {
+    payments: rows.slice(0, pageSize),
+    hasMore: rows.length > pageSize,
+  };
 }
 
 export async function extendBooking(bookingId) {
@@ -299,6 +380,7 @@ export async function listCourtSchedule(courtId, dateIso) {
 }
 
 export async function listCourtAvailability(courtIds, dateIso) {
+  if (DEMO_MODE) return [];
   const startsAt = new Date(`${dateIso}T00:00:00+08:00`);
   const endsAt = new Date(startsAt.getTime() + 24 * 60 * 60_000);
   const { data, error } = await requireSupabase().rpc('get_court_schedule', {
@@ -390,7 +472,7 @@ export async function loadActiveOpenPlay() {
   if (error) throw error;
   if (!root) return null;
   const [playerResult, courtResult, matchResult, decisionResult] = await Promise.all([
-    client.from('open_play_players').select('*, profiles!open_play_players_user_id_fkey(display_name, avatar_url, skill_rating)').eq('session_id', root.id),
+    client.from('open_play_players').select('*, profiles!open_play_players_user_id_fkey(display_name, avatar_url)').eq('session_id', root.id),
     client.from('open_play_courts').select('*, venue_court:courts(name)').eq('session_id', root.id).order('court_number'),
     client.from('open_play_matches').select('*, open_play_match_players(*)').eq('session_id', root.id).order('started_at'),
     client.from('open_play_rotation_decisions').select('*').eq('session_id', root.id).order('created_at', { ascending: false }).limit(25),
@@ -577,9 +659,10 @@ export async function completeOpenPlay(sessionId) {
 }
 
 export async function listTeams() {
+  if (DEMO_MODE) return DEMO_TEAMS;
   const client = requireSupabase();
   const { data: auth } = await client.auth.getUser();
-  const { data, error } = await client.from('teams').select('*, team_members(user_id, role, profiles(display_name, avatar_url, skill_rating))').neq('status', 'archived').order('created_at', { ascending: false });
+  const { data, error } = await client.from('teams').select('*, team_members(user_id, role, profiles(display_name, avatar_url))').neq('status', 'archived').order('created_at', { ascending: false });
   if (error) throw error;
   const unique = data.filter((team, index, arr) => arr.findIndex((t) => t.id === team.id) === index);
   return unique.map((team) => {
@@ -672,7 +755,7 @@ export async function searchTeamInviteCandidates(query) {
   const clean = query.trim();
   if (clean.length < 2) return [];
   const { data, error } = await client.from('profiles')
-    .select('id, display_name, avatar_url, skill_rating, home_area')
+    .select('id, display_name, avatar_url, home_area')
     .neq('id', auth.user.id)
     .ilike('display_name', `%${clean}%`)
     .order('display_name')
@@ -691,6 +774,7 @@ export async function inviteTeamMember(teamId, invitedUserId) {
 }
 
 export async function listMyTeamInvitations() {
+  if (DEMO_MODE) return [];
   const client = requireSupabase();
   const { data: auth } = await client.auth.getUser();
   if (!auth.user) return [];
@@ -717,7 +801,7 @@ export async function listTeamRequests(teamIds) {
   if (!teamIds.length) return [];
   const { data, error } = await requireSupabase()
     .from('team_join_requests')
-    .select('*, profiles!team_join_requests_user_id_fkey(display_name, skill_rating, avatar_url, home_area, play_preference)')
+    .select('*, profiles!team_join_requests_user_id_fkey(display_name, avatar_url, home_area, play_preference)')
     .in('team_id', teamIds)
     .eq('status', 'pending')
     .order('created_at', { ascending: false });
@@ -726,6 +810,7 @@ export async function listTeamRequests(teamIds) {
 }
 
 export async function listMyTeamRequests() {
+  if (DEMO_MODE) return [];
   const client = requireSupabase();
   const { data: auth } = await client.auth.getUser();
   if (!auth.user) return [];
@@ -780,6 +865,13 @@ async function removeHiddenChatRows(client, rows) {
 }
 
 export async function listTeamMessages(teamId, { before = null, limit = CHAT_PAGE_SIZE } = {}) {
+  if (DEMO_MODE) {
+    return {
+      rows: teamId === DEMO_TEAM_ID && !before ? DEMO_TEAM_MESSAGE_ROWS : [],
+      hasMore: false,
+      cursor: null,
+    };
+  }
   const client = requireSupabase();
   let query = client.from('team_messages').select(TEAM_MESSAGE_SELECT).eq('team_id', teamId).order('created_at', { ascending: false }).order('id', { ascending: false }).limit(limit + 1);
   if (before?.createdAt && before?.id) {
@@ -850,6 +942,13 @@ export async function listTeamMessageReadStates(teamId) {
 }
 
 export async function listTeamConversationSummaries(teamIds) {
+  if (DEMO_MODE) {
+    return teamIds.includes(DEMO_TEAM_ID) ? [{
+      team_id: DEMO_TEAM_ID, last_body: 'Rematch next week? Same court', last_has_image: false,
+      last_created_at: DEMO_TEAM_MESSAGE_ROWS[DEMO_TEAM_MESSAGE_ROWS.length - 1].created_at,
+      last_sender_name: 'Diego Ramirez', unread_count: 0,
+    }] : [];
+  }
   if (!teamIds.length) return [];
   const { data, error } = await requireSupabase().rpc('list_team_conversations', { p_team_ids: teamIds });
   if (error) throw error;
@@ -862,6 +961,7 @@ export async function markTeamConversationRead(teamId) {
 }
 
 export async function getChatSafetyStatus() {
+  if (DEMO_MODE) return { acknowledged: true, isAdult: true, eligible: true, suspended: false, suspendedUntil: null };
   const { data, error } = await requireSupabase().rpc('get_chat_safety_status');
   if (error) throw error;
   const status = Array.isArray(data) ? data[0] : data;
@@ -1128,7 +1228,7 @@ export async function saveCompletedMatch(userId, result, userName) {
   // local cleanup are secondary work and must never turn a successful match
   // save into a false failure (or cause a duplicate when the user retries).
   try {
-    const rating = calculatePerformanceRating(await listMyMatches());
+    const rating = calculatePerformanceRating(await listMyMatches({ limit: 200 }));
     const { error: ratingError } = await client.from('profiles').update({ skill_rating: rating }).eq('id', userId);
     if (ratingError) console.warn('Post-match rating refresh failed:', ratingError.message);
   } catch (ratingError) {
@@ -1193,12 +1293,13 @@ export async function loadUnfinishedMatch() {
 export async function listPlayers() {
   const client = requireSupabase();
   const { data: auth } = await client.auth.getUser();
-  const { data, error } = await client.from('profiles').select('id, display_name, avatar_url, skill_rating').neq('id', auth.user.id).limit(25);
+  const { data, error } = await client.from('profiles').select('id, display_name, avatar_url').neq('id', auth.user.id).limit(25);
   if (error) throw error;
   return data.map((player) => ({ id: player.id, name: player.display_name, avatar: player.avatar_url, initials: player.display_name.split(/\s+/).map((part) => part[0]).join('').slice(0, 2), rating: player.skill_rating ?? 'Unrated', distance: 'Available', color: '#1C6B66' }));
 }
 
 export async function listMyMatches({ limit } = {}) {
+  if (DEMO_MODE) return limit != null ? DEMO_MATCHES.slice(0, limit) : DEMO_MATCHES;
   const client = requireSupabase();
   const { data: auth } = await client.auth.getSession();
   const userId = auth?.session?.user?.id;

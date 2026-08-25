@@ -44,9 +44,11 @@ export default function PeakleLoadingScreen({ status = 'GETTING THE COURT READY'
           <Animated.Image
             accessibilityIgnoresInvertColors
             accessible={false}
+            defaultSource={BALL_IMAGE}
+            fadeDuration={0}
+            resizeMode="contain"
             source={BALL_IMAGE}
             style={[styles.ball, ballStyle]}
-            resizeMode="contain"
           />
         </View>
         <Text style={styles.status}>{status}</Text>
@@ -58,8 +60,8 @@ export default function PeakleLoadingScreen({ status = 'GETTING THE COURT READY'
 const styles = StyleSheet.create({
   screen: { flex: 1, alignItems: 'center', justifyContent: 'center', backgroundColor: colors.ink },
   card: { alignItems: 'center', paddingHorizontal: 32, paddingVertical: 28, borderRadius: 24, backgroundColor: colors.ink },
-  ballStage: { width: 88, height: 88, alignItems: 'center', justifyContent: 'flex-end' },
-  ball: { position: 'absolute', bottom: 10, width: 52, height: 52 },
+  ballStage: { width: 88, height: 88, alignItems: 'center', justifyContent: 'flex-end', overflow: 'visible' },
+  ball: { position: 'absolute', bottom: 10, width: 52, height: 52, zIndex: 1 },
   ballShadow: { width: 36, height: 7, marginBottom: 5, borderRadius: 18, backgroundColor: '#000000' },
   motionTrails: { position: 'absolute', bottom: 24, flexDirection: 'row', alignItems: 'flex-end', gap: 9 },
   motionLineShort: { width: 3, height: 9, borderRadius: 2, backgroundColor: colors.optic },

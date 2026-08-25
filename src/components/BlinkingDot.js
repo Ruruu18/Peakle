@@ -5,7 +5,7 @@ export default function BlinkingDot({ style }) {
   const opacity = useRef(new Animated.Value(1)).current;
 
   useEffect(() => {
-    Animated.loop(
+    const loop = Animated.loop(
       Animated.sequence([
         Animated.timing(opacity, {
           toValue: 0.2,
@@ -18,7 +18,9 @@ export default function BlinkingDot({ style }) {
           useNativeDriver: true,
         }),
       ])
-    ).start();
+    );
+    loop.start();
+    return () => loop.stop();
   }, [opacity]);
 
   return <Animated.View style={[style, { opacity }]} />;

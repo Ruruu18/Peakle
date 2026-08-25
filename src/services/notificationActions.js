@@ -6,6 +6,7 @@ import { requireSupabase } from '../lib/supabase';
 
 export const CHAT_NOTIFICATION_CATEGORY = 'peakle_direct_message';
 export const CHAT_NOTIFICATION_CHANNEL = 'messages';
+export const SOCIAL_NOTIFICATION_CHANNEL = 'social';
 export const REPLY_NOTIFICATION_ACTION = 'peakle_reply';
 export const READ_NOTIFICATION_ACTION = 'peakle_mark_read';
 export const NOTIFICATION_ACTION_TASK = 'peakle-notification-actions';
@@ -13,6 +14,7 @@ export const LAST_NOTIFICATION_TEST_KEY = '@peakle/last-notification-test';
 
 let configuredPromise;
 const handledTestResponses = new Set();
+const HANDLED_TEST_RESPONSES_MAX = 20;
 const hasNativeTaskManager = Platform.OS === 'android'
   && Boolean(requireOptionalNativeModule('ExpoTaskManager'));
 const TaskManager = hasNativeTaskManager
@@ -21,15 +23,26 @@ const TaskManager = hasNativeTaskManager
 
 async function configureNotificationChannels() {
   if (Platform.OS !== 'android') return;
-  await Notifications.setNotificationChannelAsync(CHAT_NOTIFICATION_CHANNEL, {
-    name: 'Messages',
-    description: 'Private messages and message requests',
-    importance: Notifications.AndroidImportance.HIGH,
-    vibrationPattern: [0, 180, 100, 180],
-    lightColor: '#D6E94A',
-    lockscreenVisibility: Notifications.AndroidNotificationVisibility.PRIVATE,
-    showBadge: true,
-  });
+  await Promise.all([
+    Notifications.setNotificationChannelAsync(CHAT_NOTIFICATION_CHANNEL, {
+      name: 'Messages',
+      description: 'Private messages and message requests',
+      importance: Notifications.AndroidImportance.HIGH,
+      vibrationPattern: [0, 180, 100, 180],
+      lightColor: '#D6E94A',
+      lockscreenVisibility: Notifications.AndroidNotificationVisibility.PRIVATE,
+      showBadge: true,
+    }),
+    Notifications.setNotificationChannelAsync(SOCIAL_NOTIFICATION_CHANNEL, {
+      name: 'Follow requests',
+      description: 'New follow requests and accepted requests',
+      importance: Notifications.AndroidImportance.HIGH,
+      vibrationPattern: [0, 180, 100, 180],
+      lightColor: '#D6E94A',
+      lockscreenVisibility: Notifications.AndroidNotificationVisibility.PRIVATE,
+      showBadge: true,
+    }),
+  ]);
 }
 
 export function configureInteractiveNotifications() {
@@ -83,7 +96,12 @@ async function replyToMessageNotification(notificationId, body) {
 async function recordTestReply(response) {
   const responseKey = response.notification?.request?.identifier;
   if (responseKey && handledTestResponses.has(responseKey)) return;
-  if (responseKey) handledTestResponses.add(responseKey);
+  if (responseKey) {
+    handledTestResponses.add(responseKey);
+    while (handledTestResponses.size > HANDLED_TEST_RESPONSES_MAX) {
+      handledTestResponses.delete(handledTestResponses.values().next().value);
+    }
+  }
   const clean = response.userText?.trim();
   const result = {
     completedAt: new Date().toISOString(),

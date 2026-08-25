@@ -1,7 +1,14 @@
 node_modules/
 .expo/
+.next/
+coverage/
 dist/
 .env
 .env.*
 !.env.example
 *.log
+*.tsbuildinfo
+.DS_Store
+supabase/.temp/
+android/app/google-services.json
+android/.kotlin/

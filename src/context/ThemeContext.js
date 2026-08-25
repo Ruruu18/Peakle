@@ -41,6 +41,7 @@ const BACKGROUND_COLORS = {
   '#0E2321': '#102825',
   '#3C4A45': '#24433F',
   '#E5F0ED': '#203B37',
+  '#BFD8D2': '#102825',
   '#E5E9E3': '#203B37',
   '#E7EBE7': '#203B37',
   '#E7EBE6': '#203B37',
@@ -65,6 +66,7 @@ const BACKGROUND_COLORS = {
   '#FBEDEA': '#402C29',
   '#FDECEA': '#402C29',
   '#FFF5F2': '#402C29',
+  '#FFF8F6': '#402C29',
   '#FBF5E4': '#463C24',
   '#EEF1F3': '#2C363D',
   '#F4F1E7': '#2E3B36',
@@ -79,6 +81,7 @@ const BORDER_COLORS = {
   '#E7CFC7': '#67433A',
   '#E2B5A9': '#67433A',
   '#E8C7BF': '#67433A',
+  '#E8C8BF': '#67433A',
   '#E5B8AE': '#67433A',
   '#E5F0ED': '#35534E',
   '#DFE8AD': '#4A5430',
@@ -104,11 +107,14 @@ const ACCENT_INK_STYLES = new Set([
   'acceptButtonText', 'acceptText', 'acceptInviteText', 'inviteButtonText', 'joinedChipText',
   'serverChoiceTextSelected', 'drawServeStatusTextActive',
   'courtFormatText', 'tvNextNames', 'tvReason', 'saveUnfinishedText', 'pauseText',
+  'liveScoringMethodTextActive',
   'joinButtonText', 'invitePlayerText', 'chatSafetyPrimaryText', 'wizardDotTextActive',
   'locGpsBtnTitle', 'positionNumber', 'nearlyText', 'inlineActionPillText', 'ownerText',
   'switchDestinationText', 'gameBreakContinueText', 'openPlayRallyTagAccent',
   'openPlayRallyNameAccent', 'openPlayRallyActionAccent', 'openPlayFinishText',
-  'openPlayPlayFinishText', 'liveMatchPillText'
+  'openPlayPlayFinishText', 'liveMatchPillText', 'resultPrimaryActionText',
+  'bookCourtButtonText', 'primaryText', 'posterMatchBadgeText', 'tailTextWon',
+  'payNowText'
 ]);
 
 // Active switches keep the brighter yellow-green brand accent in dark mode.

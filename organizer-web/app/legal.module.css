@@ -1,0 +1,27 @@
+.page { min-height: 100svh; padding: 32px 18px 72px; color: #0e2321; background: #f3f5ef; }
+.shell { width: min(100%, 820px); margin: 0 auto; }
+.brand { display: inline-flex; align-items: center; gap: 10px; color: #0e2321; font-size: 20px; font-weight: 850; text-decoration: none; }
+.mark { width: 34px; height: 34px; border-radius: 12px 12px 6px 6px; display: grid; place-items: center; color: #0e2321; background: #d6e94a; font-size: 18px; }
+.hero { margin-top: 32px; padding: clamp(24px, 5vw, 48px); border-radius: 30px 30px 14px 14px; color: #f3f5ef; background: #0e2321; }
+.eyebrow { margin: 0; color: #d6e94a; font-size: 11px; font-weight: 800; letter-spacing: .14em; text-transform: uppercase; }
+.hero h1 { margin: 10px 0 8px; font-size: clamp(36px, 7vw, 58px); letter-spacing: -.05em; line-height: 1; }
+.lead { max-width: 680px; margin: 16px 0 0; color: #c4d0cc; font-size: 16px; line-height: 1.7; }
+.effective { margin: 0; color: #9fb3ac; font-size: 12px; }
+.content { margin-top: 14px; display: grid; gap: 10px; }
+.section { padding: clamp(20px, 4vw, 30px); border: 1px solid #dde3da; border-radius: 22px; background: #fff; }
+.section h2 { margin: 0; font-size: 20px; letter-spacing: -.025em; }
+.section p, .section li { color: #52625c; font-size: 14px; line-height: 1.75; }
+.section p:last-child { margin-bottom: 0; }
+.section ul { margin: 12px 0 0; padding-left: 22px; }
+.action { min-height: 52px; margin-top: 16px; padding: 0 18px; border-radius: 15px; display: inline-flex; align-items: center; justify-content: center; color: #0e2321; background: #d6e94a; font-size: 14px; font-weight: 850; text-decoration: none; }
+.links { margin-top: 20px; display: flex; flex-wrap: wrap; gap: 14px; }
+.links a { color: #1c6b66; font-size: 13px; font-weight: 750; }
+.footer { margin-top: 30px; color: #66756f; font-size: 12px; line-height: 1.7; }
+@media (prefers-color-scheme: dark) {
+  .page { color: #f3f5ef; background: #102825; }
+  .brand { color: #f3f5ef; }
+  .hero { background: #071b19; }
+  .section { border-color: #29443f; background: #17302d; }
+  .section p, .section li, .footer { color: #a7b8b2; }
+  .links a { color: #d6e94a; }
+}

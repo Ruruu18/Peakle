@@ -35,8 +35,6 @@ export default function OrganizerImagePicker({
   const chooseImage = async () => {
     setPicking(true);
     try {
-      const permission = await ImagePicker.requestMediaLibraryPermissionsAsync();
-      if (!permission.granted) throw new Error('Allow photo access in your device settings to choose an image.');
       const result = await ImagePicker.launchImageLibraryAsync({
         mediaTypes: ['images'],
         allowsEditing: true,

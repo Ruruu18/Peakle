@@ -1,6 +1,13 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 
 const memoryCache = new Map();
+const MEMORY_CACHE_MAX_ENTRIES = 200;
+
+function evictOldestIfNeeded() {
+  while (memoryCache.size > MEMORY_CACHE_MAX_ENTRIES) {
+    memoryCache.delete(memoryCache.keys().next().value);
+  }
+}
 
 export function withTimeout(promise, timeoutMs = 10000, message = 'The request took too long. Please try again.') {
   let timeoutId;
@@ -26,6 +33,7 @@ export async function readCachedData(key, { maxAgeMs = Infinity } = {}) {
     const entry = JSON.parse(stored);
     if (!entry || !Number.isFinite(entry.savedAt) || Date.now() - entry.savedAt > maxAgeMs) return null;
     memoryCache.set(key, entry);
+    evictOldestIfNeeded();
     return entry.data;
   } catch {
     return null;
@@ -35,11 +43,7 @@ export async function readCachedData(key, { maxAgeMs = Infinity } = {}) {
 export async function writeCachedData(key, data) {
   const entry = { savedAt: Date.now(), data };
   memoryCache.set(key, entry);
+  evictOldestIfNeeded();
   await AsyncStorage.setItem(key, JSON.stringify(entry)).catch(() => {});
   return data;
-}
-
-export async function removeCachedData(key) {
-  memoryCache.delete(key);
-  await AsyncStorage.removeItem(key).catch(() => {});
 }

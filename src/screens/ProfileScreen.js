@@ -1,7 +1,7 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
   ActivityIndicator,
-  Image,
+  Linking,
   Modal,
   Platform,
   Pressable,
@@ -15,18 +15,17 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { StatusBar } from 'expo-status-bar';
 import Ionicons from '@expo/vector-icons/Ionicons';
 import Svg, { Circle } from 'react-native-svg';
-import { useAppMode } from '../context/AppModeContext';
 import { useAuth } from '../context/AuthContext';
-import { useOrganizerPass } from '../context/OrganizerPassContext';
 import { listMyMatches, listTeams } from '../services/database';
+import { getNearbyLiveMatch } from '../services/nearbyPlayers';
 import { getPlayerFollowCounts } from '../services/directMessages';
 import ProfilePhoto from '../components/ProfilePhoto';
 import ProfilePhotoPicker from '../components/ProfilePhotoPicker';
 import NotificationSheet from '../components/NotificationSheet';
-import WorkspaceSwitchModal from '../components/WorkspaceSwitchModal';
 import ScrollView from '../components/FocusResetScrollView';
 import { createDarkStyleSheet, DARK_CONTENT_COLORS, useTheme } from '../context/ThemeContext';
 import { useOperations } from '../context/OperationsContext';
+import { useOrganizerPass } from '../context/OrganizerPassContext';
 import { presentNotification } from '../utils/notifications';
 import { createMobileStyleSheet } from '../utils/mobileStyles';
 import { PH_LOCATIONS, formatLocation, locationMatchesSearch, parseLocation } from '../data/phLocations';
@@ -55,14 +54,10 @@ function formatSocialCount(value) {
   return `${(count / 1_000_000).toFixed(count < 10_000_000 ? 1 : 0).replace('.0', '')}M`;
 }
 let C = LIGHT_C;
+const ORGANIZER_PORTAL_URL = (process.env.EXPO_PUBLIC_ORGANIZER_PORTAL_URL || 'https://organizer.peakle.app').replace(/\/+$/, '');
 
 function Icon({ name, size = 20, color = C.ink }) {
   return <Ionicons name={name} size={size} color={color} />;
-}
-
-function AccountTierBadge({ tier }) {
-  if (!tier) return null;
-  return <View accessibilityLabel={`${tier} account`} style={[styles.accountTierBadge, tier === 'pro' && styles.accountTierBadgePro, tier === 'admin' && styles.accountTierBadgeAdmin]}><Text style={[styles.accountTierText, tier === 'pro' && styles.accountTierTextPro, tier === 'admin' && styles.accountTierTextAdmin]}>{tier.toUpperCase()}</Text></View>;
 }
 
 function KitchenLine({ quiet = false, style }) {
@@ -77,20 +72,16 @@ function Toggle({ value, onChange, label }) {
   );
 }
 
-const BALL_IMAGE = require('../../public/images/ball.png');
-
-function AppModeSwitch({ mode, organizerUnlocked, onChange, onOrganizerPass }) {
+function OrganizerPortalShortcut({ onOpen }) {
   return (
-    <View style={styles.appModeCard}>
-      <View style={styles.appModeHead}><View><Text style={styles.appModeEyebrow}>APP MODE</Text><Text style={styles.appModeTitle}>Choose your workspace</Text></View><View style={styles.capabilityPill}><Text style={styles.capabilityText}>PLAYER · ORGANIZER</Text></View></View>
-      <View style={styles.appModeControl}>
-        {[{ value: 'player', label: 'Player', icon: 'pickleball' }, { value: 'organizer', label: 'Organizer', icon: 'key-outline' }].map((option) => {
-          const active = mode === option.value;
-          const locked = option.value === 'organizer' && !organizerUnlocked;
-          return <Pressable key={option.value} accessibilityRole="radio" accessibilityState={{ checked: active }} onPress={() => locked ? onOrganizerPass() : onChange(option.value)} style={[styles.appModeOption, active && styles.appModeOptionActive, locked && styles.appModeOptionLocked]}>{option.icon === 'pickleball' ? <Image source={BALL_IMAGE} style={{ width: 17, height: 17, tintColor: active ? '#0E2321' : C.ink40 }} /> : <Icon name={locked ? 'lock-closed-outline' : option.icon} size={17} color={active ? '#0E2321' : C.ink40} />}<Text style={[styles.appModeOptionText, active && styles.appModeOptionTextActive]}>{option.label}</Text>{active && <View style={styles.appModeActiveDot} />}</Pressable>;
-        })}
+    <View style={styles.organizerPortalCard}>
+      <View style={styles.organizerPortalHead}><View style={styles.organizerPortalIcon}><Icon name="desktop-outline" size={20} color="#0E2321" /></View><View style={styles.flex}><Text style={styles.organizerPortalEyebrow}>ORGANIZER TOOLS</Text><Text style={styles.organizerPortalTitle}>Continue on the web portal</Text></View><Pressable accessibilityRole="link" accessibilityLabel="Open organizer portal" onPress={() => onOpen('/overview')} style={styles.organizerPortalOpen}><Icon name="open-outline" size={18} color="#0E2321" /></Pressable></View>
+      <Text style={styles.organizerPortalBody}>The mobile app stays focused on playing. Use the same Peakle account for venue operations.</Text>
+      <View style={styles.organizerShortcutRow}>
+        <Pressable accessibilityRole="link" onPress={() => onOpen('/overview')} style={styles.organizerShortcut}><Icon name="grid-outline" size={16} color={C.teal} /><Text style={styles.organizerShortcutText}>Portal</Text></Pressable>
+        <Pressable accessibilityRole="link" onPress={() => onOpen('/monitor')} style={styles.organizerShortcut}><Icon name="pulse-outline" size={16} color={C.teal} /><Text style={styles.organizerShortcutText}>Live monitor</Text></Pressable>
+        <Pressable accessibilityRole="link" onPress={() => onOpen('/players')} style={styles.organizerShortcut}><Icon name="people-outline" size={16} color={C.teal} /><Text style={styles.organizerShortcutText}>Players</Text></Pressable>
       </View>
-      <Text style={styles.appModeHelp}>{mode === 'organizer' ? 'Organizer tools are active. You can still join your own session as a player.' : organizerUnlocked ? 'Organizer mode is unlocked. Switch whenever you need to host.' : 'Player mode is active. Organizer Pass unlocks the organizer workspace.'}</Text>
     </View>
   );
 }
@@ -138,7 +129,7 @@ function Overview({ matches, onAchievement, onSeeMatches, onMatch, onStartFocus 
         </View>
         <View style={styles.statBlock}><Text style={styles.statValue}>{matches.length}</Text><Text style={styles.statLabel}>MATCHES</Text><Text style={styles.statMeta}>{matches.filter((item) => item.type.startsWith('Ranked')).length} ranked</Text></View>
         <View style={styles.statDivider} />
-        <View style={styles.statBlock}><Text style={styles.statValue}>{winStreak}</Text><Text style={styles.statLabel}>WIN STREAK</Text><Text style={styles.streakMeta}>PERSONAL BEST · {personalBest}</Text></View>
+        <View style={styles.statBlock}><Text style={styles.statValue}>{winStreak}</Text><Text style={styles.statLabel}>WIN STREAK</Text><Text style={styles.statMeta} numberOfLines={1}>PB · {personalBest}</Text></View>
       </View>
       <View style={styles.sectionHeader}><View><Text style={styles.eyebrow}>RECENT FORM</Text><Text style={styles.h2}>Last matches</Text></View><Pressable onPress={onSeeMatches}><Text style={styles.link}>See all</Text></Pressable></View>
       {matches.length ? <View style={styles.matchCard}>{matches.slice(0, 3).map((match, index) => <MatchRow key={match.id} match={match} border={index > 0} onPress={() => onMatch(match)} />)}</View> : <View style={styles.empty}><Icon name="tennisball-outline" size={38} color={C.teal} /><Text style={styles.emptyTitle}>No recorded matches</Text><Text style={styles.settingDetail}>Complete and save a match to start your record.</Text></View>}
@@ -181,6 +172,18 @@ function History({ source, onMatch }) {
 }
 
 function BoxScore({ match, playerName }) {
+  const [rallies, setRallies] = useState(null);
+  useEffect(() => {
+    setRallies(null);
+    if (!match?.id) return undefined;
+    let cancelled = false;
+    getNearbyLiveMatch(match.id).then((session) => {
+      if (cancelled) return;
+      const rallyLog = session?.state?.finalResult?.rallyLog || session?.state?.rallyLog || [];
+      setRallies(rallyLog);
+    }).catch(() => { if (!cancelled) setRallies([]); });
+    return () => { cancelled = true; };
+  }, [match?.id]);
   if (!match) return null;
   const games = match.score.split(',').map((game) => game.trim().split(/[–-]/).map(Number));
   const savedPlayerName = playerName?.trim() || 'Player';
@@ -213,6 +216,10 @@ function BoxScore({ match, playerName }) {
       <View style={styles.boxStats}><View style={[styles.boxStat, styles.boxStatLast]}><Icon name="time-outline" color={C.teal} /><Text style={styles.boxStatValue}>{match.duration}</Text><Text style={styles.boxStatLabel}>DURATION</Text></View>{match.longestRally != null ? <View style={styles.boxStat}><Icon name="flash-outline" color={C.teal} /><Text style={styles.boxStatValue}>{match.longestRally}</Text><Text style={styles.boxStatLabel}>LONGEST RALLY</Text></View> : null}{match.sideOuts != null ? <View style={[styles.boxStat, styles.boxStatLast]}><Icon name="repeat-outline" color={C.teal} /><Text style={styles.boxStatValue}>{match.sideOuts}</Text><Text style={styles.boxStatLabel}>SIDE-OUTS</Text></View> : null}</View>
       {match.serveWon != null && match.returnWon != null && match.kitchenWon != null ? <><Text style={styles.boxSectionLabel}>YOUR PERFORMANCE</Text><View style={styles.performanceCard}><PerformanceRow label="Serve points won" value={match.serveWon} target={60} /><PerformanceRow label="Return points won" value={match.returnWon} target={55} /><PerformanceRow label="Kitchen points won" value={match.kitchenWon} target={55} />{match.errors != null ? <View style={styles.errorRow}><Text style={styles.performanceName}>Unforced errors</Text><Text style={[styles.performanceVerdict, match.errors > 10 && styles.performanceBelow]}>{match.errors}</Text></View> : null}</View></> : null}
       <View style={styles.coachCard}><Text style={styles.coachStep}>DO THIS NEXT</Text><Text style={styles.coachTitle}>{match.improve}</Text><Text style={styles.coachMeta}>Use this as your one goal in the next recorded match.</Text></View>
+      {rallies?.length ? <>
+        <Text style={styles.boxSectionLabel}>RALLY HISTORY</Text>
+        <View style={styles.boxTable}>{rallies.map((rally, index) => <View key={rally.id || index} style={[styles.rallyHistoryRow, index > 0 && styles.boxOpponentRow]}><View style={styles.rallyHistoryNumber}><Text style={styles.rallyHistoryNumberText}>{rally.number || index + 1}</Text></View><View style={styles.flex}><Text numberOfLines={1} style={styles.rallyHistoryResult}>{rally.winner} · {rally.action}</Text><Text numberOfLines={1} style={styles.rallyHistoryServe}>{rally.nextServe}</Text></View><Text style={styles.rallyHistoryScore}>{rally.score?.[0]}–{rally.score?.[1]}</Text></View>)}</View>
+      </> : null}
       <View style={styles.boxNote}><Icon name="information-circle-outline" size={17} color={C.teal} /><Text style={styles.boxNoteText}>Only values recorded with this completed match are shown.</Text></View>
     </ScrollView>
   );
@@ -268,51 +275,21 @@ function Settings({ preferences, setPreference, onAction, lastLogin }) {
       <View style={styles.settingsCard}>
         <SettingRow icon="person-outline" title="Account details" detail="Name, email, and location" onPress={() => onAction('Edit profile')} border={false} />
         <SettingRow icon="shield-checkmark-outline" title="Privacy & matching" detail="Competitive profile, availability and player discovery" onPress={() => onAction('Privacy & matching')} />
-        <SettingRow icon="card-outline" title="Payment methods" detail="Pay at venue is your default" onPress={() => onAction('Payment methods')} />
+        <SettingRow icon="receipt-outline" title="Payment history" detail="Your booking receipts and refunds" onPress={() => onAction('Payment history')} />
         <SettingRow icon="analytics-outline" title="Performance rating" detail="Calculated from completed match scores" onPress={() => onAction('Performance rating')} />
         <SettingRow icon="time-outline" title="Last active" detail={formatLastLogin(lastLogin)} />
       </View>
       <Text style={styles.settingsLabel}>SUPPORT</Text>
       <View style={styles.settingsCard}>
         <SettingRow icon="help-circle-outline" title="Help and support" onPress={() => onAction('Help and support')} border={false} />
+        <SettingRow icon="document-text-outline" title="Privacy policy" detail="How Peakle handles your data" onPress={() => onAction('Privacy policy')} />
+        <SettingRow icon="reader-outline" title="Terms of service" onPress={() => onAction('Terms of service')} />
+        <SettingRow icon="trash-outline" title="Delete account" detail="Permanently remove your account and personal data" destructive onPress={() => onAction('Delete account')} />
         <SettingRow icon="log-out-outline" title="Log out" destructive onPress={() => onAction('Log out')} />
       </View>
       <Text style={styles.version}>PEAKLE · VERSION 1.0.0</Text>
     </View>
   );
-}
-
-function OrganizerOverview({ onMonitor }) {
-  return (
-    <View>
-      <View style={styles.organizerHero}>
-        <View style={styles.organizerHeroHead}><View style={styles.organizerHeroIcon}><Icon name="key" size={20} color="#0E2321" /></View><View style={styles.flex}><Text style={styles.organizerHeroEyebrow}>ORGANIZER ACCESS</Text><Text style={styles.organizerHeroTitle}>Ready to run the room</Text></View><View style={styles.organizerVerified}><Icon name="checkmark" size={13} color={C.teal} /><Text style={styles.organizerVerifiedText}>ACTIVE</Text></View></View>
-        <Text style={styles.organizerHeroBody}>Create open play sessions, manage player rotation, monitor every court, and override match scores when needed.</Text>
-        <Pressable onPress={onMonitor} style={styles.organizerMonitorButton}><Text style={styles.organizerMonitorText}>Open court monitor</Text><Icon name="arrow-forward" size={17} color="#0E2321" /></Pressable>
-      </View>
-
-      <View style={styles.sectionHeader}><View><Text style={styles.eyebrow}>HOSTING SNAPSHOT</Text><Text style={styles.h2}>Your organizer record</Text></View></View>
-      <View style={styles.organizerStats}>
-        <View style={styles.organizerStat}><Text style={styles.organizerStatValue}>—</Text><Text style={styles.organizerStatLabel}>SESSIONS</Text><Text style={styles.organizerStatMeta}>No record</Text></View>
-        <View style={styles.organizerStat}><Text style={styles.organizerStatValue}>—</Text><Text style={styles.organizerStatLabel}>MATCHES</Text><Text style={styles.organizerStatMeta}>No record</Text></View>
-        <View style={styles.organizerStat}><Text style={styles.organizerStatValue}>—</Text><Text style={styles.organizerStatLabel}>CHECK-INS</Text><Text style={styles.organizerStatMeta}>No record</Text></View>
-      </View>
-
-      <View style={styles.sectionHeader}><View><Text style={styles.eyebrow}>YOUR CAPABILITIES</Text><Text style={styles.h2}>Access and participation</Text></View></View>
-      <View style={styles.capabilitiesCard}>
-        <View style={styles.capabilityRow}><View style={styles.capabilityIcon}><Icon name="key-outline" color={C.teal} /></View><View style={styles.flex}><Text style={styles.capabilityTitle}>Organizer</Text><Text style={styles.capabilityDetail}>Manage sessions, courts, queues, and results.</Text></View><Icon name="checkmark-circle" color={C.teal} /></View>
-        <View style={[styles.capabilityRow, styles.rowBorder]}><View style={styles.capabilityIcon}><Icon name="tennisball-outline" color={C.teal} /></View><View style={styles.flex}><Text style={styles.capabilityTitle}>Player</Text><Text style={styles.capabilityDetail}>Join your own session without giving up organizer access.</Text></View><Icon name="checkmark-circle" color={C.teal} /></View>
-      </View>
-    </View>
-  );
-}
-
-function OrganizerHistory() {
-  return <View style={styles.empty}><Icon name="calendar-outline" size={38} color={C.teal} /><Text style={styles.emptyTitle}>No organizer sessions recorded</Text><Text style={styles.settingDetail}>Completed sessions will appear here when organizer history is connected.</Text></View>;
-}
-
-function OrganizerSettings({ preferences, setPreference, onAction }) {
-  return <View><Text style={styles.settingsLabel}>SESSION OPERATIONS</Text><View style={styles.settingsCard}><SettingRow icon="notifications-outline" title="Court alerts" detail="Match point, finished games, and open courts" value={preferences.squad} onToggle={(value) => setPreference('squad', value)} border={false} /><SettingRow icon="people-outline" title="Check-in alerts" detail="Notify when players join your session" value={preferences.reminders} onToggle={(value) => setPreference('reminders', value)} /></View><Text style={styles.settingsLabel}>ORGANIZER ACCOUNT</Text><View style={styles.settingsCard}><SettingRow icon="person-outline" title="Organizer details" detail="Public host name and home venue" onPress={() => onAction('Edit profile')} border={false} /><SettingRow icon="options-outline" title="Default open play rules" detail="Doubles · First to 11 · Win by 2" onPress={() => onAction('Default open play rules')} /><SettingRow icon="shield-checkmark-outline" title="Staff access" detail="Invite another organizer or court monitor" onPress={() => onAction('Staff access')} /></View><Text style={styles.settingsLabel}>SUPPORT</Text><View style={styles.settingsCard}><SettingRow icon="help-circle-outline" title="Organizer help" onPress={() => onAction('Organizer help')} border={false} /><SettingRow icon="log-out-outline" title="Log out" destructive onPress={() => onAction('Log out')} /></View><Text style={styles.version}>PEAKLE ORGANIZER · VERSION 1.0.0</Text></View>;
 }
 
 // ─── Philippine cities / municipalities (curated) ───────────────────────────
@@ -587,14 +564,12 @@ function EditProfile({ visible, player, onClose, onSave, isDark }) {
   );
 }
 
-function ProfileScreen({ navigation, route, profileMode }) {
+function ProfileScreen({ navigation, route }) {
   const { isDark } = useTheme();
   C = isDark ? { ...LIGHT_C, ...DARK_CONTENT_COLORS } : LIGHT_C;
   styles = isDark ? darkStyles : lightStyles;
-  const { mode, setMode } = useAppMode();
-  const workspaceMode = profileMode || mode;
   const { user, updateProfile, signOut } = useAuth();
-  const { hasOrganizerAccess, passTier } = useOrganizerPass();
+  const { hasOrganizerAccess } = useOrganizerPass();
   const { notifications: operationNotifications, unreadCount, readNotification, readAllNotifications, removeNotification, clearNotifications, respondFollowRequest, enablePushNotifications, disablePushNotifications } = useOperations();
   const dataCacheKey = profileScreenCacheKey(user?.id || 'guest');
   const initialSnapshot = useRef(peekCachedData(dataCacheKey)).current;
@@ -607,7 +582,6 @@ function ProfileScreen({ navigation, route, profileMode }) {
   const [selectedMatch, setSelectedMatch] = useState(null);
   const [toast, setToast] = useState('');
   const [preferences, setPreferences] = useState(user?.preferences || { squad: true, reminders: true, calendar: false });
-  const [pendingMode, setPendingMode] = useState(null);
   const [recordedMatches, setRecordedMatches] = useState(() => initialSnapshot?.recordedMatches || []);
   const [joinedTeams, setJoinedTeams] = useState(() => initialSnapshot?.joinedTeams || []);
   const [followCounts, setFollowCounts] = useState(() => initialSnapshot?.followCounts || { followers: 0, following: 0 });
@@ -647,9 +621,12 @@ function ProfileScreen({ navigation, route, profileMode }) {
 
   useEffect(() => {
     const requestedTab = route.params?.openTab;
-    if (workspaceMode === 'player' && ['Overview', 'Matches', 'Settings'].includes(requestedTab)) setTab(requestedTab);
-    if (workspaceMode === 'organizer' && ['Overview', 'Sessions', 'Settings'].includes(requestedTab)) setTab(requestedTab);
-  }, [route.params?.openTab, route.params?.openTabToken, workspaceMode]);
+    if (['Overview', 'Matches', 'Settings'].includes(requestedTab)) setTab(requestedTab);
+  }, [route.params?.openTab, route.params?.openTabToken]);
+
+  useEffect(() => {
+    if (route.params?.openNotificationsToken) setNotificationsOpen(true);
+  }, [route.params?.openNotificationsToken]);
 
   const showToast = (message) => { setToast(message); setTimeout(() => setToast(''), 2200); };
   const handleFollowResponse = async (item, accept) => {
@@ -658,7 +635,10 @@ function ProfileScreen({ navigation, route, profileMode }) {
     try {
       setFollowCounts(await getPlayerFollowCounts());
     } catch {
-      setFollowCounts((current) => ({ ...current, followers: current.followers + 1 }));
+      setFollowCounts((current) => ({
+        followers: current.followers + 1,
+        following: current.following + 1,
+      }));
     }
   };
   useEffect(() => {
@@ -723,13 +703,20 @@ function ProfileScreen({ navigation, route, profileMode }) {
     setPreferences(next);
     if (!next.squad && !next.reminders) disablePushNotifications().catch(() => {});
     updateProfile({ preferences: next }).catch((error) => showToast(error.message || 'Could not save preference.'));
-    showToast(`${workspaceMode === 'organizer' ? (key === 'squad' ? 'Court alerts' : 'Check-in alerts') : key === 'squad' ? 'Squad notifications' : key === 'reminders' ? 'Match reminders' : 'Calendar sync'} ${value ? 'on' : 'off'}.`);
+    showToast(`${key === 'squad' ? 'Squad notifications' : key === 'reminders' ? 'Match reminders' : 'Calendar sync'} ${value ? 'on' : 'off'}.`);
+  };
+  const openOrganizerPortal = (path) => {
+    Linking.openURL(`${ORGANIZER_PORTAL_URL}${path}`).catch(() => showToast('Organizer portal could not be opened.'));
   };
   const handleSetting = (action) => {
     if (action === 'Edit profile') { setEditOpen(true); return; }
-    if (action === 'Staff access') { navigation.navigate('Staff'); return; }
     if (action === 'Performance rating') { navigation.navigate('Pickleball', { openTab: 'Ratings', ownerTab: 'Profile' }); return; }
     if (action === 'Privacy & matching') { navigation.navigate('Privacy'); return; }
+    if (action === 'Payment history') { navigation.navigate('PaymentHistory'); return; }
+    if (action === 'Help and support') { navigation.navigate('HelpSupport'); return; }
+    if (action === 'Privacy policy') { navigation.navigate('LegalDocument', { documentKey: 'privacy' }); return; }
+    if (action === 'Terms of service') { navigation.navigate('LegalDocument', { documentKey: 'terms' }); return; }
+    if (action === 'Delete account') { navigation.navigate('AccountDeletion'); return; }
     if (action === 'Message notifications') { navigation.navigate('NotificationTest'); return; }
     if (action === 'Log out') { signOut(); return; }
     showToast(`${action} opened.`);
@@ -751,28 +738,29 @@ function ProfileScreen({ navigation, route, profileMode }) {
     <SafeAreaView style={styles.safe}>
       <StatusBar style={isDark ? 'light' : 'dark'} backgroundColor={C.paper} />
       <ScrollView contentContainerStyle={styles.content} showsVerticalScrollIndicator={false}>
-        <View style={styles.topbar}><View><Text style={styles.eyebrow}>{workspaceMode === 'organizer' ? 'YOUR ACCOUNT' : 'YOUR GAME'}</Text><Text style={styles.h1}>{workspaceMode === 'organizer' ? 'Organizer profile' : 'Player profile'}</Text></View><View style={styles.topActions}><Pressable accessibilityLabel="Notifications" onPress={() => setNotificationsOpen(true)} style={styles.iconButton}><Icon name="notifications-outline" />{unreadCount > 0 && <View style={styles.noticeDot} />}</Pressable></View></View>
-        <KitchenLine />
+        <View style={styles.topbar}>
+          <View style={styles.topbarCopy}><Text numberOfLines={1} style={styles.eyebrow}>YOUR GAME</Text><Text numberOfLines={1} style={styles.h1}>Player profile</Text></View>
+          <View style={styles.topActions}><Pressable accessibilityLabel="Notifications" onPress={() => setNotificationsOpen(true)} style={styles.topActionButton}><Icon name="notifications-outline" size={19} />{unreadCount > 0 && <View style={styles.noticeDot} />}</Pressable></View>
+        </View>
+        <KitchenLine style={styles.headerLine} />
         <View style={styles.identity}>
           <Pressable accessibilityRole="button" accessibilityLabel={`Change player status. Current status ${presenceOption(player.presenceStatus).label}`} accessibilityHint="Opens player availability options" onPress={() => setPresenceOpen(true)} hitSlop={10} style={({ pressed }) => [styles.avatar, pressed && styles.avatarPressed]}><ProfilePhoto photo={player.avatar} name={player.name} size={67} /><View pointerEvents="none" style={styles.avatarStatusButton}><View style={[styles.avatarStatusDot, { backgroundColor: presenceOption(player.presenceStatus).color }]} /></View></Pressable>
           <View style={styles.identityCopy}>
-            <View style={styles.playerNameRow}><Text numberOfLines={1} style={styles.playerName}>{player.name}</Text><AccountTierBadge tier={passTier} /><Pressable accessibilityLabel={`Edit profile. Status ${presenceOption(player.presenceStatus).label}`} onPress={() => setEditOpen(true)} hitSlop={8} style={styles.editProfileButton}><Icon name="create-outline" size={18} color={C.ink40} /></Pressable></View>
-            <View style={styles.location}><Icon name="location-outline" size={13} color={C.ink40} /><Text numberOfLines={1} style={styles.locationText}>{player.location}</Text></View>
-            <View style={styles.squad}><Icon name={workspaceMode === 'organizer' ? 'key' : 'people'} size={12} color={C.teal} /><Text numberOfLines={1} style={styles.squadText}>{workspaceMode === 'organizer' ? 'Open Play Organizer' : joinedTeams.length ? `${joinedTeams[0].name}${joinedTeams.length > 1 ? ` +${joinedTeams.length - 1}` : ''}` : 'No team joined'}</Text></View>
-            {workspaceMode === 'player' ? <View accessibilityLabel={`${followCounts.followers} followers, following ${followCounts.following}`} style={styles.socialStats}><View style={styles.socialStat}><Text style={styles.socialValue}>{formatSocialCount(followCounts.followers)}</Text><Text style={styles.socialLabel}>Followers</Text></View><View style={styles.socialDivider} /><View style={styles.socialStat}><Text style={styles.socialValue}>{formatSocialCount(followCounts.following)}</Text><Text style={styles.socialLabel}>Following</Text></View></View> : null}
+            <View style={styles.playerNameRow}><Text numberOfLines={1} style={styles.playerName}>{player.name}</Text><Pressable accessibilityLabel={`Edit profile. Status ${presenceOption(player.presenceStatus).label}`} onPress={() => setEditOpen(true)} hitSlop={8} style={styles.editProfileButton}><Icon name="create-outline" size={18} color={C.ink40} /></Pressable></View>
+            <View style={styles.clubLocationRow}>
+              <View style={[styles.squad, { marginTop: 0, flexShrink: 1 }]}><Icon name="people" size={12} color={C.teal} /><Text numberOfLines={1} style={[styles.squadText, { flex: 0, flexShrink: 1 }]}>{joinedTeams.length ? `${joinedTeams[0].name}${joinedTeams.length > 1 ? ` +${joinedTeams.length - 1}` : ''}` : 'No team joined'}</Text></View>
+              <View style={[styles.location, { marginTop: 0, flexShrink: 1 }]}><Icon name="location-outline" size={13} color={C.ink40} /><Text numberOfLines={1} style={[styles.locationText, { flex: 0, flexShrink: 1 }]}>{player.location}</Text></View>
+            </View>
+            <View style={styles.socialStats}><Pressable accessibilityRole="button" accessibilityLabel={`${followCounts.followers} followers. Open followers list`} hitSlop={7} onPress={() => navigation.navigate('Connections', { initialTab: 'Followers', openToken: Date.now() })} style={({ pressed }) => [styles.socialStat, pressed && styles.socialStatPressed]}><Text style={styles.socialValue}>{formatSocialCount(followCounts.followers)}</Text><Text style={styles.socialLabel}>Followers</Text></Pressable><View style={styles.socialDivider} /><Pressable accessibilityRole="button" accessibilityLabel={`Following ${followCounts.following} players. Open following list`} hitSlop={7} onPress={() => navigation.navigate('Connections', { initialTab: 'Following', openToken: Date.now() })} style={({ pressed }) => [styles.socialStat, pressed && styles.socialStatPressed]}><Text style={styles.socialValue}>{formatSocialCount(followCounts.following)}</Text><Text style={styles.socialLabel}>Following</Text></Pressable></View>
           </View>
-          {workspaceMode === 'organizer' ? <View style={styles.rating}><Text style={styles.ratingValue}>—</Text><Text style={styles.ratingTier}>SESSIONS</Text><Text style={styles.ratingTrend}>HOSTED</Text></View> : null}
         </View>
-        <AppModeSwitch mode={mode} organizerUnlocked={hasOrganizerAccess} onChange={setPendingMode} onOrganizerPass={() => navigation.navigate('Pass')} />
-        <View style={styles.tabs}>{(workspaceMode === 'organizer' ? ['Overview', 'Sessions', 'Settings'] : ['Overview', 'Matches', 'Settings']).map((item) => <Pressable key={item} onPress={() => setTab(item)} style={[styles.tab, tab === item && styles.tabActive]}><Text style={[styles.tabText, tab === item && styles.tabTextActive]}>{item}</Text></Pressable>)}</View>
-        {workspaceMode === 'player' && tab === 'Overview' && <Overview matches={recordedMatches} onAchievement={setAchievement} onSeeMatches={() => setTab('Matches')} onMatch={setSelectedMatch} onStartFocus={() => {
+        {hasOrganizerAccess && <OrganizerPortalShortcut onOpen={openOrganizerPortal} />}
+        <View style={styles.tabs}>{['Overview', 'Matches', 'Settings'].map((item) => <Pressable key={item} onPress={() => setTab(item)} style={[styles.tab, tab === item && styles.tabActive]}><Text style={[styles.tabText, tab === item && styles.tabTextActive]}>{item}</Text></Pressable>)}</View>
+        {tab === 'Overview' && <Overview matches={recordedMatches} onAchievement={setAchievement} onSeeMatches={() => setTab('Matches')} onMatch={setSelectedMatch} onStartFocus={() => {
           navigation.navigate('Play', { focusChallengeToken: Date.now(), focusChallenge: { id: 'return-depth-7-of-10', title: 'Return depth', instruction: 'Land 7 of your first 10 returns past mid-court.', target: 7, attempts: 10 } });
         }} />}
-        {workspaceMode === 'player' && tab === 'Matches' && <History source={recordedMatches} onMatch={setSelectedMatch} />}
-        {workspaceMode === 'player' && tab === 'Settings' && <Settings preferences={preferences} setPreference={setPreference} onAction={handleSetting} lastLogin={user?.lastLogin} />}
-        {workspaceMode === 'organizer' && tab === 'Overview' && <OrganizerOverview onMonitor={() => navigation.navigate('Monitor')} />}
-        {workspaceMode === 'organizer' && tab === 'Sessions' && <OrganizerHistory />}
-        {workspaceMode === 'organizer' && tab === 'Settings' && <OrganizerSettings preferences={preferences} setPreference={setPreference} onAction={handleSetting} />}
+        {tab === 'Matches' && <History source={recordedMatches} onMatch={setSelectedMatch} />}
+        {tab === 'Settings' && <Settings preferences={preferences} setPreference={setPreference} onAction={handleSetting} lastLogin={user?.lastLogin} />}
       </ScrollView>
 
       <EditProfile visible={editOpen} player={player} isDark={isDark} onClose={() => setEditOpen(false)} onSave={async (value) => { const saved = await updateProfile(value); setPlayer((current) => ({ ...current, ...saved })); setEditOpen(false); showToast('Profile updated.'); }} />
@@ -785,30 +773,31 @@ function ProfileScreen({ navigation, route, profileMode }) {
         <View style={[styles.achievementDetailIcon, !achievement?.earned && styles.achievementIconLocked]}><Icon name={achievement?.earned ? achievement?.icon : 'lock-closed-outline'} size={31} /></View><Text style={styles.achievementDetail}>{achievement?.detail}</Text><Text style={styles.achievementProgress}>{achievement?.earned ? `Earned ${achievement?.date}` : achievement?.date}</Text><Pressable onPress={() => setAchievement(null)} style={styles.primaryButton}><Text style={styles.primaryText}>{achievement?.earned ? 'Nice work' : 'Keep playing'}</Text></Pressable>
       </Sheet>
       <Sheet fullHeight visible={Boolean(selectedMatch)} title="Box score" eyebrow="COMPLETED MATCH" onClose={() => setSelectedMatch(null)}><BoxScore match={selectedMatch} playerName={player.name} /></Sheet>
-      <WorkspaceSwitchModal nextMode={pendingMode} onCancel={() => setPendingMode(null)} onConfirm={() => { const nextMode = pendingMode; setPendingMode(null); setMode(nextMode); }} />
       {toast ? <View style={styles.toast}><Icon name="checkmark-circle" size={17} color={C.optic} /><Text style={styles.toastText}>{toast}</Text></View> : null}
     </SafeAreaView>
   );
 }
 
 export default function PlayerProfileScreen(props) {
-  return <ProfileScreen {...props} profileMode="player" />;
+  return <ProfileScreen {...props} />;
 }
 
 const shadow = Platform.select({ ios: { shadowColor: C.ink, shadowOpacity: .08, shadowRadius: 12, shadowOffset: { width: 0, height: 4 } }, android: { elevation: 3 } });
 const lightStyles = createMobileStyleSheet({
-  safe: { flex: 1, backgroundColor: C.paper }, content: { paddingHorizontal: 20, paddingTop: 22, paddingBottom: 40 }, flex: { flex: 1 },
-  topbar: { minHeight: 52, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }, topActions: { flexDirection: 'row', gap: 8 }, eyebrow: { color: C.ink40, fontSize: 10, lineHeight: 15, fontWeight: '800', letterSpacing: 1 }, h1: { color: C.ink, fontSize: 30, lineHeight: 36, fontWeight: '800', letterSpacing: -.8 }, h2: { color: C.ink, fontSize: 21, lineHeight: 27, fontWeight: '800', letterSpacing: -.4 },
+  safe: { flex: 1, backgroundColor: C.paper }, content: { paddingHorizontal: 20, paddingTop: 18, paddingBottom: 126 }, flex: { flex: 1 },
+  topbar: { minHeight: 44, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 12 }, topbarCopy: { flex: 1, minWidth: 0 }, topActions: { height: 40, flexDirection: 'row', flexShrink: 0, gap: 6 }, eyebrow: { color: C.ink40, fontSize: 10, lineHeight: 15, fontWeight: '800', letterSpacing: 1 }, h1: { color: C.ink, fontSize: 26, lineHeight: 31, fontWeight: '900', letterSpacing: -.55 }, h2: { color: C.ink, fontSize: 21, lineHeight: 27, fontWeight: '800', letterSpacing: -.4 },
+  topActionButton: { width: 40, height: 40, borderRadius: 13, borderWidth: 1, borderColor: C.line, backgroundColor: C.surface, alignItems: 'center', justifyContent: 'center' },
   iconButton: { width: 43, height: 43, borderRadius: 22, borderWidth: 1, borderColor: C.line, backgroundColor: C.surface, alignItems: 'center', justifyContent: 'center' }, noticeDot: { position: 'absolute', right: 9, top: 8, width: 7, height: 7, borderRadius: 4, borderWidth: 1, borderColor: C.surface, backgroundColor: C.brick },
-  kitchen: { height: 7, marginTop: 18, marginBottom: 22 }, solid: { height: 2, backgroundColor: C.ink }, dashed: { marginTop: 4, borderTopWidth: 1, borderStyle: 'dashed', borderColor: C.ink40 }, solidQuiet: { backgroundColor: C.line }, dashedQuiet: { borderColor: C.line },
-  identity: { flexDirection: 'row', alignItems: 'center' }, avatar: { width: 67, height: 67, borderRadius: 34, backgroundColor: C.paper, alignItems: 'center', justifyContent: 'center' }, avatarPressed: { opacity: .72, transform: [{ scale: .97 }] }, avatarText: { color: C.surface, fontSize: 17, fontWeight: '900' }, avatarStatusButton: { position: 'absolute', right: 0, bottom: 0, width: 20, height: 20, alignItems: 'center', justifyContent: 'center', borderRadius: 10, backgroundColor: C.paper }, avatarStatusDot: { width: 14, height: 14, borderRadius: 7, borderWidth: 2.5, borderColor: C.paper }, identityCopy: { minWidth: 0, flex: 1, marginLeft: 13 }, playerNameRow: { minWidth: 0, flexDirection: 'row', alignItems: 'center', gap: 5 }, playerName: { minWidth: 0, flex: 1, color: C.ink, fontSize: 21, fontWeight: '800' }, accountTierBadge: { minWidth: 40, height: 19, paddingHorizontal: 6, alignItems: 'center', justifyContent: 'center', borderRadius: 6, borderWidth: 1, borderColor: '#B58B2A', backgroundColor: '#FBF5E4' }, accountTierBadgePro: { borderColor: '#8C98A3', backgroundColor: '#EEF1F3' }, accountTierBadgeAdmin: { borderColor: '#B94235', backgroundColor: '#FBEDEA' }, accountTierText: { color: '#7A5A08', fontSize: 5.5, fontWeight: '900', letterSpacing: .65 }, accountTierTextPro: { color: '#46515B' }, accountTierTextAdmin: { color: '#9F2F25' }, editProfileButton: { width: 27, height: 27, alignItems: 'center', justifyContent: 'center' }, location: { marginTop: 3, flexDirection: 'row', alignItems: 'center', gap: 3 }, locationText: { minWidth: 0, flex: 1, color: C.ink40, fontSize: 10 }, squad: { marginTop: 3, flexDirection: 'row', alignItems: 'center', gap: 4 }, squadText: { minWidth: 0, flex: 1, color: C.teal, fontSize: 10, fontWeight: '800' }, rating: { alignItems: 'flex-end' }, ratingValue: { color: C.ink, fontSize: 30, lineHeight: 32, fontWeight: '900' }, ratingTier: { marginTop: 2, color: C.teal, fontSize: 7, fontWeight: '900', letterSpacing: .6 }, ratingTrend: { marginTop: 3, color: C.teal, fontSize: 9, fontWeight: '800' }, socialStats: { marginTop: 6, flexDirection: 'row', alignItems: 'center', gap: 5 }, socialStat: { flexDirection: 'row', alignItems: 'baseline', gap: 3 }, socialValue: { color: C.ink, fontSize: 11, fontWeight: '900', fontVariant: ['tabular-nums'] }, socialLabel: { color: C.ink40, fontSize: 8, fontWeight: '800' }, socialDivider: { width: 3, height: 3, marginHorizontal: 2, borderRadius: 2, backgroundColor: C.line },
+  kitchen: { height: 7, marginTop: 18, marginBottom: 22 }, headerLine: { marginTop: 10, marginBottom: 16 }, solid: { height: 2, backgroundColor: C.ink }, dashed: { marginTop: 4, borderTopWidth: 1, borderStyle: 'dashed', borderColor: C.ink40 }, solidQuiet: { backgroundColor: C.line }, dashedQuiet: { borderColor: C.line },
+  identity: { flexDirection: 'row', alignItems: 'center' }, avatar: { width: 67, height: 67, borderRadius: 34, backgroundColor: C.paper, alignItems: 'center', justifyContent: 'center' }, avatarPressed: { opacity: .72, transform: [{ scale: .97 }] }, avatarText: { color: C.surface, fontSize: 17, fontWeight: '900' }, avatarStatusButton: { position: 'absolute', right: 0, bottom: 0, width: 20, height: 20, alignItems: 'center', justifyContent: 'center', borderRadius: 10, backgroundColor: C.paper }, avatarStatusDot: { width: 14, height: 14, borderRadius: 7, borderWidth: 2.5, borderColor: C.paper }, identityCopy: { minWidth: 0, flex: 1, marginLeft: 13 }, playerNameRow: { minWidth: 0, flexDirection: 'row', alignItems: 'center', gap: 5 }, playerName: { minWidth: 0, flexShrink: 1, color: C.ink, fontSize: 21, fontWeight: '800' }, accountTierBadge: { minWidth: 40, height: 19, paddingHorizontal: 6, alignItems: 'center', justifyContent: 'center', borderRadius: 6, borderWidth: 1, borderColor: '#B58B2A', backgroundColor: '#FBF5E4' }, accountTierBadgePro: { borderColor: '#8C98A3', backgroundColor: '#EEF1F3' }, accountTierBadgeAdmin: { borderColor: '#B94235', backgroundColor: '#FBEDEA' }, accountTierText: { color: '#7A5A08', fontSize: 5.5, fontWeight: '900', letterSpacing: .65 }, accountTierTextPro: { color: '#46515B' }, accountTierTextAdmin: { color: '#9F2F25' }, editProfileButton: { width: 27, height: 27, alignItems: 'center', justifyContent: 'center' }, clubLocationRow: { marginTop: 3, flexDirection: 'row', alignItems: 'center', gap: 10, justifyContent: 'flex-start' }, location: { marginTop: 3, flexDirection: 'row', alignItems: 'center', gap: 3 }, locationText: { minWidth: 0, flex: 1, color: C.ink40, fontSize: 10 }, squad: { marginTop: 3, flexDirection: 'row', alignItems: 'center', gap: 4 }, squadText: { minWidth: 0, flex: 1, color: C.teal, fontSize: 10, fontWeight: '800' }, rating: { alignItems: 'flex-end' }, ratingValue: { color: C.ink, fontSize: 30, lineHeight: 32, fontWeight: '900' }, ratingTier: { marginTop: 2, color: C.teal, fontSize: 7, fontWeight: '900', letterSpacing: .6 }, ratingTrend: { marginTop: 3, color: C.teal, fontSize: 9, fontWeight: '800' }, socialStats: { marginTop: 6, flexDirection: 'row', alignItems: 'center', gap: 5 }, socialStat: { flexDirection: 'row', alignItems: 'baseline', gap: 3 }, socialStatPressed: { opacity: .55 }, socialValue: { color: C.ink, fontSize: 11, fontWeight: '900', fontVariant: ['tabular-nums'] }, socialLabel: { color: C.ink40, fontSize: 8, fontWeight: '800' }, socialDivider: { width: 3, height: 3, marginHorizontal: 2, borderRadius: 2, backgroundColor: C.line },
+  organizerPortalCard: { marginTop: 18, padding: 14, borderRadius: 18, borderBottomLeftRadius: 8, borderBottomRightRadius: 8, borderWidth: 1, borderColor: C.line, backgroundColor: C.surface, ...shadow }, organizerPortalHead: { flexDirection: 'row', alignItems: 'center', gap: 10 }, organizerPortalIcon: { width: 38, height: 38, alignItems: 'center', justifyContent: 'center', borderRadius: 12, backgroundColor: C.optic }, organizerPortalEyebrow: { color: C.teal, fontSize: 7, fontWeight: '900', letterSpacing: .8 }, organizerPortalTitle: { marginTop: 2, color: C.ink, fontSize: 12, fontWeight: '900' }, organizerPortalOpen: { width: 38, height: 38, alignItems: 'center', justifyContent: 'center', borderRadius: 12, backgroundColor: C.optic }, organizerPortalBody: { marginTop: 11, color: C.ink40, fontSize: 9, lineHeight: 14 }, organizerShortcutRow: { marginTop: 12, flexDirection: 'row', gap: 7 }, organizerShortcut: { minHeight: 42, flex: 1, paddingHorizontal: 6, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 5, borderRadius: 11, backgroundColor: C.tealWash }, organizerShortcutText: { color: C.teal, fontSize: 8, fontWeight: '900' },
   appModeCard: { marginTop: 18, padding: 13, borderRadius: 18, borderBottomLeftRadius: 8, borderBottomRightRadius: 8, borderWidth: 1, borderColor: C.line, backgroundColor: C.surface }, appModeHead: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }, appModeEyebrow: { color: C.teal, fontSize: 7, fontWeight: '900', letterSpacing: .8 }, appModeTitle: { marginTop: 2, color: C.ink, fontSize: 11, fontWeight: '900' }, capabilityPill: { minHeight: 23, paddingHorizontal: 7, alignItems: 'center', justifyContent: 'center', borderRadius: 12, backgroundColor: C.tealWash }, capabilityText: { color: C.teal, fontSize: 6, fontWeight: '900' }, appModeControl: { marginTop: 11, padding: 4, flexDirection: 'row', gap: 4, borderRadius: 14, backgroundColor: '#E5E9E3' }, appModeOption: { minHeight: 43, flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6, borderRadius: 10 }, appModeOptionActive: { backgroundColor: C.optic, ...shadow }, appModeOptionLocked: { opacity: .72 }, appModeOptionText: { color: C.ink40, fontSize: 10, fontWeight: '800' }, appModeOptionTextActive: { color: C.ink, fontWeight: '900' }, appModeActiveDot: { width: 6, height: 6, borderRadius: 3, backgroundColor: C.teal }, appModeHelp: { marginTop: 9, color: C.ink40, fontSize: 8, lineHeight: 12 },
   modeModalBackdrop: { flex: 1, padding: 24, alignItems: 'center', justifyContent: 'center', backgroundColor: 'rgba(14,35,33,.58)' }, modeDialog: { width: '100%', maxWidth: 370, padding: 20, borderRadius: 23, backgroundColor: C.paper, ...shadow }, modeDialogIcon: { width: 54, height: 54, marginBottom: 14, borderRadius: 17, alignItems: 'center', justifyContent: 'center', backgroundColor: C.optic }, modeDialogEyebrow: { color: C.teal, fontSize: 8, fontWeight: '900', letterSpacing: .9 }, modeDialogTitle: { marginTop: 4, color: C.ink, fontSize: 22, lineHeight: 28, fontWeight: '900' }, modeDialogBody: { marginTop: 7, color: C.ink70, fontSize: 10, lineHeight: 16 }, modeDialogNote: { minHeight: 56, marginTop: 14, padding: 10, flexDirection: 'row', alignItems: 'center', gap: 7, borderRadius: 13, backgroundColor: C.tealWash }, modeDialogNoteText: { flex: 1, color: C.ink70, fontSize: 8, lineHeight: 12 }, modeDialogActions: { marginTop: 16, flexDirection: 'row', gap: 9 }, modeCancelButton: { minHeight: 48, flex: 1, alignItems: 'center', justifyContent: 'center', borderRadius: 13, borderWidth: 1, borderColor: C.line, backgroundColor: C.surface }, modeCancelText: { color: C.ink40, fontSize: 9, fontWeight: '900' }, modeConfirmButton: { minHeight: 48, flex: 1.35, alignItems: 'center', justifyContent: 'center', borderRadius: 13, backgroundColor: C.ink }, modeConfirmText: { color: C.surface, fontSize: 9, fontWeight: '900' },
   organizerHero: { padding: 16, borderRadius: 20, borderBottomLeftRadius: 9, borderBottomRightRadius: 9, backgroundColor: C.ink }, organizerHeroHead: { flexDirection: 'row', alignItems: 'center', gap: 10 }, organizerHeroIcon: { width: 40, height: 40, borderRadius: 12, alignItems: 'center', justifyContent: 'center', backgroundColor: C.optic }, organizerHeroEyebrow: { color: '#9FB3AC', fontSize: 7, fontWeight: '900', letterSpacing: .8 }, organizerHeroTitle: { marginTop: 2, color: C.surface, fontSize: 15, fontWeight: '900' }, organizerVerified: { minHeight: 25, paddingHorizontal: 7, flexDirection: 'row', alignItems: 'center', gap: 3, borderRadius: 13, backgroundColor: C.tealWash }, organizerVerifiedText: { color: C.teal, fontSize: 6, fontWeight: '900' }, organizerHeroBody: { marginTop: 13, color: '#CBD7D2', fontSize: 9, lineHeight: 14 }, organizerMonitorButton: { minHeight: 48, marginTop: 13, paddingHorizontal: 13, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', borderRadius: 12, backgroundColor: C.optic }, organizerMonitorText: { color: C.ink, fontSize: 10, fontWeight: '900' }, organizerStats: { paddingVertical: 16, flexDirection: 'row', borderRadius: 18, borderWidth: 1, borderColor: C.line, backgroundColor: C.surface }, organizerStat: { flex: 1, alignItems: 'center', borderRightWidth: StyleSheet.hairlineWidth, borderColor: C.line }, organizerStatValue: { color: C.ink, fontSize: 24, fontWeight: '900' }, organizerStatLabel: { marginTop: 3, color: C.teal, fontSize: 6, fontWeight: '900', letterSpacing: .5 }, organizerStatMeta: { marginTop: 3, color: C.ink40, fontSize: 7 }, capabilitiesCard: { paddingHorizontal: 13, borderRadius: 18, borderWidth: 1, borderColor: C.line, backgroundColor: C.surface }, capabilityRow: { minHeight: 72, flexDirection: 'row', alignItems: 'center', gap: 10 }, capabilityIcon: { width: 39, height: 39, borderRadius: 12, alignItems: 'center', justifyContent: 'center', backgroundColor: C.tealWash }, capabilityTitle: { color: C.ink, fontSize: 11, fontWeight: '900' }, capabilityDetail: { marginTop: 3, color: C.ink40, fontSize: 8, lineHeight: 12 },
   organizerHistorySummary: { minHeight: 100, padding: 15, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', borderRadius: 18, backgroundColor: C.ink }, organizerHistoryTitle: { marginTop: 3, color: C.surface, fontSize: 16, fontWeight: '900' }, organizerHistoryBadge: { alignItems: 'flex-end' }, organizerHistoryBadgeValue: { color: C.optic, fontSize: 25, fontWeight: '900' }, organizerHistoryBadgeLabel: { marginTop: 2, color: '#9FB3AC', fontSize: 6, fontWeight: '900' }, organizerSessionsCard: { paddingHorizontal: 12, borderRadius: 18, borderWidth: 1, borderColor: C.line, backgroundColor: C.surface }, organizerSessionRow: { minHeight: 76, flexDirection: 'row', alignItems: 'center', gap: 9 }, organizerDate: { width: 45, minHeight: 38, alignItems: 'center', justifyContent: 'center', borderRadius: 11, backgroundColor: C.tealWash }, organizerDateText: { color: C.teal, fontSize: 7, fontWeight: '900' }, organizerSessionTitle: { color: C.ink, fontSize: 10, fontWeight: '900' }, organizerSessionMeta: { marginTop: 4, color: C.ink40, fontSize: 8 }, organizerMatchCount: { alignItems: 'flex-end' }, organizerMatchValue: { color: C.ink, fontSize: 16, fontWeight: '900' }, organizerMatchLabel: { color: C.ink40, fontSize: 5, fontWeight: '900' },
   tabs: { marginTop: 20, marginBottom: 18, padding: 4, flexDirection: 'row', borderRadius: 13, backgroundColor: '#E5E9E3' }, tab: { flex: 1, minHeight: 41, alignItems: 'center', justifyContent: 'center', borderRadius: 10 }, tabActive: { backgroundColor: C.optic, ...shadow }, tabText: { color: C.ink40, fontSize: 11, fontWeight: '800' }, tabTextActive: { color: C.ink },
   focusCard: { marginBottom: 13, padding: 16, borderRadius: 20, borderBottomLeftRadius: 9, borderBottomRightRadius: 9, backgroundColor: C.ink, ...shadow }, focusTop: { flexDirection: 'row', alignItems: 'center', gap: 10 }, focusIcon: { width: 38, height: 38, borderRadius: 12, backgroundColor: C.optic, alignItems: 'center', justifyContent: 'center' }, focusEyebrow: { color: '#9FB3AC', fontSize: 8, fontWeight: '900', letterSpacing: .9 }, focusTitle: { marginTop: 2, color: C.surface, fontSize: 17, fontWeight: '900' }, priorityBadge: { paddingHorizontal: 7, paddingVertical: 5, borderRadius: 7, backgroundColor: 'rgba(214,233,74,.14)' }, priorityText: { color: C.optic, fontSize: 6, fontWeight: '900', letterSpacing: .5 }, focusWhy: { marginTop: 13, color: '#D9E1DD', fontSize: 10, lineHeight: 15 }, focusStrong: { color: C.surface, fontWeight: '900' }, progressTrack: { height: 7, marginTop: 13, overflow: 'hidden', borderRadius: 4, backgroundColor: '#334946' }, progressFill: { width: '48%', height: '100%', borderRadius: 4, backgroundColor: C.optic }, progressLabels: { marginTop: 5, flexDirection: 'row', justifyContent: 'space-between' }, progressCurrent: { color: C.optic, fontSize: 7, fontWeight: '900' }, progressGoal: { color: '#9FB3AC', fontSize: 7, fontWeight: '900' }, nextAction: { minHeight: 65, marginTop: 13, padding: 10, flexDirection: 'row', alignItems: 'center', gap: 9, borderRadius: 11, backgroundColor: C.surface }, nextActionPressed: { opacity: .82, transform: [{ scale: .985 }] }, nextActionIcon: { width: 30, height: 30, borderRadius: 15, alignItems: 'center', justifyContent: 'center', backgroundColor: C.teal }, nextActionCopy: { flex: 1 }, nextActionText: { color: C.ink70, fontSize: 9, lineHeight: 13 }, nextActionStrong: { color: C.ink, fontWeight: '900' }, nextActionCta: { marginTop: 4, color: C.teal, fontSize: 7, fontWeight: '900', letterSpacing: .65 },
-  statCard: { padding: 15, flexDirection: 'row', alignItems: 'center', borderRadius: 24, borderBottomLeftRadius: 10, borderBottomRightRadius: 10, borderWidth: 1, borderColor: C.line, backgroundColor: C.surface, ...shadow }, ring: { width: 96, height: 96, alignItems: 'center', justifyContent: 'center' }, ringInner: { alignItems: 'center' }, ringValue: { color: C.ink, fontSize: 20, fontWeight: '900' }, ringPercent: { fontSize: 10 }, statLabel: { color: C.ink40, fontSize: 7, fontWeight: '900', letterSpacing: .7 }, statBlock: { flex: 1, marginLeft: 15 }, statValue: { color: C.ink, fontSize: 23, fontWeight: '900' }, statMeta: { marginTop: 4, color: C.ink40, fontSize: 8 }, streakMeta: { marginTop: 4, color: C.brick, fontSize: 7, fontWeight: '800' }, statDivider: { width: 1, height: 42, backgroundColor: C.line },
+  statCard: { padding: 15, flexDirection: 'row', alignItems: 'stretch', borderRadius: 24, borderBottomLeftRadius: 10, borderBottomRightRadius: 10, borderWidth: 1, borderColor: C.line, backgroundColor: C.surface, ...shadow }, ring: { width: 96, height: 96, alignItems: 'center', justifyContent: 'center' }, ringInner: { alignItems: 'center' }, ringValue: { color: C.ink, fontSize: 20, fontWeight: '900' }, ringPercent: { fontSize: 10 }, statLabel: { color: C.ink40, fontSize: 7, fontWeight: '900', letterSpacing: .7 }, statBlock: { flex: 1, marginLeft: 15, justifyContent: 'center' }, statValue: { color: C.ink, fontSize: 23, fontWeight: '900' }, statMeta: { marginTop: 4, color: C.ink40, fontSize: 8 }, streakMeta: { marginTop: 4, color: C.brick, fontSize: 7, fontWeight: '800' }, statDivider: { width: 1, height: 42, backgroundColor: C.line, alignSelf: 'center' },
   chartCard: { marginTop: 13, padding: 16, borderRadius: 20, borderBottomLeftRadius: 9, borderBottomRightRadius: 9, borderWidth: 1, borderColor: C.line, backgroundColor: C.surface }, chartHead: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-start' }, cardTitle: { marginTop: 2, color: C.ink, fontSize: 15, fontWeight: '800' }, changeBadge: { paddingHorizontal: 8, paddingVertical: 5, flexDirection: 'row', alignItems: 'center', gap: 3, borderRadius: 8, backgroundColor: C.tealWash }, changeText: { color: C.teal, fontSize: 10, fontWeight: '900' }, chart: { height: 96, marginTop: 12, overflow: 'hidden' }, gridLine: { position: 'absolute', left: 0, right: 0, height: 1, backgroundColor: C.line }, chartBars: { position: 'absolute', left: 0, right: 0, bottom: 1, height: 80, flexDirection: 'row', alignItems: 'flex-end' }, barSlot: { flex: 1, height: 80, alignItems: 'center', justifyContent: 'flex-end' }, bar: { width: 8, minHeight: 9, borderRadius: 4, backgroundColor: '#A6C6C0' }, barCurrent: { width: 10, backgroundColor: C.teal }, chartLabels: { flexDirection: 'row', justifyContent: 'space-between' }, chartLabel: { color: C.ink40, fontSize: 7, fontWeight: '800' },
   sectionHeader: { marginTop: 24, marginBottom: 11, flexDirection: 'row', alignItems: 'flex-end', justifyContent: 'space-between' }, sectionMeta: { color: C.ink40, fontSize: 8, fontWeight: '800' }, link: { paddingVertical: 4, color: C.teal, fontSize: 11, fontWeight: '800' }, insightGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 9 }, insight: { width: '48.5%', minHeight: 105, padding: 13, borderRadius: 15, borderWidth: 1, borderColor: C.line, backgroundColor: C.surface }, insightValue: { marginTop: 9, color: C.ink, fontSize: 23, fontWeight: '900' }, insightValueSmall: { marginTop: 10, color: C.ink, fontSize: 14, fontWeight: '900' }, insightLabel: { marginTop: 3, color: C.ink40, fontSize: 9 },
   achievementRow: { gap: 9, paddingRight: 20 }, achievement: { width: 116, minHeight: 133, padding: 12, borderRadius: 17, borderBottomLeftRadius: 8, borderBottomRightRadius: 8, borderWidth: 1, borderColor: C.line, backgroundColor: C.surface }, achievementLocked: { opacity: .62, backgroundColor: '#ECEFEA' }, achievementIcon: { width: 38, height: 38, borderRadius: 12, backgroundColor: C.optic, alignItems: 'center', justifyContent: 'center' }, achievementIconLocked: { backgroundColor: C.line }, achievementName: { marginTop: 10, minHeight: 30, color: C.ink, fontSize: 11, lineHeight: 15, fontWeight: '800' }, achievementDate: { color: C.ink40, fontSize: 8 },
@@ -867,7 +856,7 @@ const lightStyles = createMobileStyleSheet({
   statusSheetLead: { marginBottom: 12, color: C.ink40, fontSize: 9, lineHeight: 14 }, statusSheetCard: { paddingHorizontal: 13, borderRadius: 17, borderWidth: 1, borderColor: C.line, backgroundColor: C.surface }, statusSheetRow: { minHeight: 68, flexDirection: 'row', alignItems: 'center', gap: 10 }, statusSheetDot: { width: 12, height: 12, borderRadius: 6 }, statusSheetTitle: { color: C.ink, fontSize: 11, fontWeight: '900' }, statusSheetDetail: { marginTop: 3, color: C.ink40, fontSize: 8 },
   empty: { paddingVertical: 55, alignItems: 'center' }, emptyTitle: { marginTop: 11, marginBottom: 3, color: C.ink, fontSize: 16, fontWeight: '800' },
   achievementDetailIcon: { width: 70, height: 70, marginTop: 7, marginBottom: 15, alignSelf: 'center', borderRadius: 23, backgroundColor: C.optic, alignItems: 'center', justifyContent: 'center' }, achievementDetail: { color: C.ink70, textAlign: 'center', fontSize: 13, lineHeight: 19 }, achievementProgress: { marginTop: 7, color: C.teal, textAlign: 'center', fontSize: 10, fontWeight: '800' },
-  boxScroll: { flex: 1, minHeight: 0 }, boxContent: { flexGrow: 0, paddingBottom: 72 }, boxResult: { padding: 15, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', borderRadius: 16, backgroundColor: C.teal }, boxResultLoss: { backgroundColor: C.brick }, boxResultLabel: { color: 'rgba(255,255,255,.7)', fontSize: 8, fontWeight: '900', letterSpacing: .7 }, boxResultScore: { marginTop: 2, color: C.surface, fontSize: 29, fontWeight: '900' }, boxResultMeta: { alignItems: 'flex-end' }, boxType: { color: C.surface, fontSize: 10, fontWeight: '800' }, boxRating: { marginTop: 3, color: 'rgba(255,255,255,.7)', fontSize: 8 }, boxVenue: { minHeight: 46, flexDirection: 'row', alignItems: 'center', gap: 6 }, boxVenueText: { color: C.ink70, fontSize: 9, fontWeight: '700' }, takeawayCard: { marginBottom: 13, padding: 12, flexDirection: 'row', gap: 10, borderRadius: 14, borderWidth: 1, borderColor: '#C9DCD7', backgroundColor: C.tealWash }, takeawayCardLoss: { borderColor: '#E7CFC7', backgroundColor: C.brickWash }, takeawayIcon: { width: 35, height: 35, borderRadius: 11, backgroundColor: C.surface, alignItems: 'center', justifyContent: 'center' }, takeawayIconLoss: { backgroundColor: '#FFF9F7' }, takeawayLabel: { color: C.teal, fontSize: 7, fontWeight: '900', letterSpacing: .7 }, takeawayTitle: { marginTop: 2, color: C.ink, fontSize: 12, lineHeight: 16, fontWeight: '900' }, takeawayCopy: { marginTop: 3, color: C.ink70, fontSize: 8, lineHeight: 12 }, boxTable: { overflow: 'hidden', borderRadius: 15, borderWidth: 1, borderColor: C.line, backgroundColor: C.surface }, boxHeaderRow: { minHeight: 31, paddingHorizontal: 10, flexDirection: 'row', alignItems: 'center', backgroundColor: '#E7EBE7' }, boxHeaderCell: { width: 32, color: C.ink40, textAlign: 'center', fontSize: 7, fontWeight: '900' }, boxTeamCell: { flex: 1, width: undefined, textAlign: 'left' }, boxTeamRow: { minHeight: 59, paddingHorizontal: 10, flexDirection: 'row', alignItems: 'center' }, boxOpponentRow: { borderTopWidth: 1, borderColor: C.line }, boxTeamName: { color: C.ink, fontSize: 9, fontWeight: '800' }, boxTeamTag: { marginTop: 3, color: C.teal, fontSize: 6, fontWeight: '900', letterSpacing: .5 }, boxOpponentTag: { marginTop: 3, color: C.ink40, fontSize: 6, fontWeight: '900', letterSpacing: .5 }, boxScoreCell: { width: 32, color: C.ink40, textAlign: 'center', fontSize: 14, fontWeight: '800' }, boxWinningScore: { color: C.teal }, boxTotal: { width: 32, color: C.ink, textAlign: 'center', fontSize: 15, fontWeight: '900' }, boxSectionLabel: { marginTop: 18, marginBottom: 8, color: C.ink40, fontSize: 8, fontWeight: '900', letterSpacing: .8 }, boxStats: { paddingVertical: 12, flexDirection: 'row', borderRadius: 14, backgroundColor: C.tealWash }, boxStat: { flex: 1, alignItems: 'center', borderRightWidth: 1, borderColor: '#C9DCD7' }, boxStatLast: { borderRightWidth: 0 }, boxStatValue: { marginTop: 4, color: C.ink, fontSize: 11, fontWeight: '900' }, boxStatLabel: { marginTop: 2, color: C.ink40, fontSize: 6, fontWeight: '900', letterSpacing: .4 }, performanceCard: { paddingHorizontal: 12, borderRadius: 15, borderWidth: 1, borderColor: C.line, backgroundColor: C.surface }, performanceRow: { minHeight: 58, flexDirection: 'row', alignItems: 'center', gap: 8, borderBottomWidth: 1, borderColor: C.line }, performanceCopy: { width: 92 }, performanceName: { color: C.ink, fontSize: 8, fontWeight: '800' }, performanceTarget: { marginTop: 2, color: C.ink40, fontSize: 6 }, performanceBar: { flex: 1, height: 6, overflow: 'hidden', borderRadius: 3, backgroundColor: C.line }, performanceFill: { height: '100%', borderRadius: 3, backgroundColor: C.teal }, performanceFillBelow: { backgroundColor: C.brick }, performanceResult: { width: 54, alignItems: 'flex-end' }, performanceValue: { color: C.teal, fontSize: 11, fontWeight: '900' }, performanceVerdict: { marginTop: 2, color: C.teal, fontSize: 6, fontWeight: '800' }, performanceBelow: { color: C.brick }, errorRow: { minHeight: 47, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }, coachCard: { marginTop: 12, padding: 14, borderRadius: 15, backgroundColor: C.optic }, coachStep: { color: C.ink70, fontSize: 7, fontWeight: '900', letterSpacing: .7 }, coachTitle: { marginTop: 3, color: C.ink, fontSize: 12, lineHeight: 16, fontWeight: '900' }, coachMeta: { marginTop: 4, color: C.ink70, fontSize: 8 }, boxNote: { marginTop: 12, flexDirection: 'row', alignItems: 'center', gap: 6 }, boxNoteText: { flex: 1, color: C.ink40, fontSize: 8, lineHeight: 12 },
+  boxScroll: { flex: 1, minHeight: 0 }, boxContent: { flexGrow: 0, paddingBottom: 72 }, boxResult: { padding: 15, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', borderRadius: 16, backgroundColor: C.teal }, boxResultLoss: { backgroundColor: C.brick }, boxResultLabel: { color: 'rgba(255,255,255,.7)', fontSize: 8, fontWeight: '900', letterSpacing: .7 }, boxResultScore: { marginTop: 2, color: C.surface, fontSize: 29, fontWeight: '900' }, boxResultMeta: { alignItems: 'flex-end' }, boxType: { color: C.surface, fontSize: 10, fontWeight: '800' }, boxRating: { marginTop: 3, color: 'rgba(255,255,255,.7)', fontSize: 8 }, boxVenue: { minHeight: 46, flexDirection: 'row', alignItems: 'center', gap: 6 }, boxVenueText: { color: C.ink70, fontSize: 9, fontWeight: '700' }, takeawayCard: { marginBottom: 13, padding: 12, flexDirection: 'row', gap: 10, borderRadius: 14, borderWidth: 1, borderColor: '#C9DCD7', backgroundColor: C.tealWash }, takeawayCardLoss: { borderColor: '#E7CFC7', backgroundColor: C.brickWash }, takeawayIcon: { width: 35, height: 35, borderRadius: 11, backgroundColor: C.surface, alignItems: 'center', justifyContent: 'center' }, takeawayIconLoss: { backgroundColor: '#FFF9F7' }, takeawayLabel: { color: C.teal, fontSize: 7, fontWeight: '900', letterSpacing: .7 }, takeawayTitle: { marginTop: 2, color: C.ink, fontSize: 12, lineHeight: 16, fontWeight: '900' }, takeawayCopy: { marginTop: 3, color: C.ink70, fontSize: 8, lineHeight: 12 }, boxTable: { overflow: 'hidden', borderRadius: 15, borderWidth: 1, borderColor: C.line, backgroundColor: C.surface }, boxHeaderRow: { minHeight: 31, paddingHorizontal: 10, flexDirection: 'row', alignItems: 'center', backgroundColor: '#E7EBE7' }, boxHeaderCell: { width: 32, color: C.ink40, textAlign: 'center', fontSize: 7, fontWeight: '900' }, boxTeamCell: { flex: 1, width: undefined, textAlign: 'left' }, boxTeamRow: { minHeight: 59, paddingHorizontal: 10, flexDirection: 'row', alignItems: 'center' }, boxOpponentRow: { borderTopWidth: 1, borderColor: C.line }, boxTeamName: { color: C.ink, fontSize: 9, fontWeight: '800' }, boxTeamTag: { marginTop: 3, color: C.teal, fontSize: 6, fontWeight: '900', letterSpacing: .5 }, boxOpponentTag: { marginTop: 3, color: C.ink40, fontSize: 6, fontWeight: '900', letterSpacing: .5 }, boxScoreCell: { width: 32, color: C.ink40, textAlign: 'center', fontSize: 14, fontWeight: '800' }, boxWinningScore: { color: C.teal }, boxTotal: { width: 32, color: C.ink, textAlign: 'center', fontSize: 15, fontWeight: '900' }, boxSectionLabel: { marginTop: 18, marginBottom: 8, color: C.ink40, fontSize: 8, fontWeight: '900', letterSpacing: .8 }, boxStats: { paddingVertical: 12, flexDirection: 'row', borderRadius: 14, backgroundColor: C.tealWash }, boxStat: { flex: 1, alignItems: 'center', borderRightWidth: 1, borderColor: '#C9DCD7' }, boxStatLast: { borderRightWidth: 0 }, boxStatValue: { marginTop: 4, color: C.ink, fontSize: 11, fontWeight: '900' }, boxStatLabel: { marginTop: 2, color: C.ink40, fontSize: 6, fontWeight: '900', letterSpacing: .4 }, performanceCard: { paddingHorizontal: 12, borderRadius: 15, borderWidth: 1, borderColor: C.line, backgroundColor: C.surface }, performanceRow: { minHeight: 58, flexDirection: 'row', alignItems: 'center', gap: 8, borderBottomWidth: 1, borderColor: C.line }, performanceCopy: { width: 92 }, performanceName: { color: C.ink, fontSize: 8, fontWeight: '800' }, performanceTarget: { marginTop: 2, color: C.ink40, fontSize: 6 }, performanceBar: { flex: 1, height: 6, overflow: 'hidden', borderRadius: 3, backgroundColor: C.line }, performanceFill: { height: '100%', borderRadius: 3, backgroundColor: C.teal }, performanceFillBelow: { backgroundColor: C.brick }, performanceResult: { width: 54, alignItems: 'flex-end' }, performanceValue: { color: C.teal, fontSize: 11, fontWeight: '900' }, performanceVerdict: { marginTop: 2, color: C.teal, fontSize: 6, fontWeight: '800' }, performanceBelow: { color: C.brick }, errorRow: { minHeight: 47, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }, coachCard: { marginTop: 12, padding: 14, borderRadius: 15, backgroundColor: C.optic }, coachStep: { color: C.ink70, fontSize: 7, fontWeight: '900', letterSpacing: .7 }, coachTitle: { marginTop: 3, color: C.ink, fontSize: 12, lineHeight: 16, fontWeight: '900' }, coachMeta: { marginTop: 4, color: C.ink70, fontSize: 8 }, boxNote: { marginTop: 12, flexDirection: 'row', alignItems: 'center', gap: 6 }, boxNoteText: { flex: 1, color: C.ink40, fontSize: 8, lineHeight: 12 }, rallyHistoryRow: { minHeight: 44, paddingHorizontal: 10, flexDirection: 'row', alignItems: 'center', gap: 9 }, rallyHistoryNumber: { width: 22, height: 22, alignItems: 'center', justifyContent: 'center', borderRadius: 8, backgroundColor: C.tealWash }, rallyHistoryNumberText: { color: C.teal, fontSize: 8, fontWeight: '900' }, rallyHistoryResult: { color: C.ink, fontSize: 9, fontWeight: '800' }, rallyHistoryServe: { marginTop: 2, color: C.ink40, fontSize: 7 }, rallyHistoryScore: { color: C.ink, fontSize: 11, fontWeight: '900' },
   toast: { position: 'absolute', left: 20, right: 20, bottom: 12, minHeight: 48, paddingHorizontal: 14, flexDirection: 'row', alignItems: 'center', gap: 8, borderRadius: 13, backgroundColor: C.ink, ...shadow }, toastText: { flex: 1, color: C.paper, fontSize: 10, fontWeight: '700' },
 });
 const darkStyles = createDarkStyleSheet(lightStyles);

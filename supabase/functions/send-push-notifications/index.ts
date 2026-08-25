@@ -3,8 +3,8 @@ import { createClient } from 'https://esm.sh/@supabase/supabase-js@2';
 const EXPO_ENDPOINT = 'https://exp.host/--/api/v2/push/send';
 
 Deno.serve(async (request) => {
-  const expectedSecret = Deno.env.get('PUSH_DISPATCH_SECRET');
-  if (expectedSecret && request.headers.get('x-push-dispatch-secret') !== expectedSecret) {
+  const suppliedSecret = request.headers.get('x-push-dispatch-secret');
+  if (!suppliedSecret) {
     return new Response('Unauthorized', { status: 401 });
   }
 
@@ -12,6 +12,20 @@ Deno.serve(async (request) => {
   const serviceKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY');
   if (!supabaseUrl || !serviceKey) return new Response('Missing server configuration', { status: 500 });
   const supabase = createClient(supabaseUrl, serviceKey, { auth: { persistSession: false } });
+
+  // The dispatcher secret is generated inside Postgres and kept in Supabase
+  // Vault. The Edge Function can only ask a service-role RPC to verify a
+  // candidate; it never reads or logs the stored value. Any missing verifier,
+  // Vault problem, or database error fails closed.
+  const { data: secretIsValid, error: secretError } = await supabase.rpc(
+    'verify_push_dispatch_secret',
+    { p_candidate: suppliedSecret },
+  );
+  if (secretError) {
+    console.error('send-push-notifications: secret verification failed', secretError.message);
+    return new Response('Dispatcher is not configured', { status: 503 });
+  }
+  if (secretIsValid !== true) return new Response('Unauthorized', { status: 401 });
 
   const { data: notices, error } = await supabase.rpc('claim_push_notifications', { p_limit: 100 });
   if (error) return Response.json({ error: error.message }, { status: 500 });
@@ -66,16 +80,20 @@ Deno.serve(async (request) => {
     .map((token) => {
       const expiresAt = Date.parse(notice.data?.expiresAt || '');
       const isDirectMessage = notice.kind === 'direct_message';
+      const isFollowNotification = notice.kind === 'follow_request' || notice.kind === 'follow_accepted';
       return {
         to: token.expo_push_token,
         sound: 'default',
         title: notice.title,
         body: notice.body,
-        data: { ...notice.data, notificationId: notice.id },
-        channelId: isDirectMessage ? 'messages' : 'open-play',
+        data: { ...notice.data, notificationId: notice.id, notificationKind: notice.kind },
+        channelId: isDirectMessage ? 'messages' : isFollowNotification ? 'social' : 'open-play',
         ...(isDirectMessage ? {
           categoryId: 'peakle_direct_message',
           collapseId: `conversation:${notice.data?.conversationId || notice.id}`,
+        } : {}),
+        ...(isFollowNotification ? {
+          collapseId: `${notice.kind}:${notice.data?.requestId || notice.id}`,
         } : {}),
         priority: 'high',
         ...(Number.isFinite(expiresAt) ? { expiration: Math.floor(expiresAt / 1000) } : {}),

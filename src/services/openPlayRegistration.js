@@ -151,6 +151,38 @@ export async function listDiscoverableOpenPlaySessions() {
   return (data || []).map(mapOpenPlaySession);
 }
 
+// `status = 'active'` covers both a published-but-not-started session and a
+// currently live one; `live_started_at` is the field that tells them apart.
+export async function listOrganizerOpenPlaySessions({ segment = 'past', limit = 20, offset = 0 } = {}) {
+  const client = requireSupabase();
+  let query = client
+    .from('open_play_sessions')
+    .select('id, name, status, scheduled_start, scheduled_end, live_started_at, started_at, ended_at, capacity, venues(name, area)')
+    .range(offset, offset + limit - 1);
+  if (segment === 'current') {
+    query = query.eq('status', 'active').not('live_started_at', 'is', null).order('live_started_at', { ascending: false });
+  } else if (segment === 'upcoming') {
+    query = query.eq('status', 'active').is('live_started_at', null).order('scheduled_start', { ascending: true });
+  } else {
+    query = query.in('status', ['completed', 'cancelled']).order('ended_at', { ascending: false, nullsFirst: false });
+  }
+  const { data, error } = await query;
+  if (error) throw error;
+  return (data || []).map((row) => ({
+    id: row.id,
+    name: row.name,
+    status: row.status,
+    venueName: row.venues?.name || 'Venue',
+    venueArea: row.venues?.area || null,
+    scheduledStart: row.scheduled_start,
+    scheduledEnd: row.scheduled_end,
+    liveStartedAt: row.live_started_at,
+    startedAt: row.started_at,
+    endedAt: row.ended_at,
+    capacity: Number(row.capacity || 0),
+  }));
+}
+
 export async function getOpenPlaySession({ sessionId = null, code = null } = {}) {
   const client = requireSupabase();
   const { data, error } = await client.rpc('get_open_play_session', {
@@ -205,7 +237,7 @@ export async function listOrganizerOpenPlayRegistrations(sessionId) {
   if (!sessionId) return [];
   const { data, error } = await requireSupabase()
     .from('open_play_players')
-    .select('*, profiles!open_play_players_user_id_fkey(display_name, avatar_url, skill_rating)')
+    .select('*, profiles!open_play_players_user_id_fkey(display_name, avatar_url)')
     .eq('session_id', sessionId)
     .order('joined_at');
   if (error) throw error;
@@ -218,7 +250,7 @@ export async function searchOpenPlayInviteCandidates(query) {
   const clean = query.trim();
   if (!auth.user || clean.length < 2) return [];
   const { data, error } = await client.from('profiles')
-    .select('id, display_name, avatar_url, skill_rating, home_area')
+    .select('id, display_name, avatar_url, home_area')
     .neq('id', auth.user.id)
     .ilike('display_name', `%${clean}%`)
     .order('display_name')

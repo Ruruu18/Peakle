@@ -6,19 +6,41 @@
   "scripts": {
     "start": "expo start",
     "start:dev": "expo start --dev-client",
+    "test": "jest",
+    "test:voice": "node scripts/test-voice-scoring.cjs",
+    "eas-build-pre-install": "node scripts/prepare-google-services.cjs",
     "android": "expo run:android",
     "ios": "expo run:ios",
     "web": "expo start --web"
+  },
+  "jest": {
+    "preset": "jest-expo",
+    "moduleNameMapper": {
+      "^@react-native-async-storage/async-storage$": "@react-native-async-storage/async-storage/jest/async-storage-mock"
+    },
+    "testPathIgnorePatterns": [
+      "/node_modules/",
+      "<rootDir>/organizer-web/",
+      "<rootDir>/admin-web/"
+    ]
+  },
+  "expo": {
+    "doctor": {
+      "appConfigFieldsNotSyncedCheck": {
+        "enabled": false
+      }
+    }
   },
   "dependencies": {
     "@react-native-async-storage/async-storage": "^2.2.0",
     "@react-navigation/bottom-tabs": "^7.18.8",
     "@react-navigation/native": "^7.3.8",
+    "@sentry/react-native": "~7.2.0",
     "@supabase/supabase-js": "^2.110.2",
-    "expo": "~54.0.36",
+    "expo": "~54.0.37",
     "expo-auth-session": "~7.0.11",
     "expo-build-properties": "~1.0.10",
-    "expo-constants": "~18.0.13",
+    "expo-constants": "~18.0.14",
     "expo-crypto": "~15.0.9",
     "expo-dev-client": "~6.0.21",
     "expo-device": "~8.0.10",
@@ -30,8 +52,11 @@
     "expo-network": "~8.0.8",
     "expo-notifications": "~0.32.17",
     "expo-sharing": "~14.0.8",
+    "expo-speech": "~14.0.8",
+    "expo-speech-recognition": "^3.1.3",
     "expo-splash-screen": "~31.0.13",
     "expo-status-bar": "~3.0.8",
+    "expo-system-ui": "~6.0.9",
     "expo-task-manager": "~14.0.9",
     "expo-video": "~3.0.16",
     "expo-web-browser": "~15.0.11",
@@ -41,7 +66,8 @@
     "react-native-screens": "~4.16.0",
     "react-native-svg": "15.12.1",
     "react-native-url-polyfill": "^3.0.0",
-    "react-native-view-shot": "4.0.3"
+    "react-native-view-shot": "4.0.3",
+    "react-native-webview": "13.15.0"
   },
   "devDependencies": {
     "@babel/core": "^7.25.2",
@@ -51,6 +77,11 @@
     "@expo/ngrok": "^4.1.3",
     "@types/react": "~19.1.10",
     "babel-preset-expo": "~54.0.11",
+    "jest": "~29.7.0",
+    "jest-expo": "~54.0.18",
     "typescript": "~5.9.2"
+  },
+  "overrides": {
+    "postcss": "8.5.25"
   }
 }

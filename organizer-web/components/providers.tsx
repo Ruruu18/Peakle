@@ -14,6 +14,7 @@ type AuthContextValue = {
   configured: boolean;
   issue: string | null;
   signIn: (email: string, password: string) => Promise<void>;
+  signUp: (name: string, email: string, password: string) => Promise<{ needsEmailConfirmation: boolean }>;
   signInWithGoogle: () => Promise<void>;
   signOut: () => Promise<void>;
 };
@@ -94,6 +95,26 @@ function AuthProvider({ children }: { children: React.ReactNode }) {
     if (error) throw error;
   }, []);
 
+  const signUp = useCallback(async (name: string, email: string, password: string) => {
+    const client = getSupabase();
+    if (!client) throw new Error("Add the Supabase environment values before creating an account.");
+    setIssue(null);
+    const { data, error } = await withTimeout(
+      client.auth.signUp({
+        email: email.trim().toLowerCase(),
+        password,
+        options: {
+          data: { display_name: name.trim(), account_type: "organizer" },
+          emailRedirectTo: `${window.location.origin}/overview`,
+        },
+      }),
+      15000,
+      "Account creation took too long. Check your connection and try again.",
+    );
+    if (error) throw error;
+    return { needsEmailConfirmation: !data.session };
+  }, []);
+
   const signInWithGoogle = useCallback(async () => {
     const client = getSupabase();
     if (!client) throw new Error("Add the Supabase environment values before signing in.");
@@ -110,7 +131,13 @@ function AuthProvider({ children }: { children: React.ReactNode }) {
   }, []);
 
   const signOut = useCallback(async () => {
-    await getSupabase()?.auth.signOut();
+    const client = getSupabase();
+    if (!client) {
+      setUser(null);
+      return;
+    }
+    const { error } = await withTimeout(client.auth.signOut(), 10000, "Log out took too long. Check your connection and try again.");
+    if (error) throw error;
   }, []);
 
   const value = useMemo<AuthContextValue>(() => ({
@@ -119,9 +146,10 @@ function AuthProvider({ children }: { children: React.ReactNode }) {
     configured,
     issue,
     signIn,
+    signUp,
     signInWithGoogle,
     signOut,
-  }), [configured, issue, loading, signIn, signInWithGoogle, signOut, user]);
+  }), [configured, issue, loading, signIn, signInWithGoogle, signOut, signUp, user]);
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
 }

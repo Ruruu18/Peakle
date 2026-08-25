@@ -2,7 +2,7 @@ export const LEGAL_DOCUMENTS = {
   terms: {
     eyebrow: 'PEAKLE LEGAL',
     title: 'Terms of Service',
-    effectiveDate: 'Effective July 26, 2026',
+    effectiveDate: 'Effective August 20, 2026',
     introduction: 'These Terms of Service govern your access to and use of Peakle. By creating an account, signing in, or using the service, you agree to these Terms.',
     sections: [
       {
@@ -54,52 +54,56 @@ export const LEGAL_DOCUMENTS = {
   privacy: {
     eyebrow: 'YOUR DATA & CHOICES',
     title: 'Privacy Policy',
-    effectiveDate: 'Effective July 26, 2026',
+    effectiveDate: 'Effective August 20, 2026',
     introduction: 'This Privacy Policy explains how Peakle collects, uses, stores, and shares personal data. Peakle processes personal data in accordance with applicable law, including the Philippine Data Privacy Act of 2012 and its implementing rules.',
     sections: [
       {
         title: '1. Data we collect',
-        body: 'We collect account details such as your name, email address, authentication provider, and profile image; player details such as home area, skill rating, and play preference; activity such as bookings, teams, match scores, and app settings; and technical or security information needed to maintain sessions, prevent abuse, and diagnose service issues.',
+        body: 'We collect account details such as your name, email address, authentication provider, profile image, and push-notification token; player details such as home area, skill rating, and play preference; content and activity such as bookings, payments, teams, messages, uploaded photos or videos, match scores, reports, blocks, and app settings; and technical information such as app version, device type, crash data, performance traces, and security events needed to operate and protect the service.',
       },
       {
         title: '2. Location information',
         body: 'With device permission, Peakle may access your approximate or precise foreground location to sort nearby courts and teams and convert coordinates into an area label. If you turn on Nearby Player visibility, Peakle temporarily sends your coordinates and online status to its protected cloud service so it can show other signed-in players an approximate distance; your exact coordinates are not shown to them. Visibility is optional, works only while the app is active, and can be turned off at any time. You can deny or withdraw location permission in device settings and use manual area search where available. A home-area label you add to your profile may be saved with your account.',
       },
       {
-        title: '3. How we use data',
+        title: '3. Photos, video, microphone, and notifications',
+        body: 'Peakle opens the system photo picker only when you choose to upload a profile, team, venue, competition, or chat image or video. A completed match card is added to your photo library only when you choose Save. If you activate shouted-score recognition, the selected Android speech-recognition service processes microphone audio to convert your spoken score into text; Peakle does not intentionally store the raw recording. Notification permission and a device push token are used only when you enable Peakle notifications. You can withdraw these device permissions in Android settings.',
+      },
+      {
+        title: '4. How we use data',
         body: 'We use personal data to create and secure accounts; provide bookings, teams, scoring, profiles, and recommendations; remember preferences; communicate service and account information; prevent fraud and misuse; maintain and improve reliability; respond to requests; and comply with legal obligations.',
       },
       {
-        title: '3A. Team chat safety data',
+        title: '5. Team chat safety data',
         body: 'If you use team chat, Peakle stores your adult-status acknowledgement, messages, attachments, reactions, read state, reports, blocks, and moderation records as needed to operate and protect the feature. Automated controls may flag repeated messages, prohibited language, apparent contact information, or other safety patterns for review. A report includes the reported message or a limited content snapshot, its sender and team, the selected reason, optional details, and the reporting account. Reports are not shown to the reported user. Blocking is private and hides the blocked player’s messages from the blocker.',
       },
       {
-        title: '4. Legal bases and consent',
+        title: '6. Legal bases and consent',
         body: 'Depending on the activity, processing is based on your consent, performance of the service you request, compliance with law, or legitimate interests such as service security and fraud prevention where those interests do not override your rights. When processing relies on consent, you may withdraw it, although this does not affect earlier lawful processing.',
       },
       {
-        title: '5. When data is shared',
-        body: 'Data may be shared with service providers that support authentication, database hosting, infrastructure, analytics, and app operations; with Google when you choose Google sign-in; with venues or teammates when required by a booking or sharing feature you request; and with authorities or other parties when required by law or reasonably necessary to protect rights and safety. Providers may process data only for authorized purposes and under appropriate safeguards.',
+        title: '7. When data is shared',
+        body: 'Data may be shared with Supabase for authentication, database, storage, and server functions; with Expo and Firebase for push delivery; with Sentry for limited crash and performance diagnostics; with Google when you choose Google sign-in, Android speech recognition, or map services; with PayMongo and the applicable venue to complete a payment, booking, refund, or membership you request; with teammates or other players through features you choose; and with authorities or other parties when required by law or reasonably necessary to protect rights and safety. We do not sell personal data.',
       },
       {
-        title: '6. Storage, transfers, and retention',
-        body: 'Peakle uses cloud infrastructure, including Supabase, which may process data outside your region under applicable provider terms and data-protection safeguards. Personal data is retained only for as long as necessary for the purposes described, legitimate business or legal needs, dispute resolution, and enforcement, then deleted or de-identified where appropriate.',
+        title: '8. Storage, transfers, and retention',
+        body: 'Peakle uses cloud infrastructure, including Supabase, Expo, Firebase, Sentry, and PayMongo, which may process data outside your region under applicable provider terms and safeguards. Account, profile, private-message, team-chat, presence, push-token, and user-owned media records are removed when account deletion completes. Crash and performance diagnostics are configured without default personal identifiers and are retained for no longer than 90 days. Support correspondence may be retained for up to 24 months. Booking, payment, refund, fraud-prevention, dispute, and tax records may be retained only for the period required by applicable law or an active dispute, with the deleted account identity removed or minimized where possible.',
       },
       {
-        title: '7. Security',
+        title: '9. Security',
         body: 'Peakle uses reasonable organizational and technical safeguards designed to protect the confidentiality, integrity, and availability of personal data. No system is completely secure, so you should use a strong password, protect your device, and report suspected unauthorized access promptly.',
       },
       {
-        title: '8. Your privacy rights',
+        title: '10. Your privacy rights',
         body: 'Subject to applicable law, you may request information about processing, access a copy of your data, correct inaccurate data, object to or restrict certain processing, withdraw consent, request deletion or blocking, request data portability where applicable, and seek redress or file a complaint with the National Privacy Commission. Some requests may be limited where retention or processing is required by law.',
       },
       {
-        title: '9. Your controls',
-        body: 'You may update profile information and preferences in the app, control location permission in device settings, choose whether the app remembers your email, and request account or data assistance through the official Peakle support channel. The Remember me option stores the email address only; Peakle does not store your password in that preference.',
+        title: '11. Your controls',
+        body: 'You may update profile information and preferences in the app, control device permissions in Android settings, choose whether the app remembers your email, and permanently delete your account from Profile → Settings → Delete account. The same deletion pathway is described at https://melbfzfuxrviybblipua.supabase.co/functions/v1/legal/account-deletion. The Remember me option stores the email address only; Peakle does not store your password in that preference.',
       },
       {
-        title: '10. Changes and contact',
-        body: 'Material changes to this Policy will be communicated through the app or another reasonable channel. Privacy questions and requests may be submitted through the official Peakle support channel identified in the app or its official app-store listing. You may also contact the Philippine National Privacy Commission regarding your statutory rights.',
+        title: '12. Changes and contact',
+        body: 'Peakle is the service responsible for this policy. Privacy questions and requests may be sent to support@peakle.app. Material changes will be communicated through the app or another reasonable channel. You may also contact the Philippine National Privacy Commission regarding your statutory rights.',
       },
     ],
   },

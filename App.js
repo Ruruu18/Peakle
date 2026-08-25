@@ -1,4 +1,4 @@
-import React, { useEffect, useRef } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { Animated, Easing, StyleSheet, Text, View } from 'react-native';
 import { DarkTheme, DefaultTheme, NavigationContainer, useNavigationContainerRef } from '@react-navigation/native';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
@@ -6,22 +6,24 @@ import * as SplashScreen from 'expo-splash-screen';
 import * as Notifications from 'expo-notifications';
 import AppNavigator from './src/navigation/AppNavigator';
 import { LocationProvider } from './src/context/LocationContext';
-import { AppModeProvider, useAppMode } from './src/context/AppModeContext';
-import { OpenPlaySessionProvider } from './src/context/OpenPlaySessionContext';
-import { OrganizerPassProvider } from './src/context/OrganizerPassContext';
 import { AuthProvider, useAuth } from './src/context/AuthContext';
 import AuthFlowScreen from './src/screens/AuthFlowScreen';
 import { ThemeProvider, useTheme } from './src/context/ThemeContext';
 import { OperationsProvider } from './src/context/OperationsContext';
 import { NearbyPlayersProvider } from './src/context/NearbyPlayersContext';
+import { OrganizerPassProvider } from './src/context/OrganizerPassContext';
 import MatchInviteOverlay from './src/components/MatchInviteOverlay';
+import ErrorBoundary from './src/components/ErrorBoundary';
+import DemoAutopilot from './src/components/DemoAutopilot';
+import { DEMO_MODE } from './src/config/demoMode';
 
 const colors = { ink: '#0E2321', optic: '#D6E94A', surface: '#FFFFFF' };
 const BALL_IMAGE = require('./public/images/ball_green.png');
+const MINIMUM_LAUNCH_MS = 2500;
 SplashScreen.setOptions({ duration: 180, fade: true });
 const linking = {
   prefixes: ['peakle://'],
-  config: { screens: { Play: 'open-play/:openPlayCode', Inbox: 'messages', DirectChat: 'messages/:conversationId' } },
+  config: { screens: { Book: 'booking/:paymentBookingId/payment-result', Play: 'open-play/:openPlayCode', Inbox: 'messages', DirectChat: 'messages/:conversationId' } },
 };
 
 function LaunchScreen({ edition = 'player', fromEdition = null, overlay = false, status = 'GETTING THE COURT READY' }) {
@@ -113,11 +115,11 @@ function LaunchScreen({ edition = 'player', fromEdition = null, overlay = false,
     opacity: statusProgress,
     transform: [{ translateY: statusProgress.interpolate({ inputRange: [0, 1], outputRange: [5, 0] }) }],
   };
-  const editionTextStyle = (value) => value === 'organizer' ? styles.launchOrganizer : styles.launchPlayerPro;
-  const editionLabel = (value) => value === 'organizer' ? 'ORG' : value === 'player' ? 'PRO' : '';
+  const editionTextStyle = () => styles.launchPlayerPro;
+  const editionLabel = (value) => value === 'player' ? 'PRO' : '';
 
   return (
-    <Animated.View accessibilityLabel={overlay ? 'Peakle is changing workspaces' : 'Peakle is starting'} accessibilityViewIsModal={overlay} style={[styles.launchScreen, overlay && styles.launchScreenOverlay, { opacity: screenOpacity }]}>
+    <Animated.View accessibilityLabel="Peakle is starting" accessibilityViewIsModal={overlay} style={[styles.launchScreen, overlay && styles.launchScreenOverlay, { opacity: screenOpacity }]}>
       <View style={styles.launchBallStage}>
         <Animated.View style={[styles.launchBallShadow, shadowStyle]} />
         <Animated.View pointerEvents="none" style={[styles.launchMotionTrails, trailStyle]}>
@@ -141,44 +143,29 @@ function LaunchScreen({ edition = 'player', fromEdition = null, overlay = false,
 function Root() {
   const { user, hydrated: authHydrated, passwordRecovery } = useAuth();
   const { isDark } = useTheme();
-  const { mode, setMode, hydrated: modeHydrated, isModeSwitching, canUseOrganizerMode, passHydrated } = useAppMode();
   const navigationRef = useNavigationContainerRef();
-  const previousMode = useRef(mode);
+  const [minimumLaunchElapsed, setMinimumLaunchElapsed] = useState(false);
   const hasFinishedLaunch = useRef(false);
   const handledNotificationResponse = useRef(null);
   const pendingJoinedMatch = useRef(null);
-  const expectedMode = user?.mode === 'organizer' && canUseOrganizerMode ? 'organizer' : 'player';
-  const startupReady = authHydrated && modeHydrated && passHydrated && (!user || mode === expectedMode);
+  const startupReady = authHydrated && minimumLaunchElapsed;
   if (startupReady) hasFinishedLaunch.current = true;
+  const appBackground = isDark ? colors.ink : '#F3F5EF';
   const navigationTheme = isDark ? {
     ...DarkTheme,
     colors: { ...DarkTheme.colors, primary: colors.optic, background: colors.ink, card: '#17302D', text: '#F3F5EF', border: '#304743' },
-  } : DefaultTheme;
+  } : {
+    ...DefaultTheme,
+    colors: { ...DefaultTheme.colors, primary: '#1C6B66', background: appBackground, card: appBackground, text: colors.ink, border: '#DDE3DA' },
+  };
 
   useEffect(() => {
-    if (previousMode.current === mode) return undefined;
-    previousMode.current = mode;
-    const dashboardRoute = mode === 'organizer' ? 'Overview' : 'Home';
-    const frame = requestAnimationFrame(() => {
-      if (navigationRef.isReady()) {
-        navigationRef.resetRoot({ index: 0, routes: [{ name: dashboardRoute }] });
-        if (mode === 'player' && pendingJoinedMatch.current) {
-          const params = pendingJoinedMatch.current;
-          pendingJoinedMatch.current = null;
-          navigationRef.navigate('Play', params);
-        }
-      }
-    });
-    return () => cancelAnimationFrame(frame);
-  }, [mode, navigationRef]);
+    const timer = setTimeout(() => setMinimumLaunchElapsed(true), MINIMUM_LAUNCH_MS);
+    return () => clearTimeout(timer);
+  }, []);
 
   const openAcceptedMatch = (invite) => {
     const params = { joinedMatchToken: `${invite?.id || 'match'}-${Date.now()}`, joinedInviteId: invite?.id || null };
-    if (mode !== 'player') {
-      pendingJoinedMatch.current = params;
-      setMode('player');
-      return;
-    }
     if (navigationRef.isReady()) navigationRef.navigate('Play', params);
     else pendingJoinedMatch.current = params;
   };
@@ -190,11 +177,10 @@ function Root() {
       if (response?.actionIdentifier !== Notifications.DEFAULT_ACTION_IDENTIFIER) return;
       const responseId = response?.notification?.request?.identifier;
       const data = response?.notification?.request?.content?.data || {};
-      if (!data.conversationId || responseId === handledNotificationResponse.current) return;
-      if (mode !== 'player') {
-        setMode('player');
-        return;
-      }
+      const opensConversation = Boolean(data.conversationId);
+      const opensFollowNotification = ['follow_request', 'follow_accepted'].includes(data.notificationKind)
+        || Boolean(data.requesterId);
+      if ((!opensConversation && !opensFollowNotification) || responseId === handledNotificationResponse.current) return;
       handledNotificationResponse.current = responseId;
       const open = () => {
         if (!navigationRef.isReady()) {
@@ -202,11 +188,15 @@ function Root() {
           timers.add(timer);
           return;
         }
-        navigationRef.navigate('DirectChat', {
-          conversationId: data.conversationId,
-          player: data.playerId ? { id: data.playerId } : undefined,
-          ownerTab: 'Team',
-        });
+        if (opensConversation) {
+          navigationRef.navigate('DirectChat', {
+            conversationId: data.conversationId,
+            player: data.playerId ? { id: data.playerId } : undefined,
+            ownerTab: 'Team',
+          });
+        } else {
+          navigationRef.navigate('Profile', { openNotificationsToken: Date.now() });
+        }
         Notifications.clearLastNotificationResponseAsync().catch(() => {});
       };
       open();
@@ -217,36 +207,41 @@ function Root() {
       subscription.remove();
       timers.forEach(clearTimeout);
     };
-  }, [mode, navigationRef, setMode, user?.id]);
+  }, [navigationRef, user?.id]);
+
+  useEffect(() => {
+    if (!pendingJoinedMatch.current || !navigationRef.isReady()) return;
+    const params = pendingJoinedMatch.current;
+    pendingJoinedMatch.current = null;
+    navigationRef.navigate('Play', params);
+  });
 
   if (!hasFinishedLaunch.current) return <LaunchScreen edition={null} />;
   if (passwordRecovery) return <AuthFlowScreen key="password-recovery" initialScreen="reset-password" />;
   if (!user) return <AuthFlowScreen key="login" initialScreen="login" />;
   if (!user.onboardingCompleted) return <AuthFlowScreen key={`new-user-setup-${user.id}`} initialScreen="new-user-overview" />;
-  return <View style={styles.appShell}><NavigationContainer ref={navigationRef} theme={navigationTheme} linking={linking}><AppNavigator /></NavigationContainer><MatchInviteOverlay onAccepted={openAcceptedMatch} />{isModeSwitching ? <LaunchScreen edition={mode === 'organizer' ? 'organizer' : 'player'} fromEdition={previousMode.current} overlay status={mode === 'organizer' ? 'OPENING ORGANIZER WORKSPACE' : 'OPENING PLAYER WORKSPACE'} /> : null}</View>;
+  return <View key={`player-session-${user.id}`} style={[styles.appShell, { backgroundColor: appBackground }]}><NavigationContainer ref={navigationRef} theme={navigationTheme} linking={linking}><AppNavigator /></NavigationContainer><MatchInviteOverlay onAccepted={openAcceptedMatch} />{DEMO_MODE ? <DemoAutopilot navigationRef={navigationRef} /> : null}</View>;
 }
 
 export default function App() {
   return (
-    <SafeAreaProvider>
-      <AuthProvider>
-        <OperationsProvider>
-          <LocationProvider>
-            <NearbyPlayersProvider>
-              <ThemeProvider>
-                <OrganizerPassProvider>
-                  <AppModeProvider>
-                    <OpenPlaySessionProvider>
-                      <Root />
-                    </OpenPlaySessionProvider>
-                  </AppModeProvider>
-                </OrganizerPassProvider>
-              </ThemeProvider>
-            </NearbyPlayersProvider>
-          </LocationProvider>
-        </OperationsProvider>
-      </AuthProvider>
-    </SafeAreaProvider>
+    <ErrorBoundary>
+      <SafeAreaProvider>
+        <AuthProvider>
+          <OrganizerPassProvider>
+            <OperationsProvider>
+              <LocationProvider>
+                <NearbyPlayersProvider>
+                  <ThemeProvider>
+                    <Root />
+                  </ThemeProvider>
+                </NearbyPlayersProvider>
+              </LocationProvider>
+            </OperationsProvider>
+          </OrganizerPassProvider>
+        </AuthProvider>
+      </SafeAreaProvider>
+    </ErrorBoundary>
   );
 }
 
@@ -264,7 +259,6 @@ const styles = StyleSheet.create({
   launchName: { color: colors.surface, fontSize: 24, fontWeight: '900', letterSpacing: -0.8 },
   launchEditionSlot: { width: 29, height: 16, justifyContent: 'center' },
   launchEditionText: { position: 'absolute', left: 0 },
-  launchOrganizer: { color: '#D7B449', fontSize: 10, fontWeight: '900', letterSpacing: 1.2 },
   launchPlayerPro: { color: '#DDE4E8', fontSize: 10, fontWeight: '900', letterSpacing: 1.2, textShadowColor: 'rgba(255,255,255,.9)', textShadowOffset: { width: 0, height: 0 }, textShadowRadius: 6 },
   launchStatus: { marginTop: 9, color: colors.optic, fontSize: 8, fontWeight: '900', letterSpacing: 1.4 },
 });

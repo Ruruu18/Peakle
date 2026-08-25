@@ -1,4 +1,9 @@
 import { requireSupabase } from '../lib/supabase';
+import { DEMO_MODE } from '../config/demoMode';
+import {
+  DEMO_CONVERSATIONS, DEMO_CONVERSATION, DEMO_CONVERSATION_ID, DEMO_DIRECT_MESSAGES,
+  DEMO_SUGGESTIONS, DEMO_FOLLOWING, DEMO_FOLLOW_COUNTS,
+} from '../config/demoData';
 
 const DIRECT_MESSAGE_SELECT_BASE = 'id, conversation_id, sender_id, body, created_at, profiles!direct_messages_sender_id_fkey(display_name, avatar_url)';
 const DIRECT_MESSAGE_SELECT = `${DIRECT_MESSAGE_SELECT_BASE}, direct_message_reactions(emoji, user_id)`;
@@ -46,12 +51,46 @@ export function normalizeDirectMessage(row, currentUserId) {
 }
 
 export async function listDirectConversations() {
+  if (DEMO_MODE) return DEMO_CONVERSATIONS;
   const { data, error } = await requireSupabase().rpc('list_direct_conversations');
   if (error) throw error;
   return (data || []).map(normalizeDirectConversation);
 }
 
+async function hydrateFollowProfiles(client, relationships, idKey) {
+  const ids = [...new Set((relationships || []).map((row) => row[idKey]).filter(Boolean))];
+  if (!ids.length) return [];
+
+  const profileResults = await Promise.all(
+    Array.from({ length: Math.ceil(ids.length / 100) }, (_, index) => (
+      client
+        .from('profiles')
+        .select('id, display_name, avatar_url, home_area, presence_status')
+        .in('id', ids.slice(index * 100, (index + 1) * 100))
+    )),
+  );
+  const profileError = profileResults.find((result) => result.error)?.error;
+  if (profileError) throw profileError;
+
+  const profilesById = new Map(
+    profileResults
+      .flatMap((result) => result.data || [])
+      .map((profile) => [profile.id, profile]),
+  );
+  return relationships
+    .map((relationship) => profilesById.get(relationship[idKey]))
+    .filter(Boolean)
+    .map((profile) => ({
+      id: profile.id,
+      name: profile.display_name || 'Peakle player',
+      avatar: profile.avatar_url || null,
+      area: profile.home_area || null,
+      playerStatus: profile.presence_status || 'free',
+    }));
+}
+
 export async function listFollowingPlayers() {
+  if (DEMO_MODE) return DEMO_FOLLOWING;
   const client = requireSupabase();
   const { data: auth, error: authError } = await client.auth.getUser();
   if (authError) throw authError;
@@ -59,20 +98,26 @@ export async function listFollowingPlayers() {
 
   const { data, error } = await client
     .from('player_follows')
-    .select('followed_id, created_at, profile:profiles!player_follows_followed_id_fkey(id, display_name, avatar_url, home_area, presence_status)')
+    .select('followed_id, created_at')
     .eq('follower_id', auth.user.id)
     .order('created_at', { ascending: false });
   if (error) throw error;
+  return hydrateFollowProfiles(client, data, 'followed_id');
+}
 
-  return (data || [])
-    .filter((row) => row.profile)
-    .map((row) => ({
-      id: row.profile.id,
-      name: row.profile.display_name || 'Peakle player',
-      avatar: row.profile.avatar_url || null,
-      area: row.profile.home_area || null,
-      playerStatus: row.profile.presence_status || 'free',
-    }));
+export async function listFollowerPlayers() {
+  const client = requireSupabase();
+  const { data: auth, error: authError } = await client.auth.getUser();
+  if (authError) throw authError;
+  if (!auth.user?.id) return [];
+
+  const { data, error } = await client
+    .from('player_follows')
+    .select('follower_id, created_at')
+    .eq('followed_id', auth.user.id)
+    .order('created_at', { ascending: false });
+  if (error) throw error;
+  return hydrateFollowProfiles(client, data, 'follower_id');
 }
 
 export async function listPrivateConnections() {
@@ -107,6 +152,7 @@ export async function listPrivateConnections() {
 
 export async function getDirectConversation(conversationId) {
   if (!conversationId) return null;
+  if (DEMO_MODE) return conversationId === DEMO_CONVERSATION_ID ? DEMO_CONVERSATION : null;
   const { data, error } = await requireSupabase().rpc('get_direct_conversation', {
     p_conversation_id: conversationId,
   });
@@ -126,6 +172,7 @@ export async function findDirectConversation(playerId) {
 }
 
 export async function listDirectMessages(conversationId) {
+  if (DEMO_MODE) return conversationId === DEMO_CONVERSATION_ID ? DEMO_DIRECT_MESSAGES : [];
   const client = requireSupabase();
   const { data: auth } = await client.auth.getUser();
   let { data, error } = await client.from('direct_messages')
@@ -203,6 +250,12 @@ async function listOutgoingFollowRequestIds(playerIds) {
 
 export async function getDirectMessagePermission(playerId) {
   if (!playerId) return null;
+  if (DEMO_MODE) {
+    return {
+      isFollowing: true, followsYou: true, followRequestPending: false, sharesTeam: true,
+      hasExistingConversation: true, peerChatEligible: true, blocked: false, canMessage: true,
+    };
+  }
   const client = requireSupabase();
   const [{ data, error }, pendingIds] = await Promise.all([
     client.rpc('get_direct_message_permission', { p_player_id: playerId }),
@@ -214,6 +267,7 @@ export async function getDirectMessagePermission(playerId) {
 }
 
 export async function getPlayerFollowCounts(playerId = null) {
+  if (DEMO_MODE) return { ...DEMO_FOLLOW_COUNTS };
   const client = requireSupabase();
   const { data, error } = await client.rpc('get_player_follow_counts', {
     p_player_id: playerId,
@@ -250,22 +304,49 @@ export async function getPlayerFollowCounts(playerId = null) {
   };
 }
 
+async function getPlayerFollowCountsByIds(playerIds) {
+  const ids = [...new Set((playerIds || []).filter(Boolean))];
+  if (!ids.length) return new Map();
+
+  const client = requireSupabase();
+  const { data, error } = await client.rpc('get_player_follow_counts_batch', {
+    p_player_ids: ids,
+  });
+
+  if (!error) {
+    return new Map((data || []).map((row) => [row.player_id, {
+      followers: Number(row.followers || 0),
+      following: Number(row.following || 0),
+    }]));
+  }
+
+  // Keep upgraded clients compatible with databases that have not received
+  // the batch RPC yet. The canonical single-player RPC is security-definer,
+  // so these values remain complete even when RLS hides unrelated follow rows.
+  const results = await Promise.allSettled(ids.map(async (id) => ({
+    id,
+    counts: await getPlayerFollowCounts(id),
+  })));
+  return new Map(results
+    .filter((result) => result.status === 'fulfilled')
+    .map((result) => [result.value.id, result.value.counts]));
+}
+
 export async function getPublicPlayerProfile(playerId) {
   if (!playerId) return null;
-  const { data, error } = await requireSupabase()
-    .from('profiles')
-    .select('id, display_name, avatar_url, home_area, skill_rating, play_preference')
-    .eq('id', playerId)
-    .maybeSingle();
+  const { data, error } = await requireSupabase().rpc('get_public_player_profile', {
+    p_player_id: playerId,
+  });
   if (error) throw error;
-  if (!data) return null;
+  const profile = Array.isArray(data) ? data[0] : data;
+  if (!profile) return null;
   return {
-    id: data.id,
-    name: data.display_name || 'Peakle player',
-    avatar: data.avatar_url || null,
-    area: data.home_area || null,
-    rating: data.skill_rating === null ? null : Number(data.skill_rating),
-    playPreference: data.play_preference || null,
+    id: profile.id,
+    name: profile.display_name || 'Peakle player',
+    avatar: profile.avatar_url || null,
+    area: profile.home_area || null,
+    rating: profile.skill_rating === null ? null : Number(profile.skill_rating),
+    playPreference: profile.play_preference || null,
   };
 }
 
@@ -322,22 +403,28 @@ export async function unfollowPlayer(playerId) {
 }
 
 export async function listPlayerSuggestions(limit = 8) {
+  if (DEMO_MODE) return DEMO_SUGGESTIONS.slice(0, limit);
   const { data, error } = await requireSupabase().rpc('get_player_suggestions', {
     p_limit: limit,
   });
   if (error) throw error;
-  return (data || []).map((row) => ({
-    id: row.id,
-    name: row.display_name || 'Peakle player',
-    avatar: row.avatar_url || null,
-    area: row.home_area || null,
-    rating: row.skill_rating === null ? null : Number(row.skill_rating),
-    reason: row.reason || 'Peakle player',
-    followers: Number(row.followers || 0),
-    following: Number(row.following || 0),
-    mutuals: Number(row.mutuals || 0),
-    followRequestPending: false,
-  }));
+  const rows = data || [];
+  const countsByPlayerId = await getPlayerFollowCountsByIds(rows.map((row) => row.id));
+  return rows.map((row) => {
+    const counts = countsByPlayerId.get(row.id);
+    return ({
+      id: row.id,
+      name: row.display_name || 'Peakle player',
+      avatar: row.avatar_url || null,
+      area: row.home_area || null,
+      rating: row.skill_rating === null ? null : Number(row.skill_rating),
+      reason: row.reason || 'Peakle player',
+      followers: counts?.followers ?? Number(row.followers || 0),
+      following: counts?.following ?? Number(row.following || 0),
+      mutuals: Number(row.mutuals || 0),
+      followRequestPending: false,
+    });
+  });
 }
 
 export async function respondFollowRequest(requesterId, accept) {
@@ -379,6 +466,7 @@ export async function respondDirectMessageRequest(conversationId, accept) {
 }
 
 export async function markDirectConversationRead(conversationId) {
+  if (DEMO_MODE) return;
   const { error } = await requireSupabase().rpc('mark_direct_conversation_read', {
     p_conversation_id: conversationId,
   });

@@ -1,5 +1,7 @@
 import { requireSupabase } from '../lib/supabase';
 import { listDiscoverableOpenPlaySessions } from './openPlayRegistration';
+import { DEMO_MODE } from '../config/demoMode';
+import { DEMO_ACTIVITIES } from '../config/demoData';
 
 function venueFrom(row) {
   const venue = row?.venues || row?.venue || null;
@@ -13,6 +15,7 @@ function venueFrom(row) {
 }
 
 export async function listDiscoverablePlayerActivities() {
+  if (DEMO_MODE) return DEMO_ACTIVITIES;
   const client = requireSupabase();
   const now = new Date();
   const nowIso = now.toISOString();

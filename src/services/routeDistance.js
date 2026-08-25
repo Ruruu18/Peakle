@@ -2,8 +2,18 @@ import { requireSupabase } from '../lib/supabase';
 
 const CACHE_TTL_MS = 5 * 60 * 1000;
 const FAILURE_BACKOFF_MS = 60 * 1000;
+const CACHE_MAX_ENTRIES = 500;
 const routeCache = new Map();
 let lastFailure = null;
+
+function pruneRouteCache(now) {
+  for (const [key, entry] of routeCache) {
+    if (now - entry.cachedAt >= CACHE_TTL_MS) routeCache.delete(key);
+  }
+  while (routeCache.size > CACHE_MAX_ENTRIES) {
+    routeCache.delete(routeCache.keys().next().value);
+  }
+}
 
 function validCoordinates(value) {
   const latitude = Number(value?.latitude);
@@ -75,6 +85,7 @@ export async function listDrivingRouteDistances(originValue, destinationValues =
       const destination = destinations.find((item) => item.id === route.id);
       if (destination) routeCache.set(cacheKey(origin, destination.coordinates), { route: normalized, cachedAt: now });
     });
+    pruneRouteCache(now);
     lastFailure = null;
     return result;
   } catch (error) {

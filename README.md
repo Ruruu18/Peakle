@@ -16,14 +16,14 @@ See [`organizer-web/README.md`](./organizer-web/README.md) for authentication re
 
 ## Screens
 
-- `HomeScreen` — implemented dashboard
-- `BookScreen` — court discovery scaffold
-- `PlayScreen` — match setup scaffold
-- `CompeteScreen` — leaderboards and squad scaffold
-- `ProfileScreen` — player profile scaffold
+- `HomeScreen` — player dashboard
+- `BookScreen` — court discovery and booking
+- `PlayScreen` — match setup and live scoring
+- `TeamScreen` — teams, leaderboards, and squad management
+- `ProfileScreen` — player profile and settings
 - `PickleballHubScreen` — verified ratings, matching, competition, programs, memberships, and venue insights
 
-The five screens are connected through the custom Peakle bottom-tab navigator in `src/navigation/AppNavigator.js`.
+These and the rest of the player/organizer screens are connected through the custom Peakle bottom-tab navigator in `src/navigation/AppNavigator.js`.
 
 ## Run it
 
@@ -74,7 +74,3 @@ eas build --platform android --profile production
 The app is configured for `https://melbfzfuxrviybblipua.supabase.co`. See `supabase/README.md` for the one-time database setup. The schema includes profiles, venues/courts, bookings, teams/chat, matches/scoring, and organizer sessions with row-level security.
 
 Authentication setup (Google OAuth, email, redirect URLs, and password recovery) is documented in `supabase/README.md`.
-
-## Organizer Pass demo
-
-Organizer Pass currently runs as a payment-free, local subscription sandbox. Player accounts can review plans from Profile, activate demo access, unlock the Organizer workspace, and test cancellation, expiration, reinstall, and restoration without contacting a payment provider. The implementation and production billing migration are documented in `md/2026-07-16-organizer-pass-demo-and-production-plan.md`.

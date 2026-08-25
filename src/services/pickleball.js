@@ -50,12 +50,13 @@ export async function loadPlayerPickleballHub() {
   const results = [profile, ratings, posts, competitions, programs, memberships, products, matches, challenges, teams];
   const failed = results.find((result) => result.error);
   if (failed) throw failed.error;
+  const publicCompetitions = (competitions.data || []).filter((item) => item.venues?.verification_status === 'verified' && item.venues?.active);
   return {
     userId: user.id,
     profile: profile.data,
     ratings: ratings.data || [],
     posts: posts.data || [],
-    competitions: (competitions.data || []).filter((item) => item.venues?.verification_status === 'verified' && item.venues?.active),
+    competitions: publicCompetitions,
     programs: (programs.data || []).filter((item) => item.venues?.verification_status === 'verified' && item.venues?.active),
     memberships: memberships.data || [],
     products: (products.data || []).filter((item) => item.venues?.verification_status === 'verified' && item.venues?.active),
@@ -164,9 +165,33 @@ export async function joinCompetition(competitionId, divisionId, teamId = null) 
   return data;
 }
 
+export async function loadCompetitionDivisionDetail(divisionId) {
+  const client = requireSupabase();
+  const { data, error } = await client
+    .from('competition_divisions')
+    .select(
+      '*, competitions(id,name,kind,status), ' +
+      'competition_entries(id,competition_division_id,user_id,team_id,status,eligibility_status,played,won,lost,points_for,points_against,standing_points,profiles(display_name,avatar_url),teams(name,tag)), ' +
+      'competition_bracket_matches(*, matches(id,status,scheduled_at,match_games(game_number,home_score,away_score,winner_side)))',
+    )
+    .eq('id', divisionId)
+    .single();
+  if (error) throw error;
+  return data;
+}
+
 export async function requestMembership(productId) {
   const { data, error } = await requireSupabase().rpc('request_membership_product', { p_product_id: productId });
   if (error) throw error;
+  return data;
+}
+
+export async function startMembershipCheckout(membershipId, paymentMethodType) {
+  const { data, error } = await requireSupabase().functions.invoke('create-checkout-session', {
+    body: { membership_id: membershipId, payment_method_type: paymentMethodType },
+  });
+  if (error) throw new Error(error.message || 'Could not start membership checkout.');
+  if (!data?.checkout_url) throw new Error(data?.error || 'Membership checkout is unavailable right now.');
   return data;
 }
 
@@ -180,6 +205,59 @@ export async function createTeamChallenge({ challengerTeamId, challengedTeamId, 
 
 export async function respondTeamChallenge(challengeId, accept) {
   const { data, error } = await requireSupabase().from('team_challenges').update({ status: accept ? 'accepted' : 'declined' }).eq('id', challengeId).eq('status', 'pending').select().single();
+  if (error) throw error;
+  return data;
+}
+
+export async function getAcceptedTeamChallenges(teamId) {
+  const { data, error } = await requireSupabase()
+    .from('team_challenges')
+    .select('*, challenger:teams!team_challenges_challenger_team_id_fkey(id,name,tag), challenged:teams!team_challenges_challenged_team_id_fkey(id,name,tag), venues(name)')
+    .eq('status', 'accepted')
+    .or(`challenger_team_id.eq.${teamId},challenged_team_id.eq.${teamId}`)
+    .order('starts_at');
+  if (error) throw error;
+  return data || [];
+}
+
+export async function getTeamMatch(teamId) {
+  const { data, error } = await requireSupabase().rpc('get_team_match', { p_team_id: teamId });
+  if (error) throw error;
+  return data;
+}
+
+export async function startTeamMatch(challengeId, scorerId = null) {
+  const { data, error } = await requireSupabase().rpc('start_team_match', { p_challenge_id: challengeId, p_scorer_id: scorerId });
+  if (error) throw error;
+  return data;
+}
+
+export async function handoffTeamMatchScorer(matchId, scorerId) {
+  const { data, error } = await requireSupabase().rpc('handoff_team_match_scorer', { p_match_id: matchId, p_scorer_id: scorerId });
+  if (error) throw error;
+  return data;
+}
+
+export async function recordTeamMatchRally(matchId, winningSide) {
+  const { data, error } = await requireSupabase().rpc('record_team_match_rally', { p_match_id: matchId, p_winning_side: winningSide });
+  if (error) throw error;
+  return data;
+}
+
+export async function undoTeamMatchRally(matchId) {
+  const { data, error } = await requireSupabase().rpc('undo_team_match_rally', { p_match_id: matchId });
+  if (error) throw error;
+  return data;
+}
+
+export async function completeTeamMatchGame(matchId, homeScore, awayScore) {
+  const { data, error } = await requireSupabase().rpc('complete_team_match_game', { p_match_id: matchId, p_home_score: homeScore, p_away_score: awayScore });
+  if (error) throw error;
+  return data;
+}
+
+export async function completeTeamMatch(matchId) {
+  const { data, error } = await requireSupabase().rpc('complete_team_match', { p_match_id: matchId });
   if (error) throw error;
   return data;
 }
@@ -343,10 +421,10 @@ export async function loadVenueAnalytics(venueId, from, to) {
 export function venueAnalyticsCsv(venueName, analytics) {
   const rows = [
     ['Venue', venueName], ['From', analytics.from], ['To', analytics.to], ['Bookings', analytics.bookings],
-    ['Cancelled bookings', analytics.cancelledBookings], ['Cancellation rate', `${analytics.cancellationRate}%`],
+    ['Cancelled bookings', analytics.cancelledBookings], ['Cancellation rate', analytics.cancellationRate == null ? null : `${analytics.cancellationRate}%`],
     ['Gross revenue (PHP)', analytics.grossRevenue], ['Booked court hours', analytics.bookedCourtHours],
     ['Unique players', analytics.uniquePlayers], ['Open-play sessions', analytics.openPlaySessions],
-    ['Returning players', analytics.returningPlayers], ['Court utilization', `${analytics.courtUtilization}%`], ['Peak hour', analytics.peakHour],
+    ['Returning players', analytics.returningPlayers], ['Court utilization', analytics.courtUtilization == null ? null : `${analytics.courtUtilization}%`], ['Peak hour', analytics.peakHour],
     ['Open-play attendance', analytics.openPlayAttendance], ['Program registrations', analytics.programRegistrations],
   ];
   return rows.map((row) => row.map((value) => `"${String(value ?? '').replace(/"/g, '""')}"`).join(',')).join('\n');

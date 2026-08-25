@@ -15,6 +15,7 @@ import {
   useWindowDimensions,
   View,
   Alert,
+  AppState,
   Share,
 } from 'react-native';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -26,6 +27,8 @@ import * as Crypto from 'expo-crypto';
 import * as ImagePicker from 'expo-image-picker';
 import { VideoView, useVideoPlayer } from 'expo-video';
 import { useFocusEffect } from '@react-navigation/native';
+import { DEMO_MODE } from '../config/demoMode';
+import { DEMO_TEAM_ID, DEMO_TEAM_MESSAGE_DRIP } from '../config/demoData';
 import ProfilePhoto from '../components/ProfilePhoto';
 import ResilientImage from '../components/ResilientImage';
 import LocationPicker from '../components/LocationPicker';
@@ -34,6 +37,7 @@ import { PH_LOCATIONS, formatLocation, locationMatchesSearch, parseLocation } fr
 import { useAuth } from '../context/AuthContext';
 import { distanceInKm, formatDistance, geocodeArea, useUserLocation } from '../context/LocationContext';
 import { acknowledgeChatSafety, blockChatUser, cancelTeamJoin, createTeamRecord, deleteTeamChatMedia, editTeamMessage, getChatSafetyStatus, getTeamMessage, hideTeamMessage, inviteTeamMember, listBlockedChatUsers, listMyTeamInvitations, listMyTeamRequests, listPinnedTeamMessages, listTeamConversationSummaries, listTeamMessageReadStates, listTeamMessages, listTeamRequests, listTeamSharedMedia, listTeams, markTeamConversationRead, moderateTeamMessage, removeTeamMember, reportTeamMessage, requestTeamJoin, respondTeamInvitation, reviewTeamRequest, searchTeamInviteCandidates, sendTeamMessage, toggleTeamMessagePin, toggleTeamMessageReaction, unblockChatUser, unsendTeamMessage, updateTeamMemberRole, updateTeamRecord, uploadTeamChatMedia, uploadTeamImage } from '../services/database';
+import { completeTeamMatch, completeTeamMatchGame, getAcceptedTeamChallenges, getTeamMatch, handoffTeamMatchScorer, recordTeamMatchRally, startTeamMatch, undoTeamMatchRally } from '../services/pickleball';
 import { supabase } from '../lib/supabase';
 import { createDarkStyleSheet, DARK_CONTENT_COLORS, useTheme } from '../context/ThemeContext';
 import { createMobileStyleSheet } from '../utils/mobileStyles';
@@ -41,6 +45,7 @@ import { peekCachedData, readCachedData, withTimeout, writeCachedData } from '..
 import { teamScreenCacheKey } from '../lib/cacheKeys';
 import { TEAM_SKILL_LEVELS, skillCategoryForRating } from '../utils/skillCategories';
 import { listDirectConversations } from '../services/directMessages';
+import { speakScoreAnnouncement, stopScoreAnnouncement } from '../utils/scoreAccessibility';
 
 const LIGHT_C = { ink: '#0E2321', paper: '#F3F5EF', surface: '#FFFFFF', optic: '#D6E94A', teal: '#1C6B66', brick: '#B6472E', ink70: '#3C4A45', ink40: '#7C8983', line: '#DDE3DA' };
 let C = LIGHT_C;
@@ -66,7 +71,7 @@ const makeTag = (name) => {
   return (compact.slice(0, 4) || 'TM').padEnd(2, 'X');
 };
 const teamStatusText = (team) => team?.status === 'active' ? 'ACTIVE' : `FORMING ${Math.min(team?.members || 0, 4)}/4`;
-const servingPlayer = (match) => match?.servingTeam === 'home' ? match.homePlayers?.[match.servingPlayerIndex] : match?.awayPlayers?.[match.servingPlayerIndex];
+const servingPlayer = (match) => (match?.servingTeam === 'home' ? match?.homePlayers?.[match.servingPlayerIndex] : match?.awayPlayers?.[match.servingPlayerIndex]) || (match?.servingTeam === 'home' ? match?.home : match?.away);
 const servingTeamName = (match) => match?.servingTeam === 'home' ? match.home : match?.away;
 const REACTION_OPTIONS = ['👍', '❤️', '😂', '🔥', '👏', '🎉'];
 const TYPING_IDLE_MS = 1400;
@@ -220,7 +225,7 @@ function Crest({ team, size = 54, onPress, showEdit }) {
   );
 }
 
-function KitchenLine() { return <View style={styles.kitchen}><View style={styles.solid} /><View style={styles.dashed} /></View>; }
+function KitchenLine({ style }) { return <View style={[styles.kitchen, style]}><View style={styles.solid} /><View style={styles.dashed} /></View>; }
 
 function TeamCard({ team, joined, requested, requesting, cancelling, summary, onJoin, onCancel, onOpen, onChat }) {
   return (
@@ -231,7 +236,7 @@ function TeamCard({ team, joined, requested, requesting, cancelling, summary, on
       </TeamCover>
       <View style={styles.stats}><View style={styles.stat}><Text style={styles.statValue}>{team.rating}</Text><Text style={styles.statLabel}>RATING</Text></View><View style={styles.stat}><Text style={styles.statValue}>{team.members}/{team.capacity}</Text><Text style={styles.statLabel}>MEMBERS</Text></View><View style={[styles.level, team.level === 'Advanced' && styles.levelAdvanced]}><Text style={[styles.levelText, team.level === 'Advanced' && styles.levelTextAdvanced]}>{team.level}</Text></View></View>
       {joined && <Pressable accessibilityLabel={`Open ${team.name} chat`} onPress={(event) => { event.stopPropagation?.(); onChat?.(); }} style={styles.conversationRow}><View style={[styles.conversationIcon, summary?.unread_count > 0 && styles.conversationIconUnread]}><Icon name="chatbubble-outline" size={17} color={C.teal} /></View><View style={styles.conversationCopy}><Text numberOfLines={1} style={styles.conversationText}>{summary?.last_body || (summary?.last_has_image ? 'Shared a photo' : 'Start the team conversation')}</Text><Text style={styles.conversationMeta}>{summary?.last_sender_name ? `${summary.last_sender_name} · ` : ''}{summary?.last_created_at ? new Date(summary.last_created_at).toLocaleDateString([], { month: 'short', day: 'numeric' }) : 'TEAM CHAT'}</Text></View>{summary?.unread_count > 0 ? <View style={styles.unreadBadge}><Text style={styles.unreadBadgeText}>{summary.unread_count > 99 ? '99+' : summary.unread_count}</Text></View> : <Icon name="chevron-forward" size={17} color={C.teal} />}</Pressable>}
-      {!joined && (requested ? <View style={styles.pendingRequestActions}><View style={styles.requestSentStatus}><Icon name="checkmark-circle-outline" size={17} color={C.teal} /><Text style={styles.requestSentStatusText}>Request sent</Text></View><Pressable onPress={(event) => { event.stopPropagation?.(); onCancel(); }} disabled={cancelling} style={[styles.cancelRequestButton, cancelling && styles.saveButtonDisabled]}>{cancelling ? <ActivityIndicator size="small" color={C.brick} /> : <Icon name="close-circle-outline" size={17} color={C.brick} />}<Text style={styles.cancelRequestText}>{cancelling ? 'Cancelling…' : 'Cancel'}</Text></Pressable></View> : <Pressable onPress={(event) => { event.stopPropagation?.(); onJoin(); }} disabled={requesting} style={[styles.joinButton, requesting && styles.requestedButton]}>{requesting ? <ActivityIndicator size="small" color={C.teal} /> : <Icon name="add" size={17} color={C.ink} />}<Text style={[styles.joinButtonText, requesting && styles.requestedText]}>{requesting ? 'Sending request…' : 'Ask to join'}</Text></Pressable>)}
+      {!joined && (requested ? <View style={styles.pendingRequestActions}><View style={styles.requestSentStatus}><Icon name="checkmark-circle-outline" size={17} color={C.teal} /><Text style={styles.requestSentStatusText}>Request sent</Text></View><Pressable onPress={(event) => { event.stopPropagation?.(); onCancel(); }} disabled={cancelling} style={[styles.cancelRequestButton, cancelling && styles.saveButtonDisabled]}>{cancelling ? <ActivityIndicator size="small" color={C.brick} /> : <Icon name="close-circle-outline" size={17} color={C.brick} />}<Text style={styles.cancelRequestText}>{cancelling ? 'Cancelling…' : 'Cancel'}</Text></Pressable></View> : <Pressable onPress={(event) => { event.stopPropagation?.(); onJoin(); }} disabled={requesting} style={[styles.joinButton, requesting && styles.requestedButton]}>{requesting ? <ActivityIndicator size="small" color="#0E2321" /> : <Icon name="add" size={17} color="#0E2321" />}<Text style={[styles.joinButtonText, requesting && styles.requestedText]}>{requesting ? 'Sending request…' : 'Ask to join'}</Text></Pressable>)}
     </Pressable>
   );
 }
@@ -550,7 +555,7 @@ function ChatMessage({ message, grouped, active, highlighted, seenBy, showDelive
       <View style={[styles.messageBlock, message.mine && styles.messageBlockMine]}>
         {!message.mine && !grouped && <Text style={styles.sender}>{message.sender}</Text>}
         <View style={[styles.bubbleActionRow, message.mine && styles.bubbleActionRowMine]}>
-          <Pressable accessibilityHint="Tap for message controls. Long press for reactions and delete options." onPress={() => onToggleControls(message.id)} onLongPress={() => onOpenActions(message.id)} delayLongPress={240} style={[styles.bubble, message.mine && styles.bubbleMine, mediaOnly && styles.mediaBubble, mediaOnly && message.mine && styles.mediaBubbleMine, message.deletedAt && styles.deletedBubble, highlighted && styles.highlightedMessageBubble]}>
+          <Pressable accessibilityHint="Tap for message controls. Long press for reactions and message options." onPress={() => onToggleControls(message.id)} onLongPress={() => onOpenReactions(message.id)} delayLongPress={240} style={[styles.bubble, message.mine && styles.bubbleMine, mediaOnly && styles.mediaBubble, mediaOnly && message.mine && styles.mediaBubbleMine, message.deletedAt && styles.deletedBubble, highlighted && styles.highlightedMessageBubble]}>
             {message.image && <PopImage uri={message.image} sticker={message.mediaKind === 'stickers'} style={[styles.chatAttachmentImage, message.mediaType === 'gif' && styles.chatAttachmentGif, mediaOnly && styles.chatAttachmentMediaOnly]} onPress={() => onPreview(message)} onLongPress={() => onOpenActions(message.id)} />}
             {message.video && <VideoAttachment uri={message.video} mediaOnly={mediaOnly} />}
             {message.deletedAt ? <View style={styles.deletedMessageRow}><Icon name="ban-outline" size={14} color={C.ink40} /><Text style={styles.deletedMessageText}>{message.moderatedAt ? 'Message removed by a moderator' : 'Message unsent'}</Text></View> : visibleText ? <Text style={[styles.bubbleText, message.mine && styles.bubbleTextMine]}>{visibleText}</Text> : null}
@@ -938,27 +943,86 @@ function TeamChatInfo({ team, currentUserId, pinnedMessages, sharedMedia, blocke
   );
 }
 
-function LiveScore({ team, match, scoringMode, currentUserId, onBack, onRally, onSwitchServe }) {
+function TeamScorerPicker({ visible, team, currentUserId, selectedId = null, busy, changing = false, onClose, onSelect }) {
+  const players = [...(team?.roster || [])].sort((a, b) => {
+    if (a.id === currentUserId) return -1;
+    if (b.id === currentUserId) return 1;
+    return a.name.localeCompare(b.name);
+  });
+  return (
+    <Modal visible={visible} transparent animationType="slide" onRequestClose={() => !busy && onClose()}>
+      <View style={styles.scorerPickerBackdrop}>
+        <Pressable accessibilityLabel="Close scorer selection" disabled={busy} onPress={onClose} style={StyleSheet.absoluteFillObject} />
+        <View style={styles.scorerPickerSheet}>
+          <View style={styles.actionSheetHandle} />
+          <View style={styles.scorerPickerHead}><View><Text style={styles.eyebrow}>{changing ? 'LIVE MATCH' : 'MATCH SETUP'}</Text><Text style={styles.scorerPickerTitle}>{changing ? 'Change the scorer' : 'Choose the scorer'}</Text></View><Pressable accessibilityLabel="Close" disabled={busy} onPress={onClose} style={styles.peopleModalClose}><Icon name="close" size={18} color={C.ink70} /></Pressable></View>
+          <Text style={styles.scorerPickerHelp}>Scoring controls will be available on this player’s phone. You can choose any signed-in member of {team?.name || 'your team'}.</Text>
+          <ScrollView style={styles.scorerPickerList} showsVerticalScrollIndicator={false} nestedScrollEnabled>
+            {players.map((player) => { const selected = player.id === selectedId; return <Pressable key={player.id} accessibilityLabel={`Assign ${player.name} as match scorer`} disabled={busy || selected} onPress={() => onSelect(player.id)} style={({ pressed }) => [styles.scorerPickerRow, selected && styles.scorerPickerRowSelected, pressed && !selected && styles.pressed]}><ProfilePhoto photo={player.avatar} name={player.name} size={43} /><View style={styles.rosterCopy}><Text style={styles.scorerPickerName}>{player.name}{player.id === currentUserId ? ' (You)' : ''}</Text><Text style={styles.footText}>{selected ? 'Current scorer' : `${player.role || 'Team member'} · Signed-in scorer`}</Text></View><Icon name={selected ? 'checkmark-circle' : 'chevron-forward'} size={selected ? 20 : 17} color={C.teal} /></Pressable>; })}
+          </ScrollView>
+          {busy ? <View style={styles.scorerPickerBusy}><ActivityIndicator color={C.teal} /><Text style={styles.footText}>Starting the match…</Text></View> : null}
+        </View>
+      </View>
+    </Modal>
+  );
+}
+
+function LiveScore({ team, match, scoringMode, busy, currentUserId, onBack, onRally, onUndo, onFinishGame, onFinishMatch, onChangeScorer }) {
+  const [voiceEnabled, setVoiceEnabled] = useState(false);
+  const spokenStateRef = useRef(null);
+  useEffect(() => () => stopScoreAnnouncement(), []);
+  useEffect(() => {
+    if (!voiceEnabled || !match) return;
+    const stateKey = `${match.game}:${match.homeScore}:${match.awayScore}:${match.servingTeam}:${match.serviceNumber}`;
+    if (!spokenStateRef.current || spokenStateRef.current === stateKey) {
+      spokenStateRef.current = stateKey;
+      return;
+    }
+    spokenStateRef.current = stateKey;
+    speakScoreAnnouncement({
+      action: match.lastPlay,
+      score: `${match.homeScore} – ${match.awayScore}`,
+      nextServe: `${servingTeamName(match)} serving, server ${match.serviceNumber}`,
+    });
+  }, [match?.awayScore, match?.game, match?.homeScore, match?.lastPlay, match?.serviceNumber, match?.servingTeam, voiceEnabled]);
   if (!match) return null;
-  const canControl = scoringMode && match.scorerId === currentUserId;
+  const canControl = scoringMode && match.canScore;
   const games = [...(match.completedGames || []), { home: match.homeScore, away: match.awayScore, current: true }];
   const homeGamesWon = (match.completedGames || []).filter((game) => game.home > game.away).length;
   const awayGamesWon = (match.completedGames || []).filter((game) => game.away > game.home).length;
+  const gamePoint = Math.max(match.homeScore, match.awayScore) >= 11 && Math.abs(match.homeScore - match.awayScore) >= 2;
+  const toggleVoice = () => {
+    if (voiceEnabled) {
+      stopScoreAnnouncement();
+      setVoiceEnabled(false);
+      return;
+    }
+    spokenStateRef.current = `${match.game}:${match.homeScore}:${match.awayScore}:${match.servingTeam}:${match.serviceNumber}`;
+    speakScoreAnnouncement({ action: 'Voice score announcements on', score: `${match.homeScore} – ${match.awayScore}`, nextServe: `${servingTeamName(match)} serving, server ${match.serviceNumber}` });
+    setVoiceEnabled(true);
+  };
   return (
     <ScrollView contentContainerStyle={styles.content} showsVerticalScrollIndicator={false}>
       <View style={styles.detailHeader}><Pressable onPress={onBack} accessibilityLabel="Back to team chat" style={styles.iconButton}><Icon name="arrow-back" /></Pressable><View style={styles.detailHeaderCopy}><Text style={styles.eyebrow}>LIVE SCORING</Text><Text style={styles.detailHeaderTitle}>{team.name}</Text></View><View style={styles.liveHeaderBadge}><View style={styles.liveDot} /><Text style={styles.liveHeaderText}>LIVE</Text></View></View><KitchenLine />
       <View style={styles.scoreHero}>
         <Text style={styles.scoreVenue}>{match.venue}</Text><Text style={styles.scoreGame}>GAME {match.game}</Text>
         <View style={styles.scoreTeams}><View style={styles.scoreTeam}><View style={[styles.scoreCrest, { backgroundColor: C.teal }]}><Text style={styles.scoreCrestText}>{match.homeTag}</Text></View><Text style={styles.scoreTeamName}>{match.home}</Text></View><View style={styles.scoreNumbers}><Text style={styles.scoreNumber}>{match.homeScore}</Text><Text style={styles.scoreSeparator}>:</Text><Text style={styles.scoreNumber}>{match.awayScore}</Text></View><View style={styles.scoreTeam}><View style={[styles.scoreCrest, { backgroundColor: C.brick }]}><Text style={styles.scoreCrestText}>{match.awayTag}</Text></View><Text style={styles.scoreTeamName}>{match.away}</Text></View></View>
-        <View style={styles.servingRow}><View style={styles.servingDot} /><Text style={styles.servingText}>{servingPlayer(match)} serving for {servingTeamName(match)} · Server {match.serviceNumber}</Text></View>
+        <View style={styles.servingRow}><View style={styles.servingDot} /><Text style={styles.servingText}>{servingTeamName(match)} serving · Server {match.serviceNumber}</Text></View>
       </View>
-      {canControl ? <View style={styles.scorerPanel}><View style={styles.scorerHead}><View><Text style={styles.eyebrow}>SCORER CONTROLS</Text><Text style={styles.scorerTitle}>{match.scorer} is scoring</Text></View><View style={styles.scorerBadge}><Icon name="create-outline" size={13} color={C.teal} /><Text style={styles.scorerBadgeText}>SCORER</Text></View></View><Text style={styles.scorerHelp}>Choose the rally winner. A serving team scores a point; a receiving team win advances or switches the serve.</Text><View style={styles.rallyButtons}><Pressable onPress={() => onRally('home')} style={[styles.rallyButton, match.servingTeam === 'home' && styles.rallyButtonServing]}><Text style={styles.rallyTag}>{match.homeTag}</Text><Text style={styles.rallyButtonText}>Won rally</Text>{match.servingTeam === 'home' && <Text style={styles.rallyServingText}>SERVING</Text>}</Pressable><Pressable onPress={() => onRally('away')} style={[styles.rallyButton, match.servingTeam === 'away' && styles.rallyButtonServing]}><Text style={styles.rallyTag}>{match.awayTag}</Text><Text style={styles.rallyButtonText}>Won rally</Text>{match.servingTeam === 'away' && <Text style={styles.rallyServingText}>SERVING</Text>}</Pressable></View><Pressable onPress={onSwitchServe} style={styles.switchServeButton}><Icon name="swap-horizontal" size={19} color={C.surface} /><Text style={styles.switchServeText}>Correct Server</Text></Pressable></View> : <View style={styles.viewerNotice}><Icon name="eye-outline" color={C.teal} /><View style={styles.rosterCopy}><Text style={styles.rosterName}>View-only live coverage</Text><Text style={styles.footText}>Only assigned scorer {match.scorer} can update points and serving.</Text></View><View style={styles.viewerBadge}><Text style={styles.viewerBadgeText}>VIEWER</Text></View></View>}
+      {canControl ? <View style={styles.scorerPanel}><View style={styles.scorerHead}><View><Text style={styles.eyebrow}>SCORER CONTROLS</Text><Text style={styles.scorerTitle}>{match.scorer} is scoring</Text></View><View style={styles.scorerHeadActions}><Pressable accessibilityRole="switch" accessibilityState={{ checked: voiceEnabled }} accessibilityLabel={`Voice score announcements ${voiceEnabled ? 'on' : 'off'}`} onPress={toggleVoice} style={[styles.voiceScoreButton, voiceEnabled && styles.voiceScoreButtonActive]}><Icon name={voiceEnabled ? 'volume-high' : 'volume-mute-outline'} size={13} color={C.teal} /><Text style={styles.voiceScoreText}>VOICE {voiceEnabled ? 'ON' : 'OFF'}</Text></Pressable>{match.canAssignScorer ? <Pressable accessibilityLabel="Change match scorer" onPress={onChangeScorer} style={styles.voiceScoreButton}><Icon name="swap-horizontal-outline" size={13} color={C.teal} /><Text style={styles.voiceScoreText}>CHANGE</Text></Pressable> : <View style={styles.scorerBadge}><Icon name="create-outline" size={13} color={C.teal} /><Text style={styles.scorerBadgeText}>SCORER</Text></View>}</View></View>
+        {gamePoint ? <><Text style={styles.scorerHelp}>This game is ready to finish at {match.homeScore}–{match.awayScore}.</Text><Pressable disabled={busy} onPress={onFinishGame} style={styles.switchServeButton}><Icon name="checkmark-done" size={19} color={C.surface} /><Text style={styles.switchServeText}>Finish game & continue</Text></Pressable></> : <>
+          <Text style={styles.scorerHelp}>Choose the rally winner. Turn Voice on to hear every score and the next server aloud.</Text>
+          <View style={styles.rallyButtons}><Pressable disabled={busy} onPress={() => onRally('home')} style={[styles.rallyButton, match.servingTeam === 'home' && styles.rallyButtonServing]}><Text style={styles.rallyTag}>{match.homeTag}</Text><Text style={styles.rallyButtonText}>Won rally</Text>{match.servingTeam === 'home' && <Text style={styles.rallyServingText}>SERVING</Text>}</Pressable><Pressable disabled={busy} onPress={() => onRally('away')} style={[styles.rallyButton, match.servingTeam === 'away' && styles.rallyButtonServing]}><Text style={styles.rallyTag}>{match.awayTag}</Text><Text style={styles.rallyButtonText}>Won rally</Text>{match.servingTeam === 'away' && <Text style={styles.rallyServingText}>SERVING</Text>}</Pressable></View>
+        </>}
+        <Pressable disabled={busy || !match.canUndo} onPress={onUndo} style={[styles.switchServeButton, !match.canUndo && styles.pressed]}><Icon name="arrow-undo" size={19} color={C.surface} /><Text style={styles.switchServeText}>Undo last rally</Text></Pressable>
+        {games.length > 1 || match.completedGames?.length ? <Pressable disabled={busy} onPress={onFinishMatch} style={styles.declineButton}><Text style={styles.declineText}>Finish match</Text></Pressable> : null}
+      </View> : <View style={styles.viewerNotice}><Icon name="eye-outline" color={C.teal} /><View style={styles.rosterCopy}><Text style={styles.rosterName}>View-only live coverage</Text><Text style={styles.footText}>Only the assigned scorer {match.scorer} can update points and serving.</Text></View><View style={styles.viewerBadge}><Text style={styles.viewerBadgeText}>VIEWER</Text></View></View>}
       <View style={styles.sectionHead}><View><Text style={styles.eyebrow}>BOX SCORE</Text><Text style={styles.h2}>Score by set</Text></View><Text style={styles.sectionLink}>{homeGamesWon}–{awayGamesWon} sets</Text></View>
       <View style={styles.boxScore}><View style={styles.boxScoreRow}><Text style={[styles.boxTeam, styles.boxHeader]}>TEAM</Text>{games.map((game, index) => <Text key={`head-${index}`} style={[styles.boxValue, styles.boxHeader]}>S{index + 1}{game.current ? '*' : ''}</Text>)}<Text style={[styles.boxValue, styles.boxHeader]}>W</Text></View><View style={[styles.boxScoreRow, styles.boxScoreBorder]}><Text numberOfLines={1} style={styles.boxTeam}>{match.homeTag} · {match.home}</Text>{games.map((game, index) => <Text key={`home-${index}`} style={[styles.boxValue, game.current && styles.boxCurrent]}>{game.home}</Text>)}<Text style={[styles.boxValue, styles.boxWon]}>{homeGamesWon}</Text></View><View style={[styles.boxScoreRow, styles.boxScoreBorder]}><Text numberOfLines={1} style={styles.boxTeam}>{match.awayTag} · {match.away}</Text>{games.map((game, index) => <Text key={`away-${index}`} style={[styles.boxValue, game.current && styles.boxCurrent]}>{game.away}</Text>)}<Text style={[styles.boxValue, styles.boxWon]}>{awayGamesWon}</Text></View><Text style={styles.boxFootnote}>* Current set</Text></View>
-      <View style={styles.liveInfoCard}><Icon name="people-outline" color={C.teal} /><View style={styles.rosterCopy}><Text style={styles.rosterName}>{match.players}</Text><Text style={styles.footText}>Players on court</Text></View></View>
+      <View style={styles.liveInfoCard}><Icon name="people-outline" color={C.teal} /><View style={styles.rosterCopy}><Text style={styles.rosterName}>{match.players}</Text><Text style={styles.footText}>Format on court</Text></View></View>
       <View style={styles.sectionHead}><View><Text style={styles.eyebrow}>POINT BY POINT</Text><Text style={styles.h2}>Match activity</Text></View><View style={styles.syncBadge}><Icon name="sync" size={12} color={C.teal} /><Text style={styles.syncText}>Scorer-synced</Text></View></View>
       <View style={styles.liveActivity}><View style={styles.liveActivityIcon}><Icon name="tennisball-outline" size={18} color={C.teal} /></View><View style={styles.rosterCopy}><Text style={styles.rosterName}>{match.lastPlay}</Text><Text style={styles.footText}>Just now · Score {match.homeScore}–{match.awayScore}</Text></View></View>
-      <View style={styles.liveNotice}><Icon name="notifications-outline" color={C.teal} /><Text style={styles.liveNoticeText}>Score changes are automatically shared in {team.name}'s group chat so teammates can follow from anywhere.</Text></View>
+      <View style={styles.liveNotice}><Icon name="notifications-outline" color={C.teal} /><Text style={styles.liveNoticeText}>Every rally is recorded to {team.name}'s match history so anyone can catch up or review a disputed call later.</Text></View>
     </ScrollView>
   );
 }
@@ -1174,7 +1238,7 @@ function TeamInvitationCard({ invitation, onAccept, onDecline }) {
   );
 }
 
-function TeamHub({ team, requests, liveMatch, onBack, onUpdateImage, onEdit, onAccept, onDecline, onRefreshRequests, onScoreMatch, onInvite, onChallenges }) {
+function TeamHub({ team, requests, liveMatch, nextChallenges = [], matchBusy, onOpenMatch, onStartMatch, onBack, onUpdateImage, onEdit, onAccept, onDecline, onRefreshRequests, onInvite, onChallenges }) {
   const [section, setSection] = useState('Roster');
   const editable = canEditTeam(team);
   const reviewer = canReviewRequests(team);
@@ -1190,7 +1254,14 @@ function TeamHub({ team, requests, liveMatch, onBack, onUpdateImage, onEdit, onA
       <View style={styles.hubTabsSticky}><View style={styles.hubTabs}>{tabs.map((item) => <Pressable key={item} onPress={() => { setSection(item); if (item === 'Requests') onRefreshRequests?.(); }} style={[styles.hubTab, section === item && styles.hubTabActive]}><Text style={[styles.hubTabText, section === item && styles.hubTabTextActive]}>{item}{item === 'Requests' && requests.length ? ` (${requests.length})` : ''}</Text></Pressable>)}</View></View>
       {section === 'Roster' && <><View style={styles.sectionHead}><View><Text style={styles.eyebrow}>LINEUP</Text><Text style={styles.h2}>Team roster</Text></View><Pressable accessibilityLabel={`Invite players to ${team.name}`} onPress={onInvite} style={styles.inviteButton}><Icon name="person-add-outline" size={16} color={C.teal} /><Text style={styles.inviteButtonText}>Invite</Text></Pressable></View><View style={styles.rosterCard}>{roster.map((player, index) => <View key={player.name} style={[styles.rosterRow, index > 0 && styles.rosterBorder]}><ProfilePhoto photo={player.avatar} name={player.name} size={42} style={styles.rosterAvatar} /><View style={styles.rosterCopy}><Text style={styles.rosterName}>{player.name}</Text><Text style={styles.footText}>{player.role}</Text></View><View style={styles.rosterRating}><Text style={styles.rosterRatingValue}>{player.rating}</Text><Text style={styles.statLabel}>RATING</Text></View></View>)}</View></>}
       {section === 'Requests' && <><View style={styles.sectionHead}><View><Text style={styles.eyebrow}>MEMBERSHIP</Text><Text style={styles.h2}>Join requests</Text></View><Text style={styles.sectionLink}>{requests.length} pending</Text></View>{requests.length ? requests.map((request) => <View key={request.id} style={styles.requestCard}><View style={styles.requestTimeRow}><Text style={styles.requestTimeLabel}>REQUESTED TO JOIN</Text><Text style={styles.requestTime}>{formatRequestAge(request.createdAt)}</Text></View><View style={styles.requestHead}><ProfilePhoto photo={request.avatar} name={request.name} size={46} style={styles.requestAvatar} /><View style={styles.rosterCopy}><Text style={styles.requestName}>{request.name}</Text><Text style={styles.requestAccount}>Peakle player profile</Text></View></View><View style={styles.requestFacts}><View style={styles.requestFact}><Icon name="location-outline" size={14} color={C.teal} /><Text numberOfLines={1} style={styles.requestFactText}>{request.location}</Text></View><View style={styles.requestFact}><Icon name="star-outline" size={14} color={C.teal} /><Text style={styles.requestFactText}>{request.rating == null ? 'Unrated' : `${request.rating} rating`}</Text></View><View style={styles.requestFact}><Icon name="tennisball-outline" size={14} color={C.teal} /><Text style={styles.requestFactText}>{request.preference}</Text></View></View><View style={styles.requestMessage}><Icon name="chatbubble-ellipses-outline" size={16} color={request.note ? C.teal : C.ink40} /><View style={styles.requestMessageCopy}><Text style={styles.requestMessageLabel}>INTRODUCTION</Text><Text style={[styles.requestNoteCompact, !request.note && styles.requestNoteEmpty]}>{request.note || 'No introduction was included with this request.'}</Text></View></View><View style={styles.requestActions}><Pressable onPress={() => onDecline(request.id)} style={styles.declineButton}><Text style={styles.declineText}>Decline</Text></Pressable><Pressable onPress={() => onAccept(request)} style={styles.acceptButton}><Icon name="checkmark" size={17} color="#0E2321" /><Text style={styles.primaryText}>Accept player</Text></Pressable></View></View>) : <View style={styles.emptyRequests}><Icon name="checkmark-circle-outline" size={34} color={C.teal} /><Text style={styles.emptyTitle}>You're all caught up</Text><Text style={styles.footText}>New join requests will appear here automatically.</Text></View>}</>}
-      {section === 'Matches' && <><View style={styles.sectionHead}><View><Text style={styles.eyebrow}>SCHEDULE</Text><Text style={styles.h2}>Team matches</Text></View></View>{team.status === 'active' && <Pressable onPress={onChallenges} style={styles.teamChallengeEntry}><View style={styles.competitionBannerIcon}><Icon name="trophy-outline" color={C.teal} /></View><View style={styles.joinedIntroCopy}><Text style={styles.competitionBannerTitle}>Challenges and team competition</Text><Text style={styles.competitionBannerMeta}>Send a private scrimmage challenge or review incoming fixtures.</Text></View><Icon name="chevron-forward" color={C.teal} /></Pressable>}<View style={styles.empty}><Icon name={team.status === 'active' ? 'calendar-outline' : 'lock-closed-outline'} size={35} color={C.ink40} /><Text style={styles.emptyTitle}>{team.status === 'active' ? 'No team matches recorded' : 'Competition unlocks at four'}</Text><Text style={styles.footText}>{team.status === 'active' ? 'Scheduled and completed team matches will appear here when saved.' : 'Invite or approve more players before entering team matches and rankings.'}</Text></View></>}
+      {section === 'Matches' && <><View style={styles.sectionHead}><View><Text style={styles.eyebrow}>SCHEDULE</Text><Text style={styles.h2}>Team matches</Text></View></View>{team.status === 'active' && <Pressable onPress={onChallenges} style={styles.teamChallengeEntry}><View style={styles.competitionBannerIcon}><Icon name="trophy-outline" color={C.teal} /></View><View style={styles.joinedIntroCopy}><Text style={styles.competitionBannerTitle}>Challenges and team competition</Text><Text style={styles.competitionBannerMeta}>Send a private scrimmage challenge or review incoming fixtures.</Text></View><Icon name="chevron-forward" color={C.teal} /></Pressable>}
+      {liveMatch ? <Pressable onPress={onOpenMatch} style={styles.nextTeamMatch}><View style={styles.matchDate}><Text style={styles.matchMonth}>LIVE</Text><Text style={styles.matchDay}>{liveMatch.homeScore}–{liveMatch.awayScore}</Text></View><View style={styles.matchCopy}><Text style={styles.matchLabel}>GAME {liveMatch.game} · IN PROGRESS</Text><Text numberOfLines={1} style={styles.matchTitle}>{liveMatch.home} vs {liveMatch.away}</Text><Text style={styles.footText}>{liveMatch.canScore ? 'Tap to continue scoring' : `${liveMatch.scorer} is scoring · tap to watch live`}</Text></View><Icon name="chevron-forward" color={C.teal} /></Pressable>
+        : nextChallenges.length ? nextChallenges.map((challenge) => {
+          const opponent = challenge.challenger_team_id === team.id ? challenge.challenged : challenge.challenger;
+          const date = new Date(challenge.starts_at);
+          return <Pressable key={challenge.id} disabled={matchBusy} onPress={() => onStartMatch(challenge.id)} style={styles.nextTeamMatch}><View style={styles.matchDate}><Text style={styles.matchMonth}>{Number.isNaN(date.getTime()) ? '—' : date.toLocaleDateString(undefined, { month: 'short' }).toUpperCase()}</Text><Text style={styles.matchDay}>{Number.isNaN(date.getTime()) ? '—' : date.getDate()}</Text></View><View style={styles.matchCopy}><Text style={styles.matchLabel}>VS {(opponent?.name || 'OPPONENT').toUpperCase()}</Text><Text numberOfLines={1} style={styles.matchTitle}>{matchBusy ? 'Starting match…' : 'Tap to start scoring'}</Text><Text style={styles.footText}>{challenge.venues?.name || 'Venue to be confirmed'}</Text></View><Icon name="play-circle-outline" size={20} color={C.teal} /></Pressable>;
+        })
+        : <View style={styles.empty}><Icon name={team.status === 'active' ? 'calendar-outline' : 'lock-closed-outline'} size={35} color={C.ink40} /><Text style={styles.emptyTitle}>{team.status === 'active' ? 'No team matches recorded' : 'Competition unlocks at four'}</Text><Text style={styles.footText}>{team.status === 'active' ? 'Accepted challenges will appear here ready to score.' : 'Invite or approve more players before entering team matches and rankings.'}</Text></View>}</>}
       {section === 'Activity' && <><View style={styles.sectionHead}><View><Text style={styles.eyebrow}>RECENT</Text><Text style={styles.h2}>Team activity</Text></View></View><View style={styles.empty}><Icon name="pulse-outline" size={35} color={C.ink40} /><Text style={styles.emptyTitle}>No team activity yet</Text><Text style={styles.footText}>Real membership and match updates will appear here.</Text></View></>}
     </ScrollView>
   );
@@ -1230,9 +1301,17 @@ export default function TeamScreen({ navigation, route }) {
   const [liveScoreMode, setLiveScoreMode] = useState('viewer');
   const [typingByTeam, setTypingByTeam] = useState({});
   const [liveMatches, setLiveMatches] = useState({});
-  const responseTimers = useRef({});
+  const [teamChallenges, setTeamChallenges] = useState({});
+  const [matchBusy, setMatchBusy] = useState(false);
+  const [scorerChallengeId, setScorerChallengeId] = useState(null);
+  const [scorerChangeMatchId, setScorerChangeMatchId] = useState(null);
   const typingExpiryTimers = useRef({});
   const chatChannelRef = useRef(null);
+  const appStateRef = useRef(AppState.currentState);
+  useEffect(() => {
+    const subscription = AppState.addEventListener('change', (nextState) => { appStateRef.current = nextState; });
+    return () => subscription.remove();
+  }, []);
   const [creating, setCreating] = useState(false);
   const [editingTeam, setEditingTeam] = useState(null);
   const [invitingTeam, setInvitingTeam] = useState(null);
@@ -1262,10 +1341,72 @@ export default function TeamScreen({ navigation, route }) {
   const [locationOpen, setLocationOpen] = useState(false);
   const [messages, setMessages] = useState({});
   const [messagePagination, setMessagePagination] = useState({});
+  const teamDripIndex = useRef(0);
+  useEffect(() => {
+    if (!DEMO_MODE || chatTeam?.id !== DEMO_TEAM_ID) return undefined;
+    const timer = setInterval(() => {
+      const next = DEMO_TEAM_MESSAGE_DRIP[teamDripIndex.current % DEMO_TEAM_MESSAGE_DRIP.length];
+      teamDripIndex.current += 1;
+      const row = { ...next, id: `${next.id}-${Date.now()}`, created_at: new Date().toISOString() };
+      const message = normalizeTeamMessage(row, user?.id);
+      setMessages((current) => ({ ...current, [DEMO_TEAM_ID]: [...(current[DEMO_TEAM_ID] || []), message] }));
+    }, 4500);
+    return () => clearInterval(timer);
+  }, [chatTeam?.id]);
   const [messageReadStates, setMessageReadStates] = useState({});
   const [conversationSummaries, setConversationSummaries] = useState(() => initialSnapshot?.conversationSummaries || {});
   const [directConversations, setDirectConversations] = useState([]);
   const handledOpenChatToken = useRef(null);
+  const chatOpenRequestRef = useRef(0);
+
+  const resetTeamNavigation = useCallback(() => {
+    chatOpenRequestRef.current += 1;
+    const activeChat = chatChannelRef.current;
+    if (activeChat && user?.id) {
+      activeChat.channel.send({
+        type: 'broadcast',
+        event: 'typing',
+        payload: {
+          userId: user.id,
+          name: user.name || 'Someone',
+          avatar: user.picture || null,
+          isTyping: false,
+        },
+      }).catch(() => {});
+    }
+
+    createSlide.stopAnimation();
+    createSlide.setValue(SCREEN_HEIGHT);
+    stopScoreAnnouncement();
+    setSelected(null);
+    setJoinTeam(null);
+    setHubTeam(null);
+    setChatTeam(null);
+    setChatInfoTeam(null);
+    setChatSafetyTeam(null);
+    setLiveScoreTeam(null);
+    setEditingTeam(null);
+    setInvitingTeam(null);
+    setCreating(false);
+    setLocationOpen(false);
+    setOpeningPinnedMessageId(null);
+    setFocusMessageId(null);
+    setScorerChallengeId(null);
+    setScorerChangeMatchId(null);
+    setChatSafetyBusy(false);
+  }, [createSlide, user?.id, user?.name, user?.picture]);
+
+  useEffect(() => {
+    const unsubscribeBlur = navigation.addListener('blur', resetTeamNavigation);
+    const unsubscribeTabPress = navigation.addListener('tabPress', () => {
+      if (navigation.isFocused()) resetTeamNavigation();
+    });
+    return () => {
+      unsubscribeBlur();
+      unsubscribeTabPress();
+    };
+  }, [navigation, resetTeamNavigation]);
+
   useEffect(() => {
     if (!user?.id) {
       setChatSafetyStatus(null);
@@ -1493,7 +1634,8 @@ export default function TeamScreen({ navigation, route }) {
         if (!row || row.team_id !== teamId) return;
         const message = normalizeTeamMessage(row, user?.id);
         setMessages((current) => ({ ...current, [teamId]: upsertTeamMessage(current[teamId] || [], message) }));
-        if (markRead && row.sender_id !== user?.id) markTeamConversationRead(teamId).catch(() => {});
+        const isActivelyViewing = navigation.isFocused() && appStateRef.current === 'active';
+        if (markRead && row.sender_id !== user?.id && isActivelyViewing) markTeamConversationRead(teamId).catch(() => {});
       }).catch(() => {});
     };
     const refreshReads = () => listTeamMessageReadStates(teamId).then((reads) => setMessageReadStates((current) => ({ ...current, [teamId]: reads }))).catch(() => {});
@@ -1555,6 +1697,21 @@ export default function TeamScreen({ navigation, route }) {
       supabase.removeChannel(channel);
     };
   }, [chatInfoTeam?.id, chatTeam?.id, refreshChatInfo, user?.id]);
+  useEffect(() => {
+    const teamId = hubTeam?.id || chatTeam?.id;
+    if (!teamId) return;
+    loadTeamMatchState(teamId);
+  }, [hubTeam?.id, chatTeam?.id]);
+  useEffect(() => {
+    const activeTeamId = liveScoreTeam?.id || hubTeam?.id || chatTeam?.id;
+    const matchId = liveMatches[activeTeamId]?.id;
+    if (!activeTeamId || !matchId || !supabase) return undefined;
+    const channel = supabase.channel(`team-match-${matchId}`)
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'team_matches', filter: `id=eq.${matchId}` }, () => loadTeamMatchState(activeTeamId))
+      .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'team_match_score_events', filter: `match_id=eq.${matchId}` }, () => loadTeamMatchState(activeTeamId))
+      .subscribe();
+    return () => { supabase.removeChannel(channel); };
+  }, [liveScoreTeam?.id, hubTeam?.id, chatTeam?.id, liveMatches[liveScoreTeam?.id || hubTeam?.id || chatTeam?.id]?.id]);
   const broadcastTeamTyping = useCallback((teamId, isTyping) => {
     const active = chatChannelRef.current;
     if (!active || active.teamId !== teamId || !user?.id) return;
@@ -1585,18 +1742,23 @@ export default function TeamScreen({ navigation, route }) {
   }, []);
   const openTeamChat = useCallback(async (team) => {
     if (!team) return;
+    const requestId = chatOpenRequestRef.current + 1;
+    chatOpenRequestRef.current = requestId;
     setChatSafetyBusy(true);
     try {
       const status = await getChatSafetyStatus();
+      if (requestId !== chatOpenRequestRef.current || !navigation.isFocused()) return;
       setChatSafetyStatus(status);
       if (status.eligible) enterTeamChat(team);
       else setChatSafetyTeam(team);
     } catch (error) {
-      Alert.alert('Chat safety unavailable', error.message || 'Peakle could not verify chat access.');
+      if (requestId === chatOpenRequestRef.current && navigation.isFocused()) {
+        Alert.alert('Chat safety unavailable', error.message || 'Peakle could not verify chat access.');
+      }
     } finally {
-      setChatSafetyBusy(false);
+      if (requestId === chatOpenRequestRef.current) setChatSafetyBusy(false);
     }
-  }, [enterTeamChat]);
+  }, [enterTeamChat, navigation]);
   useEffect(() => {
     const token = route?.params?.openChatToken;
     const teamId = route?.params?.openChatTeamId;
@@ -1609,17 +1771,23 @@ export default function TeamScreen({ navigation, route }) {
   }, [joined, navigation, openTeamChat, route?.params?.openChatTeamId, route?.params?.openChatToken]);
   const confirmChatSafety = useCallback(async (isAdult) => {
     if (!chatSafetyTeam || chatSafetyBusy) return;
+    const team = chatSafetyTeam;
+    const requestId = chatOpenRequestRef.current + 1;
+    chatOpenRequestRef.current = requestId;
     setChatSafetyBusy(true);
     try {
       const status = await acknowledgeChatSafety(isAdult);
+      if (requestId !== chatOpenRequestRef.current || !navigation.isFocused()) return;
       setChatSafetyStatus(status);
-      if (status.eligible) enterTeamChat(chatSafetyTeam);
+      if (status.eligible) enterTeamChat(team);
     } catch (error) {
-      Alert.alert('Chat preference not saved', error.message || 'Please try again.');
+      if (requestId === chatOpenRequestRef.current && navigation.isFocused()) {
+        Alert.alert('Chat preference not saved', error.message || 'Please try again.');
+      }
     } finally {
-      setChatSafetyBusy(false);
+      if (requestId === chatOpenRequestRef.current) setChatSafetyBusy(false);
     }
-  }, [chatSafetyBusy, chatSafetyTeam, enterTeamChat]);
+  }, [chatSafetyBusy, chatSafetyTeam, enterTeamChat, navigation]);
   useEffect(() => {
     if (!chatTeam?.id) return undefined;
     let active = true;
@@ -1658,7 +1826,6 @@ export default function TeamScreen({ navigation, route }) {
   };
   useEffect(() => {
     return () => {
-      Object.values(responseTimers.current).forEach(clearTimeout);
       Object.values(typingExpiryTimers.current).forEach(clearTimeout);
     };
   }, []);
@@ -1869,10 +2036,11 @@ export default function TeamScreen({ navigation, route }) {
       }
 
       if (!loaded.some((item) => item.id === message.id)) {
-        Alert.alert('Message unavailable', 'This pinned message may have been deleted or is no longer visible to you.');
+        if (navigation.isFocused()) Alert.alert('Message unavailable', 'This pinned message may have been deleted or is no longer visible to you.');
         return;
       }
 
+      if (!navigation.isFocused()) return;
       setMessages((current) => {
         const byId = new Map([...(current[teamId] || []), ...loaded].map((item) => [item.id, item]));
         return { ...current, [teamId]: [...byId.values()].sort((a, b) => new Date(a.createdAt) - new Date(b.createdAt)) };
@@ -1882,7 +2050,7 @@ export default function TeamScreen({ navigation, route }) {
       setChatTeam(team);
       setChatInfoTeam(null);
     } catch (error) {
-      Alert.alert('Message unavailable', error.message);
+      if (navigation.isFocused()) Alert.alert('Message unavailable', error.message);
     } finally {
       setOpeningPinnedMessageId(null);
     }
@@ -1924,42 +2092,136 @@ export default function TeamScreen({ navigation, route }) {
       Alert.alert(`${type === 'video' ? 'Video' : 'Photo'} not sent`, error.message);
     }
   };
-  const advanceServe = (match) => {
-    if (match.serviceNumber === 1) {
-      return { ...match, serviceNumber: 2, servingPlayerIndex: match.servingPlayerIndex === 0 ? 1 : 0 };
+  const toClientTeamMatch = (payload) => {
+    if (!payload) return null;
+    const home = payload.home_team || {};
+    const away = payload.away_team || {};
+    return {
+      id: payload.id,
+      challengeId: payload.challenge_id,
+      home: home.name || 'Home team',
+      away: away.name || 'Away team',
+      homeTag: (home.tag || 'HME').toUpperCase(),
+      awayTag: (away.tag || 'AWY').toUpperCase(),
+      venue: payload.venue_name || 'Venue to be confirmed',
+      game: payload.game,
+      homeScore: payload.home_score,
+      awayScore: payload.away_score,
+      completedGames: (payload.completed_games || []).map((entry) => ({ home: entry.home, away: entry.away })),
+      servingTeam: payload.server_side === 1 ? 'away' : 'home',
+      servingPlayerIndex: payload.serving_position || 0,
+      serviceNumber: payload.service_number,
+      scorerId: payload.scorer_id,
+      scorer: payload.scorer_name,
+      canScore: Boolean(payload.can_score),
+      canAssignScorer: Boolean(payload.can_assign_scorer),
+      canUndo: false,
+      status: payload.status === 'completed' ? 'COMPLETE' : 'LIVE',
+      players: `${(payload.match_format || 'doubles').replace(/^\w/, (letter) => letter.toUpperCase())} match`,
+      lastPlay: 'Match live. Waiting for the first rally.',
+    };
+  };
+  const applyRallyEvent = (match, event) => {
+    if (!match || !event) return match;
+    const servingTeam = event.server_side === 1 ? 'away' : 'home';
+    const winnerName = event.winning_side === 1 ? match.away : match.home;
+    const lastPlay = event.action === 'point'
+      ? `${winnerName} wins a point.`
+      : event.action === 'undo'
+        ? `Last rally undone. Score corrected to ${event.home_score}–${event.away_score}.`
+        : `${winnerName} won the rally. ${servingTeam === 'home' ? match.home : match.away} now has the serve.`;
+    return {
+      ...match,
+      homeScore: event.home_score,
+      awayScore: event.away_score,
+      servingTeam,
+      servingPlayerIndex: event.serving_position || 0,
+      serviceNumber: event.service_number,
+      game: event.game || match.game,
+      canUndo: Boolean(event.can_undo),
+      lastPlay,
+    };
+  };
+  const loadTeamMatchState = async (teamId) => {
+    try {
+      const payload = await getTeamMatch(teamId);
+      const mapped = toClientTeamMatch(payload);
+      setLiveMatches((current) => ({ ...current, [teamId]: mapped }));
+      if (!mapped) {
+        const challenges = await getAcceptedTeamChallenges(teamId).catch(() => []);
+        setTeamChallenges((current) => ({ ...current, [teamId]: challenges }));
+      }
+    } catch (error) {
+      console.warn('Team match state could not be loaded:', error.message);
     }
-    return { ...match, servingTeam: match.servingTeam === 'home' ? 'away' : 'home', serviceNumber: 1, servingPlayerIndex: 0 };
   };
-  const switchMatchServe = (teamId) => {
-    if (liveScoreMode !== 'scorer' || liveMatches[teamId]?.scorerId !== user?.id) return;
-    setLiveMatches((current) => {
-      const match = current[teamId];
-      if (!match) return current;
-      const updated = advanceServe(match);
-      return { ...current, [teamId]: { ...updated, lastPlay: `Serve switched. ${servingPlayer(updated)} is now serving for ${servingTeamName(updated)}.` } };
-    });
+  const startMatchForChallenge = async (teamId, challengeId, scorerId = user?.id) => {
+    if (matchBusy) return;
+    setMatchBusy(true);
+    try {
+      const payload = await startTeamMatch(challengeId, scorerId);
+      setLiveMatches((current) => ({ ...current, [teamId]: toClientTeamMatch(payload) }));
+      setTeamChallenges((current) => ({ ...current, [teamId]: (current[teamId] || []).filter((item) => item.id !== challengeId) }));
+      setScorerChallengeId(null);
+    } catch (error) {
+      Alert.alert('Match could not be started', error.message || 'Try again.');
+    } finally { setMatchBusy(false); }
   };
-  const recordRally = (teamId, winner) => {
-    if (liveScoreMode !== 'scorer' || liveMatches[teamId]?.scorerId !== user?.id) return;
-    setLiveMatches((current) => {
-      const match = current[teamId];
-      if (!match || match.status !== 'LIVE') return current;
-      if (winner !== match.servingTeam) {
-        const updated = advanceServe(match);
-        const winnerName = winner === 'home' ? match.home : match.away;
-        return { ...current, [teamId]: { ...updated, lastPlay: `${winnerName} won the rally. ${servingPlayer(updated)} now has the serve.` } };
-      }
-      let homeScore = match.homeScore + (winner === 'home' ? 1 : 0);
-      let awayScore = match.awayScore + (winner === 'away' ? 1 : 0);
-      let game = match.game;
-      let updated = { ...match, homeScore, awayScore, lastPlay: `${servingPlayer(match)} wins a point for ${servingTeamName(match)}.` };
-      if ((homeScore >= 11 || awayScore >= 11) && Math.abs(homeScore - awayScore) >= 2) {
-        const gameWinner = winner === 'home' ? match.home : match.away;
-        game += 1;
-        updated = { ...updated, completedGames: [...(match.completedGames || []), { home: homeScore, away: awayScore }], homeScore: 0, awayScore: 0, game, servingTeam: winner === 'home' ? 'away' : 'home', servingPlayerIndex: 0, serviceNumber: 2, lastPlay: `${gameWinner} won Game ${game - 1}. Game ${game} is ready to start.` };
-      }
-      return { ...current, [teamId]: updated };
-    });
+  const changeTeamMatchScorer = async (teamId, matchId, scorerId) => {
+    if (matchBusy) return;
+    setMatchBusy(true);
+    try {
+      const payload = await handoffTeamMatchScorer(matchId, scorerId);
+      setLiveMatches((current) => ({ ...current, [teamId]: toClientTeamMatch(payload) }));
+      setScorerChangeMatchId(null);
+    } catch (error) {
+      Alert.alert('Scorer could not be changed', error.message || 'Try again.');
+    } finally { setMatchBusy(false); }
+  };
+  const recordRally = async (teamId, winner) => {
+    const match = liveMatches[teamId];
+    if (!match?.canScore || matchBusy) return;
+    setMatchBusy(true);
+    try {
+      const event = await recordTeamMatchRally(match.id, winner === 'home' ? 0 : 1);
+      setLiveMatches((current) => ({ ...current, [teamId]: applyRallyEvent(current[teamId], event) }));
+    } catch (error) {
+      Alert.alert('Rally not recorded', error.message || 'Try again.');
+    } finally { setMatchBusy(false); }
+  };
+  const undoRally = async (teamId) => {
+    const match = liveMatches[teamId];
+    if (!match?.canScore || !match?.canUndo || matchBusy) return;
+    setMatchBusy(true);
+    try {
+      const event = await undoTeamMatchRally(match.id);
+      setLiveMatches((current) => ({ ...current, [teamId]: applyRallyEvent(current[teamId], event) }));
+    } catch (error) {
+      Alert.alert('Could not undo', error.message || 'Try again.');
+    } finally { setMatchBusy(false); }
+  };
+  const finishGame = async (teamId) => {
+    const match = liveMatches[teamId];
+    if (!match?.canScore || matchBusy) return;
+    setMatchBusy(true);
+    try {
+      const payload = await completeTeamMatchGame(match.id, match.homeScore, match.awayScore);
+      setLiveMatches((current) => ({ ...current, [teamId]: toClientTeamMatch(payload) }));
+    } catch (error) {
+      Alert.alert('Game could not be recorded', error.message || 'Try again.');
+    } finally { setMatchBusy(false); }
+  };
+  const finishMatch = async (teamId) => {
+    const match = liveMatches[teamId];
+    if (!match?.canScore || matchBusy) return;
+    setMatchBusy(true);
+    try {
+      await completeTeamMatch(match.id);
+      setLiveMatches((current) => { const next = { ...current }; delete next[teamId]; return next; });
+      setLiveScoreTeam(null);
+    } catch (error) {
+      Alert.alert('Match could not be finished', error.message || 'Try again.');
+    } finally { setMatchBusy(false); }
   };
   const replaceTeam = (updated) => {
     setJoined((current) => current.map((team) => team.id === updated.id ? updated : team));
@@ -2074,18 +2336,31 @@ export default function TeamScreen({ navigation, route }) {
   };
   if (editingTeam) return <SafeAreaView style={styles.safe}><StatusBar style={isDark ? 'light' : 'dark'} backgroundColor={C.paper} /><TeamForm team={editingTeam} onBack={() => { setEditingTeam(null); setHubTeam(editingTeam); }} onSave={saveTeam} /></SafeAreaView>;
   if (invitingTeam) return <SafeAreaView style={styles.safe}><StatusBar style={isDark ? 'light' : 'dark'} backgroundColor={C.paper} /><PlayerInviteScreen team={invitingTeam} onBack={() => { setInvitingTeam(null); setHubTeam(invitingTeam); }} /></SafeAreaView>;
-  if (liveScoreTeam) return <SafeAreaView style={styles.safe}><StatusBar style={isDark ? 'light' : 'dark'} backgroundColor={C.paper} /><LiveScore team={liveScoreTeam} match={liveMatches[liveScoreTeam.id]} scoringMode={liveScoreMode === 'scorer'} currentUserId={user?.id} onRally={(winner) => recordRally(liveScoreTeam.id, winner)} onSwitchServe={() => switchMatchServe(liveScoreTeam.id)} onBack={() => { setLiveScoreTeam(null); setLiveScoreMode('viewer'); }} /></SafeAreaView>;
+  if (liveScoreTeam) return <SafeAreaView style={styles.safe}><StatusBar style={isDark ? 'light' : 'dark'} backgroundColor={C.paper} /><LiveScore team={liveScoreTeam} match={liveMatches[liveScoreTeam.id]} scoringMode={liveScoreMode === 'scorer'} busy={matchBusy} currentUserId={user?.id} onRally={(winner) => recordRally(liveScoreTeam.id, winner)} onUndo={() => undoRally(liveScoreTeam.id)} onFinishGame={() => finishGame(liveScoreTeam.id)} onFinishMatch={() => finishMatch(liveScoreTeam.id)} onChangeScorer={() => setScorerChangeMatchId(liveMatches[liveScoreTeam.id]?.id)} onBack={() => { setScorerChangeMatchId(null); setLiveScoreTeam(null); setLiveScoreMode('viewer'); }} /><TeamScorerPicker visible={Boolean(scorerChangeMatchId)} team={liveScoreTeam} currentUserId={user?.id} selectedId={liveMatches[liveScoreTeam.id]?.scorerId} busy={matchBusy} changing onClose={() => setScorerChangeMatchId(null)} onSelect={(scorerId) => changeTeamMatchScorer(liveScoreTeam.id, scorerChangeMatchId, scorerId)} /></SafeAreaView>;
   if (chatSafetyTeam) return <SafeAreaView style={styles.safe}><StatusBar style={isDark ? 'light' : 'dark'} backgroundColor={C.paper} /><ChatSafetyScreen team={chatSafetyTeam} status={chatSafetyStatus} busy={chatSafetyBusy} onConfirm={confirmChatSafety} onBack={() => setChatSafetyTeam(null)} /></SafeAreaView>;
   if (chatInfoTeam) return <SafeAreaView style={styles.safe}><StatusBar style={isDark ? 'light' : 'dark'} backgroundColor={C.paper} /><TeamChatInfo team={chatInfoTeam} currentUserId={user?.id} pinnedMessages={chatInfo.pinned} sharedMedia={chatInfo.media} blockedUsers={chatInfo.blocked} loading={chatInfo.loading} openingMessageId={openingPinnedMessageId} onViewMessage={jumpToPinnedMessage} onPin={pinMessage} onUnblock={unblockPlayer} onChangeMemberRole={changeMemberRole} onRemoveMember={removeMember} onMessageMember={(member) => navigation.navigate('DirectChat', { player: { id: member.id, name: member.name, avatar: member.avatar }, ownerTab: 'Team' })} onBack={() => setChatInfoTeam(null)} onViewTeam={() => { setSelected(chatInfoTeam); setChatInfoTeam(null); setChatTeam(null); }} /></SafeAreaView>;
   if (chatTeam) return <SafeAreaView style={styles.safe}><StatusBar style={isDark ? 'light' : 'dark'} backgroundColor={C.paper} /><TeamChat team={chatTeam} messages={messages[chatTeam.id] || []} readStates={messageReadStates[chatTeam.id] || []} currentUser={user} typing={Object.values(typingByTeam[chatTeam.id] || {})} liveMatch={liveMatches[chatTeam.id]} hasEarlier={messagePagination[chatTeam.id]?.hasMore} loadingEarlier={messagePagination[chatTeam.id]?.loading} focusMessageId={focusMessageId} onFocusHandled={() => setFocusMessageId(null)} onLoadEarlier={loadEarlierMessages} onWatchLive={() => { setLiveScoreMode('viewer'); setLiveScoreTeam(chatTeam); }} onSend={sendMessage} onEdit={editMessage} onDelete={deleteMessageForMe} onUnsend={unsendMessage} onReact={reactToMessage} onPin={pinMessage} onReport={reportMessage} onBlock={blockMessageSender} onModerate={moderateMessage} onTypingChange={changeChatTyping} onAttach={attachMedia} onJumpToMessage={jumpToPinnedMessage} onInfo={() => { changeChatTyping(false); setChatInfoTeam(chatTeam); }} onBack={() => { changeChatTyping(false); setFocusMessageId(null); setSelected(chatTeam); setChatTeam(null); }} /></SafeAreaView>;
   if (joinTeam) return <SafeAreaView style={styles.safe}><StatusBar style={isDark ? 'light' : 'dark'} backgroundColor={C.paper} /><JoinRequestScreen team={joinTeam} user={user} submitting={requesting.includes(joinTeam.id)} onBack={() => setJoinTeam(null)} onSubmit={requestJoin} /></SafeAreaView>;
-  if (hubTeam) return <SafeAreaView style={styles.safe}><StatusBar style={isDark ? 'light' : 'dark'} backgroundColor={C.paper} /><TeamHub team={hubTeam} requests={joinRequests[hubTeam.id] || []} liveMatch={liveMatches[hubTeam.id]} onRefreshRequests={() => refreshJoinRequests([hubTeam.id]).catch(() => {})} onScoreMatch={() => { if (liveMatches[hubTeam.id]?.scorerId === user?.id) { setLiveScoreMode('scorer'); setLiveScoreTeam(hubTeam); } }} onBack={() => { setHubTeam(null); setSelected(hubTeam); }} onUpdateImage={updateTeamImage} onEdit={() => { if (canEditTeam(hubTeam)) { setEditingTeam(hubTeam); setHubTeam(null); } }} onInvite={() => { setInvitingTeam(hubTeam); setHubTeam(null); }} onChallenges={() => navigation.navigate('Pickleball', { openTab: 'Compete', ownerTab: 'Team' })} onAccept={(request) => acceptRequest(hubTeam, request)} onDecline={(requestId) => declineRequest(hubTeam, requestId)} /></SafeAreaView>;
+  if (hubTeam) return <SafeAreaView style={styles.safe}><StatusBar style={isDark ? 'light' : 'dark'} backgroundColor={C.paper} /><TeamHub team={hubTeam} requests={joinRequests[hubTeam.id] || []} liveMatch={liveMatches[hubTeam.id]} nextChallenges={teamChallenges[hubTeam.id] || []} matchBusy={matchBusy} onOpenMatch={() => { setLiveScoreMode(liveMatches[hubTeam.id]?.canScore ? 'scorer' : 'viewer'); setLiveScoreTeam(hubTeam); }} onStartMatch={(challengeId) => setScorerChallengeId(challengeId)} onRefreshRequests={() => refreshJoinRequests([hubTeam.id]).catch(() => {})} onBack={() => { setScorerChallengeId(null); setHubTeam(null); setSelected(hubTeam); }} onUpdateImage={updateTeamImage} onEdit={() => { if (canEditTeam(hubTeam)) { setEditingTeam(hubTeam); setHubTeam(null); } }} onInvite={() => { setInvitingTeam(hubTeam); setHubTeam(null); }} onChallenges={() => navigation.navigate('Pickleball', { openTab: 'Compete', ownerTab: 'Team' })} onAccept={(request) => acceptRequest(hubTeam, request)} onDecline={(requestId) => declineRequest(hubTeam, requestId)} /><TeamScorerPicker visible={Boolean(scorerChallengeId)} team={hubTeam} currentUserId={user?.id} busy={matchBusy} onClose={() => setScorerChallengeId(null)} onSelect={(scorerId) => startMatchForChallenge(hubTeam.id, scorerChallengeId, scorerId)} /></SafeAreaView>;
   if (selected) return <SafeAreaView style={styles.safe}><StatusBar style={isDark ? 'light' : 'dark'} backgroundColor={C.paper} /><TeamDetail team={selected} joined={joined.some((team) => team.id === selected.id)} requested={requested.includes(selected.id)} requesting={requesting.includes(selected.id)} cancelling={cancellingRequests.includes(selected.id)} onBack={() => setSelected(null)} onJoin={() => openJoinRequest(selected)} onCancel={() => cancelJoinRequest(selected)} onShare={() => shareTeam(selected)} onChat={() => openTeamChat(selected)} onViewHub={() => { setHubTeam(selected); setSelected(null); }} onUpdateImage={updateTeamImage} /></SafeAreaView>;
   return (
     <SafeAreaView style={styles.safe}>
       <StatusBar style={isDark ? 'light' : 'dark'} backgroundColor={C.paper} />
       <ScrollView contentContainerStyle={styles.content} showsVerticalScrollIndicator={false}>
-        <View style={styles.header}><View><Text style={styles.eyebrow}>FIND YOUR PEOPLE</Text><Text style={styles.h1}>Teams</Text></View><View style={styles.headerActions}><Pressable accessibilityLabel="Open messages" onPress={() => navigation.navigate('Inbox')} style={styles.inboxButton}><Icon name="chatbubbles-outline" size={19} color={C.teal} />{directConversations.reduce((total, item) => total + Number(item.unreadCount || 0), 0) > 0 && <View style={styles.inboxBadge}><Text style={styles.inboxBadgeText}>{Math.min(99, directConversations.reduce((total, item) => total + Number(item.unreadCount || 0), 0))}</Text></View>}</Pressable><Pressable accessibilityLabel="Create team" onPress={openCreate} style={styles.createButton}><Icon name="add" size={20} color="#000000" /></Pressable></View></View><KitchenLine />
+        <View style={styles.header}>
+          <View style={styles.headerCopy}>
+            <Text numberOfLines={1} style={styles.eyebrow}>FIND YOUR PEOPLE</Text>
+            <Text numberOfLines={1} style={styles.h1}>Teams</Text>
+          </View>
+          <View style={styles.headerActions}>
+            <Pressable accessibilityLabel="Open messages" onPress={() => navigation.navigate('Inbox')} style={styles.inboxButton}>
+              <Icon name="chatbubbles-outline" size={18} color={C.teal} />
+              {directConversations.reduce((total, item) => total + Number(item.unreadCount || 0), 0) > 0 && <View style={styles.inboxBadge}><Text style={styles.inboxBadgeText}>{Math.min(99, directConversations.reduce((total, item) => total + Number(item.unreadCount || 0), 0))}</Text></View>}
+            </Pressable>
+            <Pressable accessibilityLabel="Create team" onPress={openCreate} style={styles.createButton}><Icon name="add" size={20} color="#000000" /></Pressable>
+          </View>
+        </View>
+        <KitchenLine style={styles.headerLine} />
         {!tab ? <View style={styles.teamLoading}><ActivityIndicator color={C.teal} /><Text style={styles.footText}>Loading your teams…</Text></View> : <View style={styles.tabs}>{['Joined', 'Discover'].map((item) => <Pressable key={item} onPress={() => setTab(item)} style={[styles.tab, tab === item && styles.tabActive]}><Text style={[styles.tabText, tab === item && styles.tabTextActive]}>{item}</Text>{item === 'Joined' && <View style={[styles.count, tab === item && styles.countActive]}><Text style={[styles.countText, tab === item && styles.countTextActive]}>{joined.length}</Text></View>}</Pressable>)}</View>}
         {tab === 'Discover' && <><View style={styles.search}><Icon name="search-outline" color={C.ink40} /><TextInput value={query} onChangeText={setQuery} placeholder="Search teams, area, or level" placeholderTextColor={C.ink40} style={styles.searchInput} /></View><ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.filters}>{['For you', 'Nearby', 'My level', 'Open spots'].map((item) => <Pressable key={item} onPress={() => setFilter(item)} style={[styles.filter, filter === item && styles.filterActive]}><Text style={filter === item ? styles.filterActiveText : styles.filterText}>{item}</Text></Pressable>)}</ScrollView><View style={styles.sectionHead}><View style={styles.discoverSectionCopy}><Text numberOfLines={1} style={styles.eyebrow}>NEAREST TO {userLocation.label.toUpperCase()}</Text><Text style={styles.h2}>{discoverTeams.length} teams to explore</Text></View><Pressable accessibilityLabel="Change team search location" onPress={() => setLocationOpen(true)} style={styles.discoveryLocationChange}><Icon name="location-outline" size={14} color={C.teal} /><Text style={styles.discoveryLocationChangeText}>Change</Text></Pressable></View>{discoverTeams.map((team) => <TeamCard key={team.id} team={team} requested={requested.includes(team.id)} requesting={requesting.includes(team.id)} cancelling={cancellingRequests.includes(team.id)} onJoin={() => openJoinRequest(team)} onCancel={() => cancelJoinRequest(team)} onOpen={() => setSelected(team)} />)}{!discoverTeams.length && <View style={styles.empty}><Icon name="people-outline" size={35} color={C.ink40} /><Text style={styles.emptyTitle}>No teams found</Text><Text style={styles.footText}>Try another filter or change your search location.</Text></View>}</>}
         {tab === 'Joined' && <><View style={styles.joinedIntro}><View style={styles.joinedIcon}><Icon name="chatbubbles" color={C.teal} /></View><View style={styles.joinedIntroCopy}><Text style={styles.joinedIntroTitle}>Your team conversations</Text><Text style={styles.footText}>Jump into chat, or open a team for its roster and matches.</Text></View></View>{invitations.length > 0 && <><View style={styles.sectionHead}><View><Text style={styles.eyebrow}>ACTION REQUIRED</Text><Text style={styles.h2}>Team invitations</Text></View><Text style={styles.sectionLink}>{invitations.length} pending</Text></View>{invitations.map((invitation) => <TeamInvitationCard key={invitation.id} invitation={invitation} onAccept={() => respondInvitation(invitation, true)} onDecline={() => respondInvitation(invitation, false)} />)}</>}<View style={styles.sectionHead}><View><Text style={styles.eyebrow}>TEAM INBOX</Text><Text style={styles.h2}>Your teams</Text></View></View>{joined.map((team) => <TeamCard key={team.id} team={team} joined summary={chatSafetyStatus?.eligible ? conversationSummaries[team.id] : undefined} onOpen={() => setSelected(team)} onChat={() => openTeamChat(team)} />)}<Pressable onPress={() => setTab('Discover')} style={styles.exploreButton}><Icon name="compass-outline" color={C.teal} /><View style={styles.exploreCopy}><Text style={styles.exploreTitle}>Find another team</Text><Text style={styles.footText}>Browse public teams with open spots.</Text></View><Icon name="arrow-forward" color={C.teal} /></Pressable></>}
@@ -2112,12 +2387,12 @@ export default function TeamScreen({ navigation, route }) {
 
 const shadow = Platform.select({ ios: { shadowColor: C.ink, shadowOpacity: .08, shadowRadius: 12, shadowOffset: { width: 0, height: 4 } }, android: { elevation: 3 } });
 const lightStyles = createMobileStyleSheet({
-  safe: { flex: 1, backgroundColor: C.paper }, content: { paddingHorizontal: 20, paddingTop: 22, paddingBottom: 40 }, header: { minHeight: 52, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }, headerActions: { flexDirection: 'row', alignItems: 'center', gap: 6 }, inboxButton: { width: 42, height: 42, alignItems: 'center', justifyContent: 'center', borderRadius: 13, borderWidth: 1, borderColor: C.line, backgroundColor: C.surface }, inboxBadge: { position: 'absolute', top: -4, right: -4, minWidth: 18, height: 18, paddingHorizontal: 4, alignItems: 'center', justifyContent: 'center', borderRadius: 9, backgroundColor: C.brick }, inboxBadgeText: { color: C.surface, fontSize: 7, fontWeight: '900' }, eyebrow: { color: C.ink40, fontSize: 10, lineHeight: 15, fontWeight: '800', letterSpacing: 1 }, h1: { color: C.ink, fontSize: 30, lineHeight: 36, fontWeight: '800', letterSpacing: -.8 }, h2: { color: C.ink, fontSize: 22, lineHeight: 28, fontWeight: '800', letterSpacing: -.5 }, createButton: { width: 42, minHeight: 42, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', borderRadius: 13, backgroundColor: C.optic }, createText: { color: '#000000', fontSize: 11, fontWeight: '800' }, kitchen: { height: 7, marginTop: 18, marginBottom: 22 }, solid: { height: 2, backgroundColor: C.ink }, dashed: { marginTop: 4, borderTopWidth: 1, borderStyle: 'dashed', borderColor: C.ink40 },
+  safe: { flex: 1, backgroundColor: C.paper }, content: { paddingHorizontal: 20, paddingTop: 18, paddingBottom: 126 }, header: { minHeight: 44, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 12 }, headerCopy: { flex: 1, minWidth: 0 }, headerActions: { height: 40, flexDirection: 'row', alignItems: 'center', flexShrink: 0, gap: 6 }, inboxButton: { width: 40, height: 40, alignItems: 'center', justifyContent: 'center', borderRadius: 13, borderWidth: 1, borderColor: C.line, backgroundColor: C.surface }, inboxBadge: { position: 'absolute', top: -4, right: -4, minWidth: 18, height: 18, paddingHorizontal: 4, alignItems: 'center', justifyContent: 'center', borderRadius: 9, backgroundColor: C.brick }, inboxBadgeText: { color: C.surface, fontSize: 7, fontWeight: '900' }, eyebrow: { color: C.ink40, fontSize: 10, lineHeight: 15, fontWeight: '800', letterSpacing: 1 }, h1: { color: C.ink, fontSize: 26, lineHeight: 31, fontWeight: '900', letterSpacing: -.55 }, h2: { color: C.ink, fontSize: 22, lineHeight: 28, fontWeight: '800', letterSpacing: -.5 }, createButton: { width: 40, height: 40, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', borderRadius: 13, backgroundColor: C.optic }, createText: { color: '#000000', fontSize: 11, fontWeight: '800' }, kitchen: { height: 7, marginTop: 18, marginBottom: 22 }, headerLine: { marginTop: 10, marginBottom: 16 }, solid: { height: 2, backgroundColor: C.ink }, dashed: { marginTop: 4, borderTopWidth: 1, borderStyle: 'dashed', borderColor: C.ink40 },
   competitionBanner: { minHeight: 72, marginBottom: 12, paddingHorizontal: 12, flexDirection: 'row', alignItems: 'center', gap: 10, borderRadius: 17, borderWidth: 1, borderColor: C.line, backgroundColor: C.surface }, teamChallengeEntry: { minHeight: 76, marginBottom: 11, paddingHorizontal: 12, flexDirection: 'row', alignItems: 'center', gap: 10, borderRadius: 17, borderWidth: 1, borderColor: '#BFD8D2', backgroundColor: C.surface }, competitionBannerIcon: { width: 42, height: 42, alignItems: 'center', justifyContent: 'center', borderRadius: 13, backgroundColor: '#E5F0ED' }, competitionBannerTitle: { color: C.ink, fontSize: 10, fontWeight: '900' }, competitionBannerMeta: { marginTop: 3, color: C.ink40, fontSize: 8 },
   tabs: { padding: 4, flexDirection: 'row', borderRadius: 13, backgroundColor: '#E5E9E3' }, tab: { flex: 1, minHeight: 42, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6, borderRadius: 10 }, tabActive: { backgroundColor: C.optic, ...shadow }, tabText: { color: C.ink40, fontSize: 12, fontWeight: '800' }, tabTextActive: { color: C.ink }, count: { minWidth: 18, height: 18, paddingHorizontal: 5, borderRadius: 9, alignItems: 'center', justifyContent: 'center', backgroundColor: C.line }, countActive: { backgroundColor: C.ink }, countText: { color: C.ink40, fontSize: 8, fontWeight: '800' }, countTextActive: { color: C.paper }, search: { height: 50, marginTop: 15, paddingHorizontal: 14, flexDirection: 'row', alignItems: 'center', gap: 8, borderRadius: 14, borderWidth: 1, borderColor: C.line, backgroundColor: C.surface }, searchInput: { flex: 1, color: C.ink, fontSize: 13 }, filters: { gap: 8, paddingVertical: 12 }, filter: { minHeight: 35, paddingHorizontal: 13, alignItems: 'center', justifyContent: 'center', borderRadius: 18, borderWidth: 1, borderColor: C.line, backgroundColor: C.surface }, filterActive: { borderColor: C.ink, backgroundColor: C.ink }, filterText: { color: C.ink70, fontSize: 10, fontWeight: '700' }, filterActiveText: { color: C.paper, fontSize: 10, fontWeight: '800' }, sectionHead: { marginTop: 9, marginBottom: 12, flexDirection: 'row', alignItems: 'flex-end', justifyContent: 'space-between' }, discoverSectionCopy: { flex: 1, minWidth: 0, paddingRight: 10 }, discoveryLocationChange: { minHeight: 34, paddingHorizontal: 10, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 4, borderRadius: 11, borderWidth: 1, borderColor: C.line, backgroundColor: C.surface }, discoveryLocationChangeText: { color: C.teal, fontSize: 9, fontWeight: '800' }, sectionLink: { color: C.teal, fontSize: 9, fontWeight: '700' },
-  teamCard: { marginBottom: 15, paddingBottom: 14, overflow: 'hidden', borderRadius: 24, borderBottomLeftRadius: 10, borderBottomRightRadius: 10, borderWidth: 1, borderColor: C.line, backgroundColor: C.surface, ...shadow }, teamCover: { position: 'relative', overflow: 'hidden', backgroundColor: C.teal }, coverScrim: { backgroundColor: 'rgba(5,18,17,.34)' }, coverCourt: { position: 'absolute', width: 130, height: 105, right: -24, bottom: -34, borderWidth: 1, borderColor: 'rgba(255,255,255,.16)', transform: [{ rotate: '-8deg' }] }, coverCourtLine: { position: 'absolute', left: 0, right: 0, top: '50%', height: 1, backgroundColor: 'rgba(255,255,255,.16)' }, coverCourtLineVertical: { top: 0, bottom: 0, left: '50%', width: 1, height: '100%' }, coverTop: { paddingHorizontal: 14, paddingTop: 13, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }, coverTag: { alignSelf: 'flex-start', paddingHorizontal: 8, paddingVertical: 5, borderRadius: 8, backgroundColor: 'rgba(8,24,22,.45)' }, coverTagText: { color: C.surface, fontSize: 8, fontWeight: '900', letterSpacing: 1 }, coverBadges: { flexDirection: 'row', alignItems: 'center', gap: 6 }, coverJoined: { paddingHorizontal: 7, paddingVertical: 5, flexDirection: 'row', alignItems: 'center', gap: 3, borderRadius: 8, backgroundColor: C.optic }, coverJoinedText: { color: '#0E2321', fontSize: 7, fontWeight: '900' }, coverPrivacy: { width: 27, height: 27, alignItems: 'center', justifyContent: 'center', borderRadius: 9, backgroundColor: 'rgba(8,24,22,.42)' }, coverBottom: { position: 'absolute', left: 14, right: 14, bottom: 13, flexDirection: 'row', alignItems: 'flex-end', gap: 8 }, coverCopy: { flex: 1, minWidth: 0 }, coverTitle: { color: C.surface, fontSize: 22, lineHeight: 27, fontWeight: '900', letterSpacing: -.5 }, coverLocation: { marginTop: 4, flexDirection: 'row', alignItems: 'center', gap: 3 }, coverLocationText: { flexShrink: 1, color: 'rgba(255,255,255,.82)', fontSize: 9 }, coverStatus: { paddingHorizontal: 7, paddingVertical: 5, borderRadius: 8, backgroundColor: 'rgba(182,71,46,.88)' }, coverStatusActive: { backgroundColor: 'rgba(28,107,102,.92)' }, coverStatusText: { color: C.surface, fontSize: 6, fontWeight: '900', letterSpacing: .4 }, teamHead: { flexDirection: 'row', alignItems: 'center', gap: 11 }, crest: { alignItems: 'center', justifyContent: 'center', overflow: 'hidden' }, crestFallback: { ...StyleSheet.absoluteFillObject, alignItems: 'center', justifyContent: 'center' }, crestTag: { position: 'absolute', top: 4, color: 'rgba(255,255,255,.68)', fontWeight: '900', letterSpacing: .5 }, crestEdit: { position: 'absolute', right: 3, top: 3, width: 21, height: 21, alignItems: 'center', justifyContent: 'center', borderRadius: 11, backgroundColor: C.optic }, teamCopy: { flex: 1 }, nameRow: { flexDirection: 'row', alignItems: 'center', gap: 6 }, teamName: { maxWidth: '70%', color: C.ink, fontSize: 16, fontWeight: '800' }, stats: { marginHorizontal: 14, paddingVertical: 12, flexDirection: 'row', alignItems: 'center', gap: 14, borderBottomWidth: 1, borderColor: C.line }, stat: { paddingRight: 14, borderRightWidth: 1, borderColor: C.line }, statValue: { color: C.ink, fontSize: 15, fontWeight: '800' }, statLabel: { marginTop: 2, color: C.ink40, fontSize: 7, fontWeight: '800', letterSpacing: .7 }, level: { marginLeft: 'auto', paddingHorizontal: 9, paddingVertical: 6, borderRadius: 7, backgroundColor: C.paper }, levelAdvanced: { backgroundColor: '#F7EAE6' }, levelText: { color: C.teal, fontSize: 8, fontWeight: '800' }, levelTextAdvanced: { color: C.brick }, footText: { color: C.ink40, fontSize: 9, lineHeight: 14 }, conversationRow: { minHeight: 57, marginHorizontal: 14, marginTop: 10, paddingHorizontal: 10, flexDirection: 'row', alignItems: 'center', gap: 9, borderRadius: 13, backgroundColor: '#E5F0ED' }, conversationIcon: { width: 34, height: 34, alignItems: 'center', justifyContent: 'center', borderRadius: 11, backgroundColor: C.surface }, conversationIconUnread: { backgroundColor: C.optic }, conversationCopy: { flex: 1, minWidth: 0 }, conversationText: { color: C.ink, fontSize: 10, fontWeight: '800' }, conversationMeta: { marginTop: 3, color: C.ink40, fontSize: 7, fontWeight: '700' }, unreadBadge: { minWidth: 24, height: 24, paddingHorizontal: 6, alignItems: 'center', justifyContent: 'center', borderRadius: 12, backgroundColor: C.brick }, unreadBadgeText: { color: C.surface, fontSize: 7, fontWeight: '900' }, joinButton: { minHeight: 42, marginHorizontal: 14, marginTop: 10, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 5, borderRadius: 11, backgroundColor: C.optic }, joinButtonText: { color: C.ink, fontSize: 11, fontWeight: '800' }, requestedButton: { borderWidth: 1, borderColor: '#BFD8D2', backgroundColor: '#E5F0ED' }, requestedText: { color: C.teal }, pressed: { opacity: .78, transform: [{ scale: .985 }] },
+  teamCard: { marginBottom: 15, paddingBottom: 14, overflow: 'hidden', borderRadius: 24, borderBottomLeftRadius: 10, borderBottomRightRadius: 10, borderWidth: 1, borderColor: C.line, backgroundColor: C.surface, ...shadow }, teamCover: { position: 'relative', overflow: 'hidden', backgroundColor: C.teal }, coverScrim: { backgroundColor: 'rgba(5,18,17,.34)' }, coverCourt: { position: 'absolute', width: 130, height: 105, right: -24, bottom: -34, borderWidth: 1, borderColor: 'rgba(255,255,255,.16)', transform: [{ rotate: '-8deg' }] }, coverCourtLine: { position: 'absolute', left: 0, right: 0, top: '50%', height: 1, backgroundColor: 'rgba(255,255,255,.16)' }, coverCourtLineVertical: { top: 0, bottom: 0, left: '50%', width: 1, height: '100%' }, coverTop: { paddingHorizontal: 14, paddingTop: 13, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }, coverTag: { alignSelf: 'flex-start', paddingHorizontal: 8, paddingVertical: 5, borderRadius: 8, backgroundColor: 'rgba(8,24,22,.45)' }, coverTagText: { color: C.surface, fontSize: 8, fontWeight: '900', letterSpacing: 1 }, coverBadges: { flexDirection: 'row', alignItems: 'center', gap: 6 }, coverJoined: { paddingHorizontal: 7, paddingVertical: 5, flexDirection: 'row', alignItems: 'center', gap: 3, borderRadius: 8, backgroundColor: C.optic }, coverJoinedText: { color: '#0E2321', fontSize: 7, fontWeight: '900' }, coverPrivacy: { width: 27, height: 27, alignItems: 'center', justifyContent: 'center', borderRadius: 9, backgroundColor: 'rgba(8,24,22,.42)' }, coverBottom: { position: 'absolute', left: 14, right: 14, bottom: 13, flexDirection: 'row', alignItems: 'flex-end', gap: 8 }, coverCopy: { flex: 1, minWidth: 0 }, coverTitle: { color: C.surface, fontSize: 22, lineHeight: 27, fontWeight: '900', letterSpacing: -.5 }, coverLocation: { marginTop: 4, flexDirection: 'row', alignItems: 'center', gap: 3 }, coverLocationText: { flexShrink: 1, color: 'rgba(255,255,255,.82)', fontSize: 9 }, coverStatus: { paddingHorizontal: 7, paddingVertical: 5, borderRadius: 8, backgroundColor: 'rgba(182,71,46,.88)' }, coverStatusActive: { backgroundColor: 'rgba(28,107,102,.92)' }, coverStatusText: { color: C.surface, fontSize: 6, fontWeight: '900', letterSpacing: .4 }, teamHead: { flexDirection: 'row', alignItems: 'center', gap: 11 }, crest: { alignItems: 'center', justifyContent: 'center', overflow: 'hidden' }, crestFallback: { ...StyleSheet.absoluteFillObject, alignItems: 'center', justifyContent: 'center' }, crestTag: { position: 'absolute', top: 4, color: 'rgba(255,255,255,.68)', fontWeight: '900', letterSpacing: .5 }, crestEdit: { position: 'absolute', right: 3, top: 3, width: 21, height: 21, alignItems: 'center', justifyContent: 'center', borderRadius: 11, backgroundColor: C.optic }, teamCopy: { flex: 1 }, nameRow: { flexDirection: 'row', alignItems: 'center', gap: 6 }, teamName: { maxWidth: '70%', color: C.ink, fontSize: 16, fontWeight: '800' }, stats: { marginHorizontal: 14, paddingVertical: 12, flexDirection: 'row', alignItems: 'center', gap: 14, borderBottomWidth: 1, borderColor: C.line }, stat: { paddingRight: 14, borderRightWidth: 1, borderColor: C.line }, statValue: { color: C.ink, fontSize: 15, fontWeight: '800' }, statLabel: { marginTop: 2, color: C.ink40, fontSize: 7, fontWeight: '800', letterSpacing: .7 }, level: { marginLeft: 'auto', paddingHorizontal: 9, paddingVertical: 6, borderRadius: 7, backgroundColor: C.paper }, levelAdvanced: { backgroundColor: '#F7EAE6' }, levelText: { color: C.teal, fontSize: 8, fontWeight: '800' }, levelTextAdvanced: { color: C.brick }, footText: { color: C.ink40, fontSize: 9, lineHeight: 14 }, conversationRow: { minHeight: 57, marginHorizontal: 14, marginTop: 10, paddingHorizontal: 10, flexDirection: 'row', alignItems: 'center', gap: 9, borderRadius: 13, backgroundColor: '#E5F0ED' }, conversationIcon: { width: 34, height: 34, alignItems: 'center', justifyContent: 'center', borderRadius: 11, backgroundColor: C.surface }, conversationIconUnread: { backgroundColor: C.optic }, conversationCopy: { flex: 1, minWidth: 0 }, conversationText: { color: C.ink, fontSize: 10, fontWeight: '800' }, conversationMeta: { marginTop: 3, color: C.ink40, fontSize: 7, fontWeight: '700' }, unreadBadge: { minWidth: 24, height: 24, paddingHorizontal: 6, alignItems: 'center', justifyContent: 'center', borderRadius: 12, backgroundColor: C.brick }, unreadBadgeText: { color: C.surface, fontSize: 7, fontWeight: '900' }, joinButton: { minHeight: 42, marginHorizontal: 14, marginTop: 10, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 5, borderRadius: 11, backgroundColor: C.optic }, joinButtonText: { color: '#0E2321', fontSize: 11, fontWeight: '800' }, requestedButton: { borderWidth: 1, borderColor: '#BFD8D2', backgroundColor: '#E5F0ED' }, requestedText: { color: C.teal }, pressed: { opacity: .78, transform: [{ scale: .985 }] },
   teamLoading: { minHeight: 180, alignItems: 'center', justifyContent: 'center', gap: 10 }, joinedIntro: { marginTop: 15, padding: 13, flexDirection: 'row', alignItems: 'center', gap: 10, borderRadius: 14, backgroundColor: '#E5F0ED' }, joinedIcon: { width: 42, height: 42, alignItems: 'center', justifyContent: 'center', borderRadius: 12, backgroundColor: C.surface }, joinedIntroCopy: { flex: 1 }, joinedIntroTitle: { color: C.ink, fontSize: 12, fontWeight: '800' }, exploreButton: { minHeight: 68, padding: 13, flexDirection: 'row', alignItems: 'center', gap: 10, borderRadius: 14, borderWidth: 1, borderColor: C.line, borderStyle: 'dashed' }, exploreCopy: { flex: 1 }, exploreTitle: { color: C.teal, fontSize: 12, fontWeight: '800' }, empty: { paddingVertical: 60, alignItems: 'center' }, emptyTitle: { marginTop: 10, marginBottom: 3, color: C.ink, fontSize: 17, fontWeight: '800' },
-  detailHeader: { flexDirection: 'row', alignItems: 'center', gap: 10 }, iconButton: { width: 44, height: 44, borderRadius: 22, borderWidth: 1, borderColor: C.line, alignItems: 'center', justifyContent: 'center', backgroundColor: C.surface }, detailHeaderCopy: { flex: 1 }, detailHeaderTitle: { color: C.ink, fontSize: 20, fontWeight: '800' }, detailCoverPressable: { overflow: 'hidden', borderRadius: 24, borderBottomLeftRadius: 10, borderBottomRightRadius: 10 }, detailCoverTop: { padding: 15, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }, detailCoverBottom: { position: 'absolute', left: 17, right: 17, bottom: 18 }, editCoverBadge: { paddingHorizontal: 8, paddingVertical: 6, flexDirection: 'row', alignItems: 'center', gap: 5, borderRadius: 9, backgroundColor: 'rgba(8,24,22,.5)' }, editCoverText: { color: C.surface, fontSize: 8, fontWeight: '800' }, heroTitle: { color: C.surface, fontSize: 28, lineHeight: 33, fontWeight: '900', letterSpacing: -.6 }, heroLocation: { marginTop: 7, flexDirection: 'row', alignItems: 'center', gap: 4 }, heroLocationText: { color: 'rgba(255,255,255,.78)', fontSize: 10 }, detailStats: { marginTop: 13, padding: 15, flexDirection: 'row', borderRadius: 14, borderWidth: 1, borderColor: C.line, backgroundColor: C.surface }, detailStat: { flex: 1, alignItems: 'center', borderRightWidth: 1, borderColor: C.line }, detailStatValue: { color: C.ink, fontSize: 22, fontWeight: '800' }, sectionLabel: { marginTop: 23, marginBottom: 8, color: C.ink, fontSize: 10, fontWeight: '800', letterSpacing: .9 }, about: { color: C.ink70, fontSize: 12, lineHeight: 19 }, requirement: { marginTop: 14, padding: 13, flexDirection: 'row', alignItems: 'center', gap: 9, borderRadius: 13, backgroundColor: '#E5F0ED' }, requirementCopy: { flex: 1 }, requirementTitle: { color: C.ink, fontSize: 11, fontWeight: '800' }, members: { flexDirection: 'row', marginBottom: 22 }, avatar: { width: 42, height: 42, borderRadius: 21, borderWidth: 2, borderColor: C.paper, alignItems: 'center', justifyContent: 'center' }, avatarOffset: { marginLeft: -9 }, avatarText: { color: C.surface, fontSize: 9, fontWeight: '800' }, primaryButton: { minHeight: 52, paddingHorizontal: 17, flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 7, borderRadius: 14, backgroundColor: C.optic }, primaryText: { color: C.ink, fontSize: 12, fontWeight: '800' }, requestedLarge: { backgroundColor: '#D9E8E3' }, memberActions: { flexDirection: 'row', gap: 9 }, messageButton: { minHeight: 52, paddingHorizontal: 15, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6, borderRadius: 14, borderWidth: 1, borderColor: C.line, backgroundColor: C.surface }, messageText: { color: C.teal, fontSize: 11, fontWeight: '800' },
+  detailHeader: { flexDirection: 'row', alignItems: 'center', gap: 10 }, iconButton: { width: 44, height: 44, borderRadius: 22, borderWidth: 1, borderColor: C.line, alignItems: 'center', justifyContent: 'center', backgroundColor: C.surface }, detailHeaderCopy: { flex: 1 }, detailHeaderTitle: { color: C.ink, fontSize: 20, fontWeight: '800' }, detailCoverPressable: { overflow: 'hidden', borderRadius: 24, borderBottomLeftRadius: 10, borderBottomRightRadius: 10 }, detailCoverTop: { padding: 15, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }, detailCoverBottom: { position: 'absolute', left: 17, right: 17, bottom: 18 }, editCoverBadge: { paddingHorizontal: 8, paddingVertical: 6, flexDirection: 'row', alignItems: 'center', gap: 5, borderRadius: 9, backgroundColor: 'rgba(8,24,22,.5)' }, editCoverText: { color: C.surface, fontSize: 8, fontWeight: '800' }, heroTitle: { color: C.surface, fontSize: 28, lineHeight: 33, fontWeight: '900', letterSpacing: -.6 }, heroLocation: { marginTop: 7, flexDirection: 'row', alignItems: 'center', gap: 4 }, heroLocationText: { color: 'rgba(255,255,255,.78)', fontSize: 10 }, detailStats: { marginTop: 13, padding: 15, flexDirection: 'row', borderRadius: 14, borderWidth: 1, borderColor: C.line, backgroundColor: C.surface }, detailStat: { flex: 1, alignItems: 'center', borderRightWidth: 1, borderColor: C.line }, detailStatValue: { color: C.ink, fontSize: 22, fontWeight: '800' }, sectionLabel: { marginTop: 23, marginBottom: 8, color: C.ink, fontSize: 10, fontWeight: '800', letterSpacing: .9 }, about: { color: C.ink70, fontSize: 12, lineHeight: 19 }, requirement: { marginTop: 14, padding: 13, flexDirection: 'row', alignItems: 'center', gap: 9, borderRadius: 13, backgroundColor: '#E5F0ED' }, requirementCopy: { flex: 1 }, requirementTitle: { color: C.ink, fontSize: 11, fontWeight: '800' }, members: { flexDirection: 'row', marginBottom: 22 }, avatar: { width: 42, height: 42, borderRadius: 21, borderWidth: 2, borderColor: C.paper, alignItems: 'center', justifyContent: 'center' }, avatarOffset: { marginLeft: -9 }, avatarText: { color: C.surface, fontSize: 9, fontWeight: '800' }, primaryButton: { minHeight: 52, paddingHorizontal: 17, flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 7, borderRadius: 14, backgroundColor: C.optic }, primaryText: { color: '#0E2321', fontSize: 12, fontWeight: '800' }, requestedLarge: { backgroundColor: '#D9E8E3' }, memberActions: { flexDirection: 'row', gap: 9 }, messageButton: { minHeight: 52, paddingHorizontal: 15, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6, borderRadius: 14, borderWidth: 1, borderColor: C.line, backgroundColor: C.surface }, messageText: { color: C.teal, fontSize: 11, fontWeight: '800' },
   hubHero: { overflow: 'hidden', borderRadius: 24, borderBottomLeftRadius: 10, borderBottomRightRadius: 10, borderWidth: 1, borderColor: C.line, backgroundColor: C.surface }, hubCoverContent: { position: 'absolute', left: 16, right: 16, top: 14, bottom: 14, justifyContent: 'space-between' }, hubCoverTop: { flexDirection: 'row', justifyContent: 'flex-end' }, hubIdentity: { flexDirection: 'row', alignItems: 'center', gap: 11 }, hubIdentityCopy: { flex: 1 }, hubTitleRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 8 }, hubTitle: { flexShrink: 1, color: C.surface, fontSize: 24, fontWeight: '900' }, hubMetaRow: { marginTop: 4, flexDirection: 'row', alignItems: 'center' }, hubMeta: { color: 'rgba(255,255,255,.74)', fontSize: 10 }, rolePill: { paddingHorizontal: 7, paddingVertical: 3, flexDirection: 'row', alignItems: 'center', gap: 4, borderRadius: 8, backgroundColor: 'rgba(255,255,255,.16)' }, rolePillText: { color: C.surface, fontSize: 8, fontWeight: '800' }, hubRecord: { paddingHorizontal: 17, paddingVertical: 15, flexDirection: 'row', justifyContent: 'space-between' }, hubRecordValue: { color: C.ink, fontSize: 20, fontWeight: '800' }, hubRecordLabel: { marginTop: 2, color: C.ink40, fontSize: 7, fontWeight: '800', letterSpacing: .6 }, formingNotice: { marginTop: 12, padding: 12, flexDirection: 'row', alignItems: 'center', gap: 9, borderRadius: 13, backgroundColor: '#E5F0ED' }, noticeInvite: { paddingHorizontal: 10, paddingVertical: 8, borderRadius: 9, backgroundColor: C.surface }, hubTabsSticky: { marginHorizontal: -1, paddingTop: 10, paddingBottom: 7, backgroundColor: C.paper, zIndex: 5 }, hubTabs: { padding: 4, flexDirection: 'row', borderRadius: 13, backgroundColor: '#E5E9E3' }, hubTab: { flex: 1, minHeight: 40, paddingHorizontal: 2, alignItems: 'center', justifyContent: 'center', borderRadius: 9 }, hubTabActive: { backgroundColor: C.optic, ...shadow }, hubTabText: { color: C.ink40, fontSize: 9, fontWeight: '800' }, hubTabTextActive: { color: C.ink }, inviteButton: { minHeight: 38, paddingHorizontal: 11, flexDirection: 'row', alignItems: 'center', gap: 5, borderRadius: 10, borderWidth: 1, borderColor: C.line, backgroundColor: C.surface }, inviteButtonText: { color: C.teal, fontSize: 10, fontWeight: '800' }, rosterCard: { overflow: 'hidden', borderRadius: 18, borderBottomLeftRadius: 8, borderBottomRightRadius: 8, borderWidth: 1, borderColor: C.line, backgroundColor: C.surface }, rosterRow: { minHeight: 67, marginHorizontal: 13, flexDirection: 'row', alignItems: 'center', gap: 10 }, rosterBorder: { borderTopWidth: 1, borderColor: C.line }, rosterAvatar: { width: 39, height: 39, borderRadius: 20, alignItems: 'center', justifyContent: 'center', backgroundColor: C.teal }, rosterCopy: { flex: 1 }, rosterName: { color: C.ink, fontSize: 11, fontWeight: '800' }, rosterRating: { alignItems: 'flex-end' }, rosterRatingValue: { color: C.teal, fontSize: 16, fontWeight: '800' }, requestCard: { marginBottom: 11, padding: 14, borderRadius: 18, borderBottomLeftRadius: 8, borderBottomRightRadius: 8, borderWidth: 1, borderColor: C.line, backgroundColor: C.surface }, requestHead: { flexDirection: 'row', alignItems: 'center', gap: 10 }, requestNote: { marginTop: 11, color: C.ink70, fontSize: 10, lineHeight: 16 }, requestActions: { marginTop: 13, flexDirection: 'row', gap: 8 }, declineButton: { minHeight: 40, flex: 1, alignItems: 'center', justifyContent: 'center', borderRadius: 11, borderWidth: 1, borderColor: C.line }, declineText: { color: C.ink70, fontSize: 10, fontWeight: '800' }, acceptButton: { minHeight: 40, flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 5, borderRadius: 11, backgroundColor: C.optic }, emptyRequests: { paddingVertical: 55, alignItems: 'center' }, matchDate: { width: 48, height: 52, alignItems: 'center', justifyContent: 'center', borderRadius: 11, backgroundColor: C.optic }, matchMonth: { color: C.ink, fontSize: 7, fontWeight: '900' }, matchDay: { color: C.ink, fontSize: 20, fontWeight: '900' }, matchCopy: { flex: 1 }, matchLabel: { color: C.teal, fontSize: 7, fontWeight: '800', letterSpacing: .7 }, matchTitle: { marginVertical: 3, color: C.ink, fontSize: 13, fontWeight: '800' }, nextTeamMatch: { padding: 14, flexDirection: 'row', alignItems: 'center', gap: 11, borderRadius: 18, borderBottomLeftRadius: 8, borderBottomRightRadius: 8, backgroundColor: C.surface, borderWidth: 1, borderColor: C.line }, resultCard: { marginTop: 10, padding: 14, flexDirection: 'row', alignItems: 'center', gap: 11, borderRadius: 14, borderWidth: 1, borderColor: C.line, backgroundColor: C.surface }, resultMark: { width: 34, height: 34, paddingTop: 9, borderRadius: 9, overflow: 'hidden', color: C.teal, backgroundColor: '#E5F0ED', textAlign: 'center', fontSize: 11, fontWeight: '900' }, resultScore: { color: C.teal, fontSize: 16, fontWeight: '900' }, activityCard: { overflow: 'hidden', borderRadius: 18, borderBottomLeftRadius: 8, borderBottomRightRadius: 8, borderWidth: 1, borderColor: C.line, backgroundColor: C.surface }, activityRow: { minHeight: 76, marginHorizontal: 13, flexDirection: 'row', alignItems: 'center', gap: 10 }, activityIcon: { width: 38, height: 38, borderRadius: 11, alignItems: 'center', justifyContent: 'center', backgroundColor: '#E5F0ED' }, activityText: { color: C.ink70, fontSize: 11, lineHeight: 16 },
   wizardProgress: { marginBottom: 22, flexDirection: 'row' }, wizardStep: { position: 'relative', flex: 1, alignItems: 'center' }, wizardDot: { width: 27, height: 27, zIndex: 2, alignItems: 'center', justifyContent: 'center', borderRadius: 14, borderWidth: 1, borderColor: C.line, backgroundColor: C.surface }, wizardDotActive: { borderColor: C.optic, backgroundColor: C.optic }, wizardDotText: { color: C.ink40, fontSize: 8, fontWeight: '900' }, wizardDotTextActive: { color: C.ink }, wizardStepText: { maxWidth: 72, marginTop: 6, color: C.ink40, textAlign: 'center', fontSize: 7, fontWeight: '700' }, wizardStepTextActive: { color: C.ink, fontWeight: '900' }, wizardLine: { position: 'absolute', top: 13, left: '62%', right: '-38%', height: 1, backgroundColor: C.line }, wizardLineActive: { backgroundColor: C.optic }, stepIntro: { marginBottom: 18 }, stepTitle: { color: C.ink, fontSize: 23, lineHeight: 28, fontWeight: '900', letterSpacing: -.5 }, stepBody: { marginTop: 6, color: C.ink70, fontSize: 11, lineHeight: 17 }, selectedBaseCard: { minHeight: 82, marginBottom: 12, paddingHorizontal: 13, flexDirection: 'row', alignItems: 'center', gap: 11, borderRadius: 16, borderWidth: 1, borderColor: '#BFD8D2', backgroundColor: '#E5F0ED' }, selectedBaseIcon: { width: 44, height: 44, alignItems: 'center', justifyContent: 'center', borderRadius: 13, backgroundColor: C.surface }, selectedBaseCopy: { flex: 1 }, selectedBaseLabel: { color: C.teal, fontSize: 7, fontWeight: '900', letterSpacing: .7 }, selectedBaseCity: { marginTop: 2, color: C.ink, fontSize: 15, fontWeight: '900' }, selectedBaseMeta: { marginTop: 2, color: C.ink40, fontSize: 9 }, baseRequired: { minHeight: 48, marginBottom: 12, paddingHorizontal: 12, flexDirection: 'row', alignItems: 'center', gap: 7, borderRadius: 13, backgroundColor: '#F7EAE6' }, baseRequiredText: { flex: 1, color: C.brick, fontSize: 9, fontWeight: '700' }, useCurrentBase: { minHeight: 58, marginBottom: 18, paddingHorizontal: 13, flexDirection: 'row', alignItems: 'center', gap: 9, borderRadius: 14, backgroundColor: C.optic }, useCurrentBaseCopy: { flex: 1 }, useCurrentBaseTitle: { color: C.ink, fontSize: 10, fontWeight: '900' }, useCurrentBaseMeta: { marginTop: 2, color: C.ink70, fontSize: 8 }, baseSearch: { minHeight: 52, paddingHorizontal: 13, flexDirection: 'row', alignItems: 'center', gap: 8, borderRadius: 14, borderWidth: 1, borderColor: C.line, backgroundColor: C.surface }, baseSearchInput: { flex: 1, minHeight: 50, color: C.ink, fontSize: 12 }, baseResults: { marginTop: 9, overflow: 'hidden', borderRadius: 16, borderWidth: 1, borderColor: C.line, backgroundColor: C.surface }, baseResult: { minHeight: 59, paddingHorizontal: 12, flexDirection: 'row', alignItems: 'center', gap: 9 }, baseResultBorder: { borderTopWidth: 1, borderColor: C.line }, baseResultIcon: { width: 35, height: 35, alignItems: 'center', justifyContent: 'center', borderRadius: 11, backgroundColor: '#E5F0ED' }, baseResultCopy: { flex: 1 }, baseResultCity: { color: C.ink, fontSize: 11, fontWeight: '900' }, baseResultMeta: { marginTop: 2, color: C.ink40, fontSize: 8 }, baseEmpty: { minHeight: 92, alignItems: 'center', justifyContent: 'center' }, baseEmptyTitle: { marginBottom: 3, color: C.ink, fontSize: 11, fontWeight: '800' }, locationPrivacy: { marginTop: 12, padding: 12, flexDirection: 'row', alignItems: 'flex-start', gap: 8, borderRadius: 13, backgroundColor: '#E5F0ED' }, locationPrivacyText: { flex: 1, color: C.ink70, fontSize: 9, lineHeight: 14 }, reviewCover: { overflow: 'hidden', borderRadius: 20 }, reviewCard: { marginTop: 12, overflow: 'hidden', borderRadius: 18, borderWidth: 1, borderColor: C.line, backgroundColor: C.surface }, reviewRow: { minHeight: 82, paddingHorizontal: 13, paddingVertical: 14, flexDirection: 'row', alignItems: 'center', gap: 10 }, reviewBorder: { borderTopWidth: 1, borderColor: C.line }, reviewIcon: { width: 39, height: 39, alignItems: 'center', justifyContent: 'center', borderRadius: 12, backgroundColor: '#E5F0ED' }, reviewCopy: { flex: 1 }, reviewLabel: { color: C.ink40, fontSize: 7, fontWeight: '900', letterSpacing: .7 }, reviewValue: { marginTop: 2, color: C.ink, fontSize: 11, fontWeight: '900' }, reviewMeta: { marginTop: 3, color: C.ink40, fontSize: 8, lineHeight: 12 }, reviewEdit: { padding: 6, color: C.teal, fontSize: 9, fontWeight: '900' }, wizardActions: { marginTop: 22, flexDirection: 'row', gap: 9 }, wizardBack: { width: 92, minHeight: 53, alignItems: 'center', justifyContent: 'center', borderRadius: 14, borderWidth: 1, borderColor: C.line, backgroundColor: C.surface }, wizardBackText: { color: C.ink70, fontSize: 11, fontWeight: '800' }, wizardPrimary: { flex: 1 },
   formPhoto: { marginBottom: 20, padding: 10, borderRadius: 20, backgroundColor: '#E5F0ED' }, formCoverPressable: { overflow: 'hidden', borderRadius: 15 }, previewCoverContent: { position: 'relative', flex: 1 }, previewCameraCover: { position: 'absolute', top: 11, right: 11, width: 28, height: 28, alignItems: 'center', justifyContent: 'center', borderRadius: 14, backgroundColor: 'rgba(8,24,22,0.52)' }, previewCoverBottom: { position: 'absolute', left: 13, right: 13, bottom: 13, flexDirection: 'row', alignItems: 'center', gap: 10 }, previewCrestWrapper: { position: 'relative' }, previewCrestCamera: { position: 'absolute', bottom: -4, right: -4, width: 20, height: 20, alignItems: 'center', justifyContent: 'center', borderRadius: 10, borderWidth: 2, borderColor: '#E5F0ED', backgroundColor: C.optic }, previewCoverText: { flex: 1 }, previewCoverTitle: { color: C.surface, fontSize: 18, fontWeight: '900' }, previewCoverHint: { marginTop: 2, color: 'rgba(255,255,255,.76)', fontSize: 8 }, coverChoiceRow: { paddingHorizontal: 4, paddingTop: 11, paddingBottom: 2, flexDirection: 'row', alignItems: 'center', gap: 8 }, coverChoiceActions: { alignItems: 'flex-end', gap: 4 }, formPhotoCopy: { flex: 1 }, formPhotoTitle: { color: C.ink, fontSize: 13, fontWeight: '800' }, photoActionRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 7, paddingHorizontal: 4, paddingBottom: 6 }, photoButton: { paddingHorizontal: 11, paddingVertical: 7, borderRadius: 9, backgroundColor: C.surface }, photoButtonText: { color: C.teal, fontSize: 9, fontWeight: '800' }, gradientButton: { paddingHorizontal: 4, paddingVertical: 4 }, gradientButtonText: { color: C.ink40, fontSize: 8, fontWeight: '700' }, formField: { marginBottom: 15 }, formLabel: { marginBottom: 7, color: C.ink70, fontSize: 9, fontWeight: '800', letterSpacing: .8 }, formInput: { minHeight: 50, paddingHorizontal: 14, borderRadius: 13, borderWidth: 1, borderColor: C.line, color: C.ink, backgroundColor: C.surface, fontSize: 12 }, formTextarea: { minHeight: 100, paddingTop: 13, textAlignVertical: 'top' }, levelOptions: { marginBottom: 17, flexDirection: 'row', gap: 7 }, levelOption: { minHeight: 38, flex: 1, alignItems: 'center', justifyContent: 'center', borderRadius: 10, borderWidth: 1, borderColor: C.line, backgroundColor: C.surface }, levelOptionActive: { borderColor: C.ink, backgroundColor: C.ink }, levelOptionText: { color: C.ink70, fontSize: 8, fontWeight: '800' }, levelOptionTextActive: { color: C.surface }, visibilityOptions: { marginBottom: 17, flexDirection: 'row', gap: 8 }, visibilityOption: { minHeight: 82, flex: 1, padding: 11, flexDirection: 'row', alignItems: 'flex-start', gap: 8, borderRadius: 12, borderWidth: 1, borderColor: C.line, backgroundColor: C.surface }, visibilityOptionActive: { borderColor: C.ink, backgroundColor: C.ink }, visibilityCopy: { flex: 1 }, visibilityTitle: { color: C.ink, fontSize: 10, fontWeight: '900' }, visibilityTitleActive: { color: C.surface }, visibilityHelp: { marginTop: 4, color: C.ink40, fontSize: 8, lineHeight: 12 }, visibilityHelpActive: { color: 'rgba(255,255,255,.65)' }, formNotice: { marginBottom: 16, padding: 12, flexDirection: 'row', alignItems: 'center', gap: 8, borderRadius: 12, backgroundColor: '#E5F0ED' }, formNoticeText: { flex: 1, color: C.ink70, fontSize: 9, lineHeight: 14 }, saveButton: { minHeight: 53, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 7, borderRadius: 14, backgroundColor: C.optic }, saveButtonDisabled: { opacity: .62 },
@@ -2252,6 +2527,20 @@ const lightStyles = createMobileStyleSheet({
   actionSheetDangerText: { color: C.brick },
   actionSheetCancel: { minHeight: 48, marginTop: 4, alignItems: 'center', justifyContent: 'center', borderRadius: 14, backgroundColor: C.paper },
   actionSheetCancelText: { color: C.ink70, fontSize: 11, fontWeight: '900' },
+  scorerPickerBackdrop: { flex: 1, justifyContent: 'flex-end', backgroundColor: 'rgba(5,14,13,.58)' },
+  scorerPickerSheet: { maxHeight: '82%', paddingHorizontal: 17, paddingTop: 9, paddingBottom: 18, borderTopLeftRadius: 27, borderTopRightRadius: 27, backgroundColor: C.surface, ...shadow },
+  scorerPickerHead: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
+  scorerPickerTitle: { marginTop: 2, color: C.ink, fontSize: 20, fontWeight: '900' },
+  scorerPickerHelp: { marginTop: 8, marginBottom: 8, color: C.ink70, fontSize: 9, lineHeight: 14 },
+  scorerPickerList: { maxHeight: 390 },
+  scorerPickerRow: { minHeight: 68, flexDirection: 'row', alignItems: 'center', gap: 10, borderTopWidth: 1, borderColor: C.line },
+  scorerPickerRowSelected: { marginHorizontal: -8, paddingHorizontal: 8, borderTopColor: 'transparent', borderRadius: 14, backgroundColor: '#E5F0ED' },
+  scorerPickerName: { color: C.ink, fontSize: 11, fontWeight: '900' },
+  scorerPickerBusy: { minHeight: 45, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8 },
+  scorerHeadActions: { flexDirection: 'row', alignItems: 'center', gap: 5 },
+  voiceScoreButton: { paddingHorizontal: 7, minHeight: 27, flexDirection: 'row', alignItems: 'center', gap: 4, borderRadius: 8, borderWidth: 1, borderColor: C.line, backgroundColor: C.paper },
+  voiceScoreButtonActive: { borderColor: '#BFD8D2', backgroundColor: '#E5F0ED' },
+  voiceScoreText: { color: C.teal, fontSize: 6, fontWeight: '900', letterSpacing: .3 },
   liveHeaderBadge: { paddingHorizontal: 9, paddingVertical: 7, flexDirection: 'row', alignItems: 'center', gap: 5, borderRadius: 9, backgroundColor: '#F7EAE6' }, liveHeaderText: { color: C.brick, fontSize: 8, fontWeight: '900' }, scoreHero: { padding: 18, alignItems: 'center', borderRadius: 24, borderBottomLeftRadius: 10, borderBottomRightRadius: 10, backgroundColor: C.ink }, scoreVenue: { color: 'rgba(255,255,255,.6)', fontSize: 9 }, scoreGame: { marginTop: 8, color: C.optic, fontSize: 9, fontWeight: '900', letterSpacing: 1 }, scoreTeams: { width: '100%', marginTop: 16, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }, scoreTeam: { width: 82, alignItems: 'center' }, scoreCrest: { width: 49, height: 49, borderRadius: 17, borderBottomLeftRadius: 7, borderBottomRightRadius: 7, alignItems: 'center', justifyContent: 'center' }, scoreCrestText: { color: C.surface, fontSize: 9, fontWeight: '900' }, scoreTeamName: { marginTop: 7, color: C.surface, textAlign: 'center', fontSize: 9, fontWeight: '800' }, scoreNumbers: { flexDirection: 'row', alignItems: 'center' }, scoreNumber: { width: 48, color: C.surface, textAlign: 'center', fontSize: 43, fontWeight: '900' }, scoreSeparator: { color: 'rgba(255,255,255,.35)', fontSize: 24 }, servingRow: { marginTop: 17, paddingHorizontal: 10, paddingVertical: 7, flexDirection: 'row', alignItems: 'center', gap: 6, borderRadius: 12, backgroundColor: 'rgba(255,255,255,.1)' }, servingDot: { width: 7, height: 7, borderRadius: 4, backgroundColor: C.optic }, servingText: { color: C.surface, fontSize: 8, fontWeight: '800' }, scorerPanel: { marginTop: 13, padding: 14, borderRadius: 18, borderWidth: 1, borderColor: '#BFD8D2', backgroundColor: C.surface }, scorerHead: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }, scorerTitle: { color: C.ink, fontSize: 14, fontWeight: '800' }, scorerBadge: { paddingHorizontal: 7, paddingVertical: 5, flexDirection: 'row', alignItems: 'center', gap: 4, borderRadius: 8, backgroundColor: '#E5F0ED' }, scorerBadgeText: { color: C.teal, fontSize: 7, fontWeight: '900' }, scorerHelp: { marginTop: 9, color: C.ink40, fontSize: 9, lineHeight: 14 }, rallyButtons: { marginTop: 12, flexDirection: 'row', gap: 8 }, rallyButton: { minHeight: 70, flex: 1, alignItems: 'center', justifyContent: 'center', borderRadius: 12, borderWidth: 1, borderColor: C.line, backgroundColor: C.paper }, rallyButtonServing: { borderColor: C.teal, backgroundColor: '#E5F0ED' }, rallyTag: { color: C.teal, fontSize: 8, fontWeight: '900' }, rallyButtonText: { marginTop: 3, color: C.ink, fontSize: 10, fontWeight: '800' }, rallyServingText: { marginTop: 4, color: C.brick, fontSize: 6, fontWeight: '900', letterSpacing: .7 }, switchServeButton: { minHeight: 50, marginTop: 10, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 7, borderRadius: 13, backgroundColor: C.teal, ...shadow }, switchServeText: { color: C.surface, fontSize: 11, fontWeight: '900', letterSpacing: .3 }, liveInfoCard: { marginTop: 13, padding: 14, flexDirection: 'row', alignItems: 'center', gap: 10, borderRadius: 14, borderWidth: 1, borderColor: C.line, backgroundColor: C.surface }, syncBadge: { flexDirection: 'row', alignItems: 'center', gap: 4 }, syncText: { color: C.teal, fontSize: 8, fontWeight: '800' }, liveActivity: { padding: 14, flexDirection: 'row', alignItems: 'center', gap: 11, borderRadius: 16, borderWidth: 1, borderColor: C.line, backgroundColor: C.surface }, liveActivityIcon: { width: 42, height: 42, borderRadius: 12, alignItems: 'center', justifyContent: 'center', backgroundColor: '#E5F0ED' }, liveNotice: { marginTop: 14, padding: 13, flexDirection: 'row', alignItems: 'center', gap: 9, borderRadius: 13, backgroundColor: '#E5F0ED' }, liveNoticeText: { flex: 1, color: C.ink70, fontSize: 9, lineHeight: 14 },
   viewerNotice: { marginTop: 13, padding: 13, flexDirection: 'row', alignItems: 'center', gap: 9, borderRadius: 14, borderWidth: 1, borderColor: C.line, backgroundColor: C.surface }, viewerBadge: { paddingHorizontal: 7, paddingVertical: 5, borderRadius: 7, backgroundColor: C.paper }, viewerBadgeText: { color: C.ink40, fontSize: 7, fontWeight: '900' }, boxScore: { overflow: 'hidden', borderRadius: 17, borderWidth: 1, borderColor: C.line, backgroundColor: C.surface }, boxScoreRow: { minHeight: 45, paddingHorizontal: 12, flexDirection: 'row', alignItems: 'center' }, boxScoreBorder: { borderTopWidth: 1, borderColor: C.line }, boxTeam: { flex: 1, color: C.ink, fontSize: 9, fontWeight: '800' }, boxValue: { width: 35, color: C.ink, textAlign: 'center', fontSize: 13, fontWeight: '900' }, boxHeader: { color: C.ink40, fontSize: 7, letterSpacing: .5 }, boxCurrent: { color: C.teal, backgroundColor: '#E5F0ED', borderRadius: 6, overflow: 'hidden', lineHeight: 25 }, boxWon: { color: C.teal }, boxFootnote: { paddingHorizontal: 12, paddingBottom: 9, color: C.ink40, fontSize: 7 }, scorerAssignment: { marginBottom: 11, padding: 14, borderRadius: 18, borderWidth: 1, borderColor: '#BFD8D2', backgroundColor: C.surface }, scorerAssignmentHead: { marginBottom: 9, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }, openScorerButton: { minHeight: 43, marginTop: 12, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6, borderRadius: 11, backgroundColor: C.optic },
   detailIdentity: { flexDirection: 'row', alignItems: 'center', gap: 11 },

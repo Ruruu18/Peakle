@@ -34,7 +34,7 @@ export function CreateCourtDialog({ venue, onClose, onCreated }: { venue: Venue;
     catch (reason) { toast.error(reason instanceof Error ? reason.message : "Choose a valid court photo."); return; }
     setBusy(true);
     try {
-      const { data, error } = await requireSupabase().rpc("create_venue_court", { p_venue_id: venue.id, p_name: name.trim(), p_environment: environment, p_surface: surface.trim(), p_hourly_price: hourlyPrice });
+      const { data, error } = await requireSupabase().rpc("create_venue_court", { p_venue_id: venue.id, p_name: name.trim(), p_environment: environment, p_surface: surface.trim(), p_owner_hourly_price: hourlyPrice });
       if (error) throw error;
       const created = Array.isArray(data) ? data[0] : data;
       if (image && created?.id) {
@@ -55,7 +55,7 @@ export function CreateCourtDialog({ venue, onClose, onCreated }: { venue: Venue;
     </div> : <div className="wizard-panel">
       <div className="wizard-review"><Grid2X2 size={18} /><div><strong>{name}</strong><small>{environment} · {venue.name}</small></div><button type="button" onClick={() => setStep(1)}>EDIT</button></div>
       <fieldset className="choice-field"><legend>COURT SURFACE</legend><div className="surface-choice-grid">{["Standard acrylic", "Concrete", "Wood", "Synthetic"].map((item) => <button className={surface === item ? "selected" : ""} type="button" aria-pressed={surface === item} key={item} onClick={() => setSurface(item)}><span>{surface === item ? <Check size={13} /> : null}</span>{item}</button>)}</div></fieldset>
-      <div className="form-field"><label htmlFor="court-price">REGULAR HOURLY PRICE</label><div className="money-input"><span>₱</span><input id="court-price" value={price} onChange={(event) => setPrice(event.target.value)} type="number" min="0" step="1" placeholder="500" required /></div><small className="field-help">This is the standard price players see. Peak and promo prices are added separately.</small></div>
+      <div className="form-field"><label htmlFor="court-price">REGULAR HOURLY PRICE</label><div className="money-input"><span>₱</span><input id="court-price" value={price} onChange={(event) => setPrice(event.target.value)} type="number" min="0" step="1" placeholder="500" required /></div><small className="field-help">This is what you earn per hour. Peakle adds its service fee on top for the price players pay. Peak and promo prices are added separately.</small></div>
       <div className="form-field"><label htmlFor="court-photo">COURT PHOTO · OPTIONAL</label><label className="media-picker" htmlFor="court-photo"><span><ImagePlus size={20} /></span><span><strong>{image ? image.name : "Choose a court photo"}</strong><small>{image ? `${(image.size / 1024 / 1024).toFixed(1)} MB selected` : "JPG, PNG, or WebP · up to 4 MB"}</small></span><strong>{image ? "CHANGE" : "BROWSE"}</strong></label><input className="file-input" id="court-photo" type="file" accept="image/jpeg,image/png,image/webp" onChange={(event) => setImage(event.target.files?.[0] || null)} /></div>
       <div className="publish-notice"><Eye size={17} /><span>This court becomes visible to players after you add it. You can hide it anytime.</span></div>
     </div>}
@@ -63,22 +63,59 @@ export function CreateCourtDialog({ venue, onClose, onCreated }: { venue: Venue;
   </form></DialogFrame>;
 }
 
+// Google Maps share links often embed the coordinates directly (desktop URLs,
+// "@lat,lng" pins, or "q="/"ll=" query params). Short maps.app.goo.gl links
+// redirect server-side and can't be resolved from the browser, so those still
+// need the manual fallback below.
+function coordinatesFromMapsUrl(url: string): { lat: number; lng: number } | null {
+  const patterns = [/@(-?\d{1,3}\.\d+),(-?\d{1,3}\.\d+)/, /[?&]q=(-?\d{1,3}\.\d+),(-?\d{1,3}\.\d+)/, /[?&]ll=(-?\d{1,3}\.\d+),(-?\d{1,3}\.\d+)/, /!3d(-?\d{1,3}\.\d+)!4d(-?\d{1,3}\.\d+)/];
+  for (const pattern of patterns) {
+    const match = url.match(pattern);
+    if (match) {
+      const lat = Number(match[1]);
+      const lng = Number(match[2]);
+      if (Number.isFinite(lat) && Number.isFinite(lng) && Math.abs(lat) <= 90 && Math.abs(lng) <= 180) return { lat, lng };
+    }
+  }
+  return null;
+}
+
 export function CreateVenueDialog({ onClose, onCreated }: { onClose: () => void; onCreated: () => Promise<void> }) {
   const [venueType, setVenueType] = useState("Indoor");
   const [opensAt, setOpensAt] = useState("06:00");
   const [closesAt, setClosesAt] = useState("22:00");
+  const [mapsUrl, setMapsUrl] = useState("");
+  const [latitude, setLatitude] = useState("");
+  const [longitude, setLongitude] = useState("");
+  const [detected, setDetected] = useState(false);
+  const [editingCoordinates, setEditingCoordinates] = useState(false);
   const [busy, setBusy] = useState(false);
+  const handleMapsUrlChange = (value: string) => {
+    setMapsUrl(value);
+    const coordinates = coordinatesFromMapsUrl(value);
+    if (coordinates) {
+      setLatitude(String(coordinates.lat));
+      setLongitude(String(coordinates.lng));
+      setDetected(true);
+      setEditingCoordinates(false);
+    } else {
+      setDetected(false);
+    }
+  };
   const submit = async (event: React.FormEvent<HTMLFormElement>) => {
     event.preventDefault();
+    const lat = Number(latitude);
+    const lng = Number(longitude);
+    if (latitude.trim() === "" || longitude.trim() === "" || !Number.isFinite(lat) || !Number.isFinite(lng)) { toast.error("We couldn't detect coordinates from that link — enter latitude and longitude manually."); return; }
     setBusy(true);
     const values = new FormData(event.currentTarget);
     try {
-      const { error } = await requireSupabase().rpc("create_venue_application", { p_name: String(values.get("name") || "").trim(), p_area: String(values.get("area") || "").trim(), p_address: String(values.get("address") || "").trim(), p_venue_type: venueType, p_google_maps_url: String(values.get("maps_url") || "").trim(), p_description: String(values.get("description") || "").trim() || null, p_opens_at: opensAt, p_closes_at: closesAt, p_latitude: Number(values.get("latitude")), p_longitude: Number(values.get("longitude")) });
+      const { error } = await requireSupabase().rpc("create_venue_application", { p_name: String(values.get("name") || "").trim(), p_area: String(values.get("area") || "").trim(), p_address: String(values.get("address") || "").trim(), p_venue_type: venueType, p_google_maps_url: mapsUrl.trim(), p_description: String(values.get("description") || "").trim() || null, p_opens_at: opensAt, p_closes_at: closesAt, p_latitude: lat, p_longitude: lng });
       if (error) throw error;
       toast.success("Venue submitted for verification.");
       await onCreated();
     } catch (reason) { toast.error(reason instanceof Error ? reason.message : "Venue creation failed."); }
     finally { setBusy(false); }
   };
-  return <DialogFrame eyebrow="NEW LOCATION" title="Add a venue" detail="Create the location first. Courts and activities are managed after submission." onClose={onClose}><form onSubmit={submit}><div className="dialog-section"><span><Building2 size={18} /></span><div><strong>Venue identity</strong><small>Use the public name and address players will recognize.</small></div></div><div className="dialog-grid"><div className="form-field full"><label htmlFor="venue-name">VENUE NAME</label><input id="venue-name" name="name" placeholder="e.g. Peakle Sports Center" minLength={2} required autoFocus /></div><div className="form-field"><label htmlFor="venue-area">CITY OR AREA</label><input id="venue-area" name="area" placeholder="e.g. Makati City" minLength={2} required /></div><div className="form-field"><label>VENUE TYPE</label><SelectControl value={venueType} onChange={setVenueType} ariaLabel="Venue type" options={[{ value: "Indoor", label: "Indoor" }, { value: "Outdoor", label: "Outdoor" }, { value: "Mixed", label: "Mixed" }]} /></div><div className="form-field full"><label htmlFor="venue-address">FULL ADDRESS</label><input id="venue-address" name="address" placeholder="Street, barangay, city" minLength={5} required /></div><div className="form-field"><label>OPENS</label><TimeControl value={opensAt} onChange={setOpensAt} ariaLabel="Opening time" /></div><div className="form-field"><label>CLOSES</label><TimeControl value={closesAt} onChange={setClosesAt} ariaLabel="Closing time" /></div></div><div className="dialog-section"><span><MapPin size={18} /></span><div><strong>Map verification</strong><small>Coordinates and a Google Maps share link keep directions accurate.</small></div></div><div className="dialog-grid"><div className="form-field full"><label htmlFor="venue-map">GOOGLE MAPS SHARE LINK</label><input id="venue-map" name="maps_url" type="url" placeholder="https://maps.app.goo.gl/..." required /></div><div className="form-field"><label htmlFor="venue-latitude">LATITUDE</label><input id="venue-latitude" name="latitude" type="number" step="any" placeholder="14.5547" required /></div><div className="form-field"><label htmlFor="venue-longitude">LONGITUDE</label><input id="venue-longitude" name="longitude" type="number" step="any" placeholder="121.0244" required /></div><div className="form-field full"><label htmlFor="venue-description">DESCRIPTION · OPTIONAL</label><textarea id="venue-description" name="description" placeholder="Facilities, parking, and arrival notes" /></div></div><div className="dialog-actions"><button className="button button-ghost" type="button" onClick={onClose}>Cancel</button><button className="button button-accent" type="submit" disabled={busy}>{busy ? "Submitting…" : "Submit venue"}<Check size={16} /></button></div></form></DialogFrame>;
+  return <DialogFrame eyebrow="NEW LOCATION" title="Add a venue" detail="Create the location first. Courts and activities are managed after submission." onClose={onClose}><form onSubmit={submit}><div className="dialog-section"><span><Building2 size={18} /></span><div><strong>Venue identity</strong><small>Use the public name and address players will recognize.</small></div></div><div className="dialog-grid"><div className="form-field full"><label htmlFor="venue-name">VENUE NAME</label><input id="venue-name" name="name" placeholder="e.g. Peakle Sports Center" minLength={2} required autoFocus /></div><div className="form-field"><label htmlFor="venue-area">CITY OR AREA</label><input id="venue-area" name="area" placeholder="e.g. Makati City" minLength={2} required /></div><div className="form-field"><label>VENUE TYPE</label><SelectControl value={venueType} onChange={setVenueType} ariaLabel="Venue type" options={[{ value: "Indoor", label: "Indoor" }, { value: "Outdoor", label: "Outdoor" }, { value: "Mixed", label: "Mixed" }]} /></div><div className="form-field full"><label htmlFor="venue-address">FULL ADDRESS</label><input id="venue-address" name="address" placeholder="Street, barangay, city" minLength={5} required /></div><div className="form-field"><label>OPENS</label><TimeControl value={opensAt} onChange={setOpensAt} ariaLabel="Opening time" /></div><div className="form-field"><label>CLOSES</label><TimeControl value={closesAt} onChange={setClosesAt} ariaLabel="Closing time" /></div></div><div className="dialog-section"><span><MapPin size={18} /></span><div><strong>Map verification</strong><small>Paste a Google Maps share link — we&apos;ll read the coordinates from it automatically.</small></div></div><div className="dialog-grid"><div className="form-field full"><label htmlFor="venue-map">GOOGLE MAPS SHARE LINK</label><input id="venue-map" name="maps_url" type="url" value={mapsUrl} onChange={(event) => handleMapsUrlChange(event.target.value)} placeholder="https://maps.app.goo.gl/... or https://www.google.com/maps/@14.55,121.02" required /></div>{detected && !editingCoordinates ? <div className="form-field full"><div className="publish-notice"><MapPin size={17} /><span>Coordinates detected: {Number(latitude).toFixed(5)}, {Number(longitude).toFixed(5)}. <button type="button" className="text-action" onClick={() => setEditingCoordinates(true)}>Adjust manually</button></span></div></div> : <><div className="form-field full"><small className="field-help">{mapsUrl.trim() ? "We couldn't read coordinates from that link (short goo.gl links don't include them). Open the link on desktop Google Maps, right-click the pin, and click the coordinates shown at the top of the menu to copy them — then paste below." : "Coordinates fill in automatically once you paste a link with a location on it."}</small></div><div className="form-field"><label htmlFor="venue-latitude">LATITUDE</label><input id="venue-latitude" name="latitude" type="number" step="any" value={latitude} onChange={(event) => setLatitude(event.target.value)} placeholder="14.5547" required /></div><div className="form-field"><label htmlFor="venue-longitude">LONGITUDE</label><input id="venue-longitude" name="longitude" type="number" step="any" value={longitude} onChange={(event) => setLongitude(event.target.value)} placeholder="121.0244" required /></div></>}<div className="form-field full"><label htmlFor="venue-description">DESCRIPTION · OPTIONAL</label><textarea id="venue-description" name="description" placeholder="Facilities, parking, and arrival notes" /></div></div><div className="dialog-actions"><button className="button button-ghost" type="button" onClick={onClose}>Cancel</button><button className="button button-accent" type="submit" disabled={busy}>{busy ? "Submitting…" : "Submit venue"}<Check size={16} /></button></div></form></DialogFrame>;
 }

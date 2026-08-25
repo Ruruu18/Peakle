@@ -1,0 +1,13 @@
+[functions.paymongo-webhook]
+verify_jwt = false
+
+[functions.delete-account]
+verify_jwt = true
+
+[functions.legal]
+verify_jwt = false
+
+[functions.send-push-notifications]
+# Scheduled invocations authenticate with x-push-dispatch-secret. The function
+# itself fails closed when the secret is absent or the header does not match.
+verify_jwt = false

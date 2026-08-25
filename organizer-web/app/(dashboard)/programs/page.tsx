@@ -1,2 +1,2 @@
-import { OrganizerPortal } from "@/features/organizer";
-export default function ProgramsPage() { return <OrganizerPortal section="programs" />; }
+import { SectionPage } from "@/features/organizer";
+export default function ProgramsPage() { return <SectionPage section="programs" />; }

@@ -1,10 +1,12 @@
-import React, { createContext, useContext, useEffect, useMemo, useState } from 'react';
+import React, { createContext, useContext, useEffect, useMemo, useRef, useState } from 'react';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { AppState, Linking } from 'react-native';
 import { makeRedirectUri } from 'expo-auth-session';
 import * as WebBrowser from 'expo-web-browser';
 import { isSupabaseConfigured, requireSupabase, supabase } from '../lib/supabase';
 import { readCachedData, withTimeout, writeCachedData } from '../lib/asyncData';
+import { DEMO_MODE } from '../config/demoMode';
+import { DEMO_USER } from '../config/demoData';
 import { disablePushToken } from '../services/realtimeOperations';
 import { deleteManagedProfilePhoto, isLocalPhotoUri, normalizeProfilePhoto, uploadProfilePhoto } from '../services/profilePhotos';
 import {
@@ -65,7 +67,7 @@ async function readCurrentUser(authUser) {
   if (!authUser) return null;
   const client = requireSupabase();
   const [{ data: profile, error: profileError }, { data: adminAccess, error: adminError }] = await Promise.all([
-    client.from('profiles').select('*').eq('id', authUser.id).maybeSingle(),
+    client.rpc('get_my_profile').maybeSingle(),
     client.from('platform_admins').select('user_id').eq('user_id', authUser.id).maybeSingle(),
   ]);
   if (profileError) throw profileError;
@@ -117,6 +119,7 @@ async function getExpoGoOAuthRedirectUrl() {
 }
 
 export function AuthProvider({ children }) {
+  const authGeneration = useRef(0);
   const [user, setUser] = useState(null);
   const [hydrated, setHydrated] = useState(false);
   const [pendingVerificationEmail, setPendingVerificationEmail] = useState('');
@@ -128,13 +131,14 @@ export function AuthProvider({ children }) {
   useEffect(() => {
     if (!supabase) { setHydrated(true); return undefined; }
     let active = true;
+    const startupGeneration = authGeneration.current;
     Promise.all([
       withTimeout(supabase.auth.getSession(), 6000, 'Session restore timed out.'),
       AsyncStorage.getItem(PENDING_VERIFICATION_EMAIL_KEY).catch(() => ''),
       AsyncStorage.getItem(LAST_SIGN_IN_METHOD_KEY).catch(() => null),
       AsyncStorage.getItem(REMEMBERED_EMAIL_KEY).catch(() => ''),
     ]).then(async ([{ data }, pendingEmail, storedSignInMethod, storedEmail]) => {
-      if (!active) return;
+      if (!active || authGeneration.current !== startupGeneration) return;
       const authUser = data.session?.user;
       const localSignInMethod = storedSignInMethod === 'google' || storedSignInMethod === 'email' ? storedSignInMethod : null;
       if (authUser) {
@@ -158,7 +162,7 @@ export function AuthProvider({ children }) {
       const provisionalUser = authUser
         ? { ...mapUser(authUser), ...(hasCachedUser ? cachedUser : {}), id: authUser.id, email: authUser.email }
         : null;
-      if (!active) return;
+      if (!active || authGeneration.current !== startupGeneration) return;
       setUser(provisionalUser);
       if (!authUser || hasCachedUser) setHydrated(true);
       const syncedSignInMethod = provisionalUser?.lastSignInMethod === 'google' || provisionalUser?.lastSignInMethod === 'email'
@@ -175,7 +179,7 @@ export function AuthProvider({ children }) {
             AUTH_STARTUP_TIMEOUT_MS,
             'Profile refresh timed out.',
           );
-          if (!active) return;
+          if (!active || authGeneration.current !== startupGeneration) return;
           setUser(currentUser);
           writeCachedData(userCacheKey(authUser.id), currentUser);
           if (currentUser?.lastSignInMethod) {
@@ -190,6 +194,7 @@ export function AuthProvider({ children }) {
       }
     }).catch(() => { if (active) setHydrated(true); });
     const { data: listener } = supabase.auth.onAuthStateChange((event, session) => {
+      const eventGeneration = ++authGeneration.current;
       if (event === 'PASSWORD_RECOVERY') setPasswordRecovery(true);
       if (session?.user) {
         setPendingVerificationEmail('');
@@ -202,18 +207,20 @@ export function AuthProvider({ children }) {
       }
       if (!session?.user) {
         setUser(null);
+        setHydrated(true);
         return;
       }
       setTimeout(async () => {
         const authUser = session.user;
         const cachedUser = await readCachedData(userCacheKey(authUser.id));
-        if (!active) return;
+        if (!active || authGeneration.current !== eventGeneration) return;
         setUser((current) => current?.id === authUser.id
           ? current
           : { ...mapUser(authUser), ...(cachedUser?.id === authUser.id ? cachedUser : {}), id: authUser.id, email: authUser.email });
+        setHydrated(true);
         try {
           const value = await withTimeout(readCurrentUser(authUser), AUTH_STARTUP_TIMEOUT_MS, 'Profile refresh timed out.');
-          if (!active) return;
+          if (!active || authGeneration.current !== eventGeneration) return;
           setUser(value);
           writeCachedData(userCacheKey(authUser.id), value);
         } catch {
@@ -425,30 +432,18 @@ export function AuthProvider({ children }) {
       play_preference: profile.preference,
       onboarding_completed: true,
     };
-    let { data: savedProfile, error } = await withTimeout(
-      client
-        .from('profiles')
-        .update(profilePayload)
-        .eq('id', authUser.id)
-        .select('*')
-        .maybeSingle(),
+    const { error } = await withTimeout(
+      client.from('profiles').upsert(profilePayload, { onConflict: 'id' }),
       ONBOARDING_SAVE_TIMEOUT_MS,
       'Profile setup timed out. Check your connection and try again.',
     );
     if (error) throw error;
-    if (!savedProfile) {
-      const insertResult = await withTimeout(
-        client
-          .from('profiles')
-          .insert(profilePayload)
-          .select('*')
-          .single(),
-        ONBOARDING_SAVE_TIMEOUT_MS,
-        'Profile setup timed out. Check your connection and try again.',
-      );
-      if (insertResult.error) throw insertResult.error;
-      savedProfile = insertResult.data;
-    }
+    const { data: savedProfile, error: savedProfileError } = await withTimeout(
+      client.rpc('get_my_profile').maybeSingle(),
+      ONBOARDING_SAVE_TIMEOUT_MS,
+      'Profile setup timed out. Check your connection and try again.',
+    );
+    if (savedProfileError) throw savedProfileError;
     if (!savedProfile?.onboarding_completed) {
       throw new Error('Your profile was not saved. Please try again.');
     }
@@ -480,12 +475,12 @@ export function AuthProvider({ children }) {
     if (nextChanges.presenceStatus !== undefined) payload.presence_status = nextChanges.presenceStatus;
     if (nextChanges.mode !== undefined) payload.app_mode = nextChanges.mode;
     if (nextChanges.preferences !== undefined) payload.notification_preferences = nextChanges.preferences;
-    const { data: savedProfile, error } = await requireSupabase().from('profiles').update(payload).eq('id', user.id).select('*').single();
+    const { error } = await requireSupabase().from('profiles').update(payload).eq('id', user.id);
     if (error) {
       if (uploadedAvatar) deleteManagedProfilePhoto(uploadedAvatar).catch(() => {});
       throw error;
     }
-    if (nextChanges.avatar !== undefined) nextChanges.avatar = normalizeProfilePhoto(savedProfile.avatar_url);
+    if (nextChanges.avatar !== undefined) nextChanges.avatar = normalizeProfilePhoto(payload.avatar_url);
     setUser((current) => {
       const nextUser = { ...current, ...nextChanges, ...(nextChanges.avatar !== undefined ? { picture: nextChanges.avatar || null } : {}) };
       writeCachedData(userCacheKey(user.id), nextUser);
@@ -510,7 +505,51 @@ export function AuthProvider({ children }) {
     setUser(null);
   };
 
-  const value = useMemo(() => ({
+  const deleteAccount = async () => {
+    const client = requireSupabase();
+    if (!user?.id) throw new Error('Sign in before deleting your account.');
+
+    await Promise.all([
+      client.from('player_presence').update({ availability: 'offline', updated_at: new Date().toISOString() }).eq('user_id', user.id).catch(() => {}),
+      disablePushToken(user.id).catch(() => {}),
+    ]);
+
+    const { data, error } = await client.functions.invoke('delete-account');
+    if (error) throw new Error(error.message || 'Peakle could not delete your account. Please try again.');
+    if (!data?.deleted) throw new Error(data?.error || 'Peakle could not confirm account deletion.');
+
+    authGeneration.current += 1;
+    await client.auth.signOut({ scope: 'local' }).catch(() => {});
+    await AsyncStorage.clear().catch(() => {});
+    setPendingVerificationEmail('');
+    setRememberedEmail('');
+    setLastSignInMethod(null);
+    setUser(null);
+  };
+
+  const value = useMemo(() => (DEMO_MODE ? {
+    user: DEMO_USER,
+    hydrated: true,
+    configured: true,
+    pendingVerificationEmail: '',
+    passwordRecovery: false,
+    authLinkError: '',
+    lastSignInMethod: 'email',
+    rememberedEmail: '',
+    signIn: async () => {},
+    signUp: async () => ({ user: DEMO_USER, needsEmailConfirmation: false }),
+    rememberPendingVerification: async () => {},
+    resendSignupConfirmation: async () => {},
+    clearPendingVerification: async () => {},
+    signInWithGoogle: async () => {},
+    signInWithGoogleOAuth: async () => ({ cancelled: true }),
+    requestPasswordReset: async () => {},
+    updatePassword: async () => {},
+    completeOnboarding: async () => {},
+    updateProfile: async () => ({}),
+    signOut: async () => {},
+    deleteAccount: async () => { throw new Error('Account deletion is unavailable in demo mode.'); },
+  } : {
     user,
     hydrated,
     configured: isSupabaseConfigured,
@@ -531,6 +570,7 @@ export function AuthProvider({ children }) {
     completeOnboarding,
     updateProfile,
     signOut,
+    deleteAccount,
   }), [user, hydrated, pendingVerificationEmail, passwordRecovery, authLinkError, lastSignInMethod, rememberedEmail]);
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
 }

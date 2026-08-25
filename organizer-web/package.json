@@ -14,7 +14,7 @@
     "@supabase/ssr": "latest",
     "@supabase/supabase-js": "latest",
     "lucide-react": "latest",
-    "next": "latest",
+    "next": "16.2.12",
     "react": "latest",
     "react-dom": "latest",
     "sonner": "latest"
@@ -29,6 +29,7 @@
     "typescript": "latest"
   },
   "overrides": {
+    "nanoid": "3.3.18",
     "postcss": "8.5.25",
     "sharp": "0.35.3"
   }

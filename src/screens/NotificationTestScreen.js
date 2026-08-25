@@ -3,7 +3,6 @@ import {
   ActivityIndicator,
   Alert,
   AppState,
-  Platform,
   Pressable,
   ScrollView,
   StyleSheet,

@@ -2,15 +2,38 @@
 
 import Link from "next/link";
 import { CheckCircle2, Clock3, Search, ShieldCheck, UserCheck, Users, XCircle } from "lucide-react";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import type { OpenPlaySession, Registration } from "@/lib/types";
+import { requireSupabase } from "@/lib/supabase";
 import { useRegistrationActions } from "../hooks/use-registration-actions";
 import { dateTime, Empty, Metric, Person, Status, titleCase } from "../components/portal-ui";
 
-export function OpenPlayRoster({ session, registrations, refresh }: { session: OpenPlaySession; registrations: Registration[]; refresh: () => Promise<void> }) {
+export function OpenPlayRoster({ session, registrations: preloaded, refresh, archived }: { session: OpenPlaySession; registrations?: Registration[]; refresh: () => Promise<void>; archived?: boolean }) {
   const [filter, setFilter] = useState("all");
   const [query, setQuery] = useState("");
+  const [archivedRegistrations, setArchivedRegistrations] = useState<Registration[] | null>(null);
   const { act, busyPlayerId } = useRegistrationActions(refresh);
+
+  useEffect(() => {
+    if (!archived) return;
+    let cancelled = false;
+    requireSupabase()
+      .from("open_play_players")
+      .select("*,profiles!open_play_players_user_id_fkey(display_name,avatar_url)")
+      .eq("session_id", session.id)
+      .order("joined_at", { ascending: false })
+      .then(({ data, error }) => {
+        if (cancelled) return;
+        setArchivedRegistrations(error ? [] : ((data ?? []) as unknown as Registration[]));
+      });
+    return () => { cancelled = true; };
+  }, [archived, session.id]);
+
+  if (archived && archivedRegistrations === null) {
+    return <div className="card"><p>Loading roster…</p></div>;
+  }
+
+  const registrations = archived ? (archivedRegistrations ?? []) : (preloaded ?? []);
   const approved = registrations.filter((player) => player.registration_status === "approved");
   const requested = registrations.filter((player) => player.registration_status === "requested");
   const waitlisted = registrations.filter((player) => player.registration_status === "waitlisted");
@@ -23,8 +46,8 @@ export function OpenPlayRoster({ session, registrations, refresh }: { session: O
 
   return <>
     <div className="section-command-bar roster-command-bar">
-      <div><p className="eyebrow">SESSION ROSTER</p><h2>{session.name}</h2><p>{dateTime(session.scheduled_start)} · {registrations.length} registration records</p></div>
-      <div><Link className="button button-ghost inline-action" href={`/open-play/${session.id}`}>Back to session</Link></div>
+      <div><p className="eyebrow">{archived ? "ARCHIVED ROSTER" : "SESSION ROSTER"}</p><h2>{session.name}</h2><p>{dateTime(session.scheduled_start)} · {registrations.length} registration {registrations.length === 1 ? "record" : "records"}</p></div>
+      <div><Link className="button button-ghost inline-action" href={archived ? "/open-play/archive" : `/open-play/${session.id}`}>{archived ? "Back to archive" : "Back to session"}</Link></div>
     </div>
     <div className="metric-grid roster-metrics">
       <Metric icon={Users} value={`${approved.length}/${session.capacity || "—"}`} label="APPROVED SLOTS" />
@@ -33,9 +56,9 @@ export function OpenPlayRoster({ session, registrations, refresh }: { session: O
       <Metric icon={UserCheck} value={String(registrations.filter((player) => player.checked_in_at).length)} label="CHECKED IN" />
     </div>
     <div className="toolbar roster-toolbar"><div className="search"><Search size={15} /><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search this roster" aria-label="Search this session roster" /></div><div className="segmented">{["all", "requested", "approved", "waitlisted", "checked_in"].map((value) => <button key={value} className={filter === value ? "active" : ""} type="button" onClick={() => setFilter(value)}>{titleCase(value)}</button>)}</div></div>
-    {visible.length ? <div className="table-card"><table className="data-table mobile-card-table player-table"><thead><tr><th>PLAYER</th><th>RATING</th><th>REGISTRATION</th><th>JOINED</th><th>ATTENDANCE</th><th>ACTION</th></tr></thead><tbody>{visible.map((player) => {
+    {visible.length ? <div className="table-card"><table className="data-table mobile-card-table player-table"><thead><tr><th>PLAYER</th><th>RATING</th><th>REGISTRATION</th><th>JOINED</th><th>ATTENDANCE</th>{archived ? null : <th>ACTION</th>}</tr></thead><tbody>{visible.map((player) => {
       const busy = busyPlayerId === player.id;
-      return <tr key={player.id}><td data-label="Player" className="mobile-primary-cell"><Person registration={player} /></td><td data-label="Rating">{player.profiles?.skill_rating?.toFixed(1) || "—"}</td><td data-label="Registration"><Status value={player.registration_status || "requested"} /></td><td data-label="Joined">{dateTime(player.joined_at)}</td><td data-label="Attendance"><Status value={player.checked_in_at ? "checked_in" : "not_checked_in"} /></td><td data-label="Next step" className="mobile-action-cell"><RegistrationActions player={player} busy={busy} act={act} /></td></tr>;
+      return <tr key={player.id}><td data-label="Player" className="mobile-primary-cell"><Person registration={player} /></td><td data-label="Rating">{player.profiles?.skill_rating?.toFixed(1) || "—"}</td><td data-label="Registration"><Status value={player.registration_status || "requested"} /></td><td data-label="Joined">{dateTime(player.joined_at)}</td><td data-label="Attendance"><Status value={player.checked_in_at ? "checked_in" : "not_checked_in"} /></td>{archived ? null : <td data-label="Next step" className="mobile-action-cell"><RegistrationActions player={player} busy={busy} act={act} /></td>}</tr>;
     })}</tbody></table></div> : <Empty title="No matching registrations" detail={registrations.length ? "Change the search or status filter to see other players." : "Players who join this Open Play from the mobile app will appear here automatically."} />}
   </>;
 }

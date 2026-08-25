@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { AppState } from 'react-native';
 import { useAuth } from '../context/AuthContext';
@@ -19,6 +19,8 @@ import {
   stopPresence,
   updateNearbyLiveMatch,
 } from '../services/nearbyPlayers';
+import { DEMO_MODE } from '../config/demoMode';
+import { DEMO_NEARBY_PLAYERS } from '../config/demoData';
 
 const REFRESH_MS = 20_000;
 const PRESENCE_AVAILABILITY = { free: 'available', away: 'offline', in_play: 'busy' };
@@ -55,6 +57,17 @@ export default function useNearbyPlayers(radiusKm = 25) {
 
   useEffect(() => { visibleRef.current = visible; }, [visible]);
   useEffect(() => { locationRef.current = userLocation; }, [userLocation]);
+
+  // Real "nearby" presence needs granted GPS permission, which a demo build
+  // running in a simulator usually doesn't have. Show the canned roster
+  // regardless, without touching the real visibility/location machinery.
+  useEffect(() => {
+    if (!DEMO_MODE) return undefined;
+    visibleRef.current = true;
+    setVisible(true);
+    setPlayers(DEMO_NEARBY_PLAYERS);
+    return undefined;
+  }, []);
 
   const refreshInvites = useCallback(async () => {
     if (!user?.id) return;

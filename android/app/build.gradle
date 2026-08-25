@@ -1,6 +1,9 @@
 apply plugin: "com.android.application"
 apply plugin: "org.jetbrains.kotlin.android"
 apply plugin: "com.facebook.react"
+if (file("google-services.json").exists()) {
+    apply plugin: "com.google.gms.google-services"
+}
 
 def projectRoot = rootDir.getAbsoluteFile().getParentFile().getAbsolutePath()
 
@@ -81,6 +84,16 @@ def enableMinifyInReleaseBuilds = (findProperty('android.enableMinifyInReleaseBu
  */
 def jscFlavor = 'io.github.react-native-community:jsc-android:2026004.+'
 
+// Source-map upload improves Sentry stack traces but must never make an
+// otherwise valid store bundle fail when release credentials are unavailable.
+def sentryUploadConfigured = System.getenv("SENTRY_AUTH_TOKEN") &&
+    System.getenv("SENTRY_ORG") && System.getenv("SENTRY_PROJECT")
+if (sentryUploadConfigured) {
+    apply from: new File(["node", "--print", "require('path').dirname(require.resolve('@sentry/react-native/package.json'))"].execute().text.trim(), "sentry.gradle")
+} else {
+    logger.lifecycle("Sentry source-map upload skipped: SENTRY_AUTH_TOKEN, SENTRY_ORG, and SENTRY_PROJECT are not all configured.")
+}
+
 android {
     ndkVersion rootProject.ext.ndkVersion
 
@@ -104,15 +117,24 @@ android {
             keyAlias 'androiddebugkey'
             keyPassword 'android'
         }
+        release {
+            def uploadStoreFile = findProperty('PEAKLE_UPLOAD_STORE_FILE') ?: System.getenv('PEAKLE_UPLOAD_STORE_FILE')
+            if (uploadStoreFile) {
+                storeFile file(uploadStoreFile)
+                storePassword findProperty('PEAKLE_UPLOAD_STORE_PASSWORD') ?: System.getenv('PEAKLE_UPLOAD_STORE_PASSWORD')
+                keyAlias findProperty('PEAKLE_UPLOAD_KEY_ALIAS') ?: System.getenv('PEAKLE_UPLOAD_KEY_ALIAS')
+                keyPassword findProperty('PEAKLE_UPLOAD_KEY_PASSWORD') ?: System.getenv('PEAKLE_UPLOAD_KEY_PASSWORD')
+            }
+        }
     }
     buildTypes {
         debug {
             signingConfig signingConfigs.debug
         }
         release {
-            // Caution! In production, you need to generate your own keystore file.
-            // see https://reactnative.dev/docs/signed-apk-android.
-            signingConfig signingConfigs.debug
+            // EAS injects the remote upload credential for production builds.
+            // Local release builds may use the PEAKLE_UPLOAD_* Gradle properties.
+            if (signingConfigs.release.storeFile != null) signingConfig signingConfigs.release
             def enableShrinkResources = findProperty('android.enableShrinkResourcesInReleaseBuilds') ?: 'false'
             shrinkResources enableShrinkResources.toBoolean()
             minifyEnabled enableMinifyInReleaseBuilds

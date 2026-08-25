@@ -1,0 +1,82 @@
+# Build: Peakle Admin Web (`/admin-web`)
+
+**Context:** Standalone admin portal for the Peakle platform, separate from `/organizer-web` (React Native player app at `/src`, organizer portal at `/organizer-web`). Reuses the same Supabase project (same `.env` — `SUPABASE_URL` + anon key). Access control is DB-side via the existing `platform_admins` table and `is_platform_admin()` RPC — gate every query behind it.
+
+**Stack:** Next.js 15, TypeScript, App Router. Mirror `/organizer-web`'s project setup (same deps: Supabase JS, Lucide React, Sonner). Runs on port `3001`.
+
+---
+
+## Theme — match the app exactly, don't invent values
+
+This prompt may be run outside the repo root, so don't assume free browsing — but the source of truth lives in the existing project:
+
+1. **Copy verbatim** the CSS variables / Tailwind tokens from `organizer-web/app/globals.css` and `organizer-web/tailwind.config.ts` (the `peakle-ink`, `peakle-paper`, `peakle-optic` set). Do not redefine or approximate colors — read those two files first and reuse the exact values.
+2. Font stack: **General Sans + Satoshi + Space Grotesk** (same imports as organizer-web).
+3. Admin-only overrides, layered on top of the copied tokens:
+   - Sidebar: always dark, `#0B1613` (deep forest) — ignores the theme toggle.
+   - Primary action accent: `peakle-optic` / `#D6E94A`.
+   - Status badges: teal = active, brick = warning, red/error = suspended or banned.
+4. If `organizer-web`'s files are genuinely unreachable, fall back to points 2–3 and keep everything else neutral dark/light — don't guess brand colors.
+
+---
+
+## Scope — keep it simple, one admin persona
+
+Cut from 6 sections to 4. Use slide-over drawers for record detail instead of dedicated `[id]` routes — same functionality, less routing.
+
+| Route | Contains |
+|---|---|
+| `/` | Redirect → `/dashboard` |
+| `/dashboard` | KPIs (total users, active venues, sessions this month, gross revenue) + one growth chart + recent activity feed. No separate analytics page. |
+| `/users` | Searchable table (name, email, join date, rating). Row click → detail drawer (profile, match history, memberships, reports). Ban/unban in drawer. |
+| `/venues` | Table + pending-approval tab. Row click → detail drawer (address, courts, organizers, verification_status). Approve / Reject / Suspend with confirm dialog. |
+| `/access` | Two tabs, one page: **Entitlements** (organizer plan/tier, grant/revoke) and **Admins** (list `platform_admins`, add by email, remove — can't remove self). |
+
+`app/(admin)/layout.tsx` guards every route: not `isAdmin` → show login screen instead of the shell.
+
+---
+
+## File structure
+
+```
+admin-web/
+  app/
+    page.tsx                        # redirect → /dashboard
+    layout.tsx                      # root layout + Providers
+    globals.css                     # copied tokens (see Theme)
+    (admin)/
+      layout.tsx                    # sidebar + topbar, isAdmin guard
+      dashboard/page.tsx
+      users/page.tsx
+      venues/page.tsx
+      access/page.tsx
+  features/admin/
+    admin-portal.tsx                # shell: sidebar, topbar, guard
+    config/admin-navigation.ts      # 4 nav items
+    sections/
+      dashboard-section.tsx
+      users-section.tsx
+      user-detail-drawer.tsx
+      venues-section.tsx
+      venue-detail-drawer.tsx
+      access-section.tsx            # entitlements tab + admins tab
+  lib/
+    supabase.ts                     # same client pattern as organizer-web
+    admin-data.ts                   # every query gated behind is_platform_admin()
+    types.ts
+  components/
+    providers.tsx
+    login-screen.tsx                # "Platform Admin" branding
+    admin-ui.tsx                    # stat card, table, badge, drawer, tabs
+  package.json / next.config.ts / tsconfig.json
+```
+
+---
+
+## Verify
+
+```bash
+cd admin-web && npm run build     # must pass with 0 TS errors
+```
+
+Manual: `localhost:3001` shows login → non-admin sees "Admin access required" → admin sees dashboard KPIs → Venues approval queue approves and updates `verification_status` in Supabase → Users table search works → Access page lists `platform_admins`.

@@ -65,7 +65,9 @@
     <key>NSLocationWhenInUseUsageDescription</key>
     <string>Allow Peakle to use your location for nearby courts, teams, and players.</string>
     <key>NSMicrophoneUsageDescription</key>
-    <string>Allow $(PRODUCT_NAME) to access your microphone</string>
+    <string>Allow Peakle to use the microphone so players can call out the score.</string>
+    <key>NSSpeechRecognitionUsageDescription</key>
+    <string>Allow Peakle to recognize shouted scores during a match.</string>
     <key>NSPhotoLibraryUsageDescription</key>
     <string>Allow $(PRODUCT_NAME) to access your photos</string>
     <key>NSPhotoLibraryAddUsageDescription</key>

@@ -27,7 +27,7 @@ npm run dev
 
 Open `http://localhost:3000/overview`.
 
-The portal always uses authenticated data from the shared Peakle Supabase project. There is no preview or seeded-data mode.
+The portal uses authenticated data from the shared Peakle Supabase project. Local development also includes a read-only **Peakle Summer Smash · Demo** competition plus two live open-play demos so both monitor types and the multi-activity switcher can be tested without adding fake rows to Supabase. Set `NEXT_PUBLIC_ENABLE_COMPETITION_DEMO=true` and `NEXT_PUBLIC_ENABLE_OPEN_PLAY_DEMO=true` to enable the fixtures in another non-production environment.
 
 ## Required Supabase authentication settings
 
@@ -63,4 +63,4 @@ NEXT_PUBLIC_SITE_URL
 
 Recommended domain: `organizer.peakle.app`.
 
-Keep the current native organizer workspace available during beta. After real-account parity testing, replace the mobile workspace switch with a link to the deployed portal.
+The native app is player-only. Its Profile screen links organizers to this responsive portal for the dashboard, live monitor, and player management.

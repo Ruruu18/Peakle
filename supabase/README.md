@@ -51,11 +51,11 @@ The app batches up to 25 destinations per request, asks openrouteservice for roa
 
 `migrations/202607260003_profile_photos.sql` adds the public `profile-photos` bucket with account-scoped upload and deletion policies. Apply it before testing profile photo changes. The app crops photos to a square, resizes them to 720 px, converts them to JPEG, and enforces a 2 MB upload limit.
 
-`migrations/202607260004_remove_legacy_cartoon_avatars.sql` retires the old DiceBear character URLs for existing profiles. Those accounts show their initials until they upload a real profile photo.
+`migrations/202607260005_remove_legacy_cartoon_avatars.sql` retires the old DiceBear character URLs for existing profiles. Those accounts show their initials until they upload a real profile photo.
 
-`migrations/202607260008_team_chat_safety.sql` adds the adult-only chat acknowledgement, server-side spam and language controls, private blocks, message reporting, automated safety flags, moderator removals, platform suspensions, and protected report queues. Apply it before opening team chat with this app version. Existing users will be asked to confirm they are at least 18 when they first open chat; users who do not confirm remain able to use non-chat features.
+`migrations/202607260009_team_chat_safety.sql` adds the adult-only chat acknowledgement, server-side spam and language controls, private blocks, message reporting, automated safety flags, moderator removals, platform suspensions, and protected report queues. Apply it before opening team chat with this app version. Existing users will be asked to confirm they are at least 18 when they first open chat; users who do not confirm remain able to use non-chat features.
 
-`migrations/202607260009_organizer_media.sql` adds organizer-controlled venue brand images, individual court photos, and competition cover photos. Apply it before testing the image controls in **Organizer → Venue** or **Organizer → More → Competition**. Images are resized to 1,600 px, converted to JPEG, limited to 4 MB, and stored in the public `organizer-media` bucket with venue/competition manager-only write policies.
+`migrations/202607260010_organizer_media.sql` adds organizer-controlled venue brand images, individual court photos, and competition cover photos. Apply it before testing the image controls in **Organizer → Venue** or **Organizer → More → Competition**. Images are resized to 1,600 px, converted to JPEG, limited to 4 MB, and stored in the public `organizer-media` bucket with venue/competition manager-only write policies.
 
 ### Team chat safety test
 
@@ -96,11 +96,10 @@ The app batches up to 25 destinations per request, asks openrouteservice for roa
 
 Push notifications require a development or production build on a physical iOS or Android device; Expo Go and simulators cannot provide a production device token. After applying migration 002:
 
-1. Set a strong function secret: `supabase secrets set PUSH_DISPATCH_SECRET=...`.
+1. Apply migration `202608250003`. It generates the dispatcher credential in Supabase Vault and installs both Cron jobs; the secret never belongs in the mobile app or repository.
 2. Deploy the dispatcher: `supabase functions deploy send-push-notifications --no-verify-jwt`.
-3. In Supabase **Integrations → Cron**, run `select public.queue_open_play_check_in_reminders();` every five minutes.
-4. Add another Cron job every minute that invokes `send-push-notifications` with the `x-push-dispatch-secret` header. Keep the secret in Vault or the Cron job's protected HTTP headers, never in the mobile app.
-5. In a physical build, open **Profile → Settings** and enable court alerts or match reminders. Confirm a row appears in `device_push_tokens`.
+3. Confirm the `queue-open-play-check-in-reminders` job runs every five minutes and `send-push-notifications` runs every minute in **Integrations → Cron**.
+4. In a physical build, open **Profile → Settings** and enable court alerts or match reminders. Confirm a row appears in `device_push_tokens`.
 
 The dispatcher claims at most 100 pending notifications per run, batches them through Expo Push Service, records delivery tickets, skips users without an enabled device, and retries transient failures up to five times. Database triggers populate the outbox for approval, waitlist promotion, court assignment, match point, result, cancellation, and venue announcements; the first Cron job creates check-in reminders.
 

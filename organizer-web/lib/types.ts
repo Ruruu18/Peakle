@@ -7,6 +7,7 @@ export type Court = {
   environment?: string | null;
   surface?: string | null;
   hourly_price?: number | null;
+  owner_hourly_price?: number | null;
   active?: boolean | null;
   image_url?: string | null;
 };
@@ -48,6 +49,7 @@ export type OpenPlaySession = {
   waitlisted_count?: number;
   match_count?: number;
   revision?: number | null;
+  is_demo?: boolean;
 };
 
 export type Registration = {
@@ -87,6 +89,17 @@ export type OpenPlayMatch = {
   open_play_match_players?: OpenPlayMatchPlayer[];
 };
 
+export type OpenPlayScoreEvent = {
+  id: number;
+  match_id: string;
+  action?: string | null;
+  rally_winner_side?: number | null;
+  home_score: number;
+  away_score: number;
+  created_at: string;
+  undone_at?: string | null;
+};
+
 export type StaffMember = {
   venue_id: string;
   user_id: string;
@@ -107,6 +120,72 @@ export type Program = {
   program_registrations?: { status?: string | null }[];
 };
 
+export type CompetitionEntry = {
+  id: string;
+  competition_id: string;
+  competition_division_id?: string | null;
+  user_id?: string | null;
+  team_id?: string | null;
+  seed?: number | null;
+  status?: string | null;
+  eligibility_status?: string | null;
+  played?: number | null;
+  won?: number | null;
+  lost?: number | null;
+  points_for?: number | null;
+  points_against?: number | null;
+  standing_points?: number | null;
+  profiles?: { display_name?: string | null; avatar_url?: string | null } | null;
+  teams?: { name?: string | null; tag?: string | null } | null;
+};
+
+export type CompetitionMatchGame = {
+  id: string;
+  game_number: number;
+  home_score: number;
+  away_score: number;
+  winner_side?: number | null;
+};
+
+export type CompetitionMatch = {
+  id: string;
+  status?: string | null;
+  scheduled_at?: string | null;
+  started_at?: string | null;
+  ended_at?: string | null;
+  match_games?: CompetitionMatchGame[];
+};
+
+export type CompetitionBracketMatch = {
+  id: string;
+  competition_id: string;
+  competition_division_id: string;
+  round_number: number;
+  position: number;
+  home_entry_id?: string | null;
+  away_entry_id?: string | null;
+  winner_entry_id?: string | null;
+  match_id?: string | null;
+  status: string;
+  scheduled_at?: string | null;
+  matches?: CompetitionMatch | null;
+};
+
+export type CompetitionDivision = {
+  id: string;
+  competition_id: string;
+  name: string;
+  participant_division?: string | null;
+  format?: string | null;
+  skill_category?: string | null;
+  entry_type?: string | null;
+  capacity?: number | null;
+  status?: string | null;
+  position?: number | null;
+  competition_entries?: CompetitionEntry[];
+  competition_bracket_matches?: CompetitionBracketMatch[];
+};
+
 export type Competition = {
   id: string;
   venue_id: string;
@@ -114,7 +193,7 @@ export type Competition = {
   kind?: string | null;
   starts_on?: string | null;
   status?: string | null;
-  competition_divisions?: { id: string; name?: string | null; competition_entries?: { id: string; status?: string | null }[] }[];
+  competition_divisions?: CompetitionDivision[];
 };
 
 export type MembershipProduct = {
@@ -127,7 +206,15 @@ export type MembershipProduct = {
   discount_percent?: number | null;
   validity_days?: number | null;
   active?: boolean | null;
-  player_memberships?: { id: string; status?: string | null }[];
+  player_memberships?: {
+    id: string;
+    status?: string | null;
+    payment_status?: string | null;
+    payment_method?: string | null;
+    amount_due?: number | null;
+    paid_at?: string | null;
+    profiles?: { display_name?: string | null } | null;
+  }[];
 };
 
 export type Analytics = {
@@ -144,9 +231,47 @@ export type Analytics = {
   dailyUtilization?: { date: string; utilization: number }[];
 };
 
+export type EarningsHistoryEntry = {
+  id: string;
+  total_collected: number;
+  venue_amount: number;
+  platform_fee: number;
+  outcome: "active" | "cancelled";
+  status: "pending" | "requested" | "processing" | "paid";
+  created_at: string;
+  reference?: string | null;
+  starts_at?: string | null;
+  source_type?: "booking" | "membership" | null;
+  description?: string | null;
+};
+
+export type Booking = {
+  id: string;
+  reference?: string | null;
+  starts_at: string;
+  ends_at: string;
+  amount: number;
+  currency: string;
+  status: "pending" | "confirmed" | "cancelled" | "completed" | string;
+  payment_status: "pay_at_venue" | "awaiting_payment" | "paid" | "refunded" | "partially_refunded" | "failed" | string;
+  payment_method?: "gcash" | "paymaya" | "card" | "dob" | string | null;
+  created_at: string;
+  court_name?: string | null;
+  player_name?: string | null;
+};
+
+export type Earnings = {
+  available_balance: number;
+  pending_withdrawal: number;
+  total_earned: number;
+  total_bookings: number;
+  total_transactions?: number;
+  min_withdrawal_amount: number;
+  history: EarningsHistoryEntry[];
+};
+
 export type OrganizerData = {
   profile: { id: string; name: string; email?: string | null; avatar?: string | null; location?: string | null };
-  entitlement: { status: string; tier?: string | null; currentPeriodEnd?: string | null } | null;
   isAdmin: boolean;
   venues: Venue[];
   sessions: OpenPlaySession[];
@@ -154,6 +279,7 @@ export type OrganizerData = {
   registrations: Registration[];
   liveCourts: {
     id: string;
+    session_id?: string | null;
     court_number?: number | null;
     match_format?: string | null;
     venue_court?: { name?: string | null } | null;
@@ -164,4 +290,6 @@ export type OrganizerData = {
   competitions: Competition[];
   memberships: MembershipProduct[];
   analytics: Analytics | null;
+  earnings: Earnings | null;
+  bookings: Booking[];
 };

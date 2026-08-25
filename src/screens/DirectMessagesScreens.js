@@ -18,6 +18,8 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { StatusBar } from 'expo-status-bar';
 import Ionicons from '@expo/vector-icons/Ionicons';
 import { useFocusEffect } from '@react-navigation/native';
+import { DEMO_MODE } from '../config/demoMode';
+import { DEMO_CONVERSATION_ID, DEMO_DIRECT_MESSAGE_DRIP } from '../config/demoData';
 import ScrollView from '../components/FocusResetScrollView';
 import ProfilePhoto from '../components/ProfilePhoto';
 import { useAuth } from '../context/AuthContext';
@@ -71,6 +73,14 @@ const DARK_C = {
 const TYPING_IDLE_MS = 1400;
 const TYPING_HEARTBEAT_MS = 900;
 const TYPING_EXPIRY_MS = 2600;
+const EMPTY_INBOX_SNAPSHOT = Object.freeze({
+  directConversations: [],
+  privateConnections: [],
+  followingPlayers: [],
+  teams: [],
+  teamSummaries: {},
+});
+const inboxCache = new Map();
 
 // Maps player_status values to indicator colours (mirrors ProfileScreen PRESENCE_OPTIONS)
 const PRESENCE_DOT_COLOR = {
@@ -284,22 +294,6 @@ function FollowingStrip({ players, onPress, colors }) {
   );
 }
 
-function PrivateConnectionRow({ player, onPress, colors, isLast = false }) {
-  return (
-    <Pressable accessibilityLabel={`Message ${player.name}`} onPress={onPress} style={({ pressed }) => [styles.conversationRow, { borderColor: colors.line }, isLast && styles.conversationRowLast, pressed && styles.pressed]}>
-      <View>
-        <ProfilePhoto photo={player.avatar} name={player.name} size={52} />
-        <View style={[styles.connectionBadge, { backgroundColor: colors.optic, borderColor: colors.surface }]}><Icon name="chatbubble" size={9} color="#0E2321" /></View>
-      </View>
-      <View style={styles.conversationCopy}>
-        <Text numberOfLines={1} style={[styles.conversationName, { color: colors.ink }]}>{player.name}</Text>
-        <View style={styles.conversationPreviewRow}><Text numberOfLines={1} style={[styles.conversationPreview, { color: colors.teal }]}>Mutual follow · Private chat ready</Text></View>
-      </View>
-      <View style={[styles.connectionMessageButton, { backgroundColor: colors.tealWash }]}><Icon name="chatbubble-outline" size={18} color={colors.teal} /></View>
-    </Pressable>
-  );
-}
-
 function NewMessageModal({ visible, onClose, onSelect, colors }) {
   const [query, setQuery] = useState('');
   const [results, setResults] = useState([]);
@@ -390,18 +384,33 @@ export function InboxScreen({ navigation }) {
   const { isDark } = useTheme();
   const colors = isDark ? DARK_C : LIGHT_C;
   const { user } = useAuth();
+  const cachedInbox = user?.id ? inboxCache.get(user.id) : null;
   const [filter, setFilter] = useState('All');
-  const [directConversations, setDirectConversations] = useState([]);
-  const [privateConnections, setPrivateConnections] = useState([]);
-  const [followingPlayers, setFollowingPlayers] = useState([]);
-  const [teams, setTeams] = useState([]);
-  const [teamSummaries, setTeamSummaries] = useState({});
-  const [loading, setLoading] = useState(true);
+  const [inbox, setInbox] = useState(() => cachedInbox || EMPTY_INBOX_SNAPSHOT);
+  const [loading, setLoading] = useState(() => !cachedInbox);
   const [composeOpen, setComposeOpen] = useState(false);
-  const hasLoadedRef = useRef(false);
+  const hasLoadedRef = useRef(Boolean(cachedInbox));
+  const requestIdRef = useRef(0);
+  const activeUserIdRef = useRef(user?.id);
+  activeUserIdRef.current = user?.id;
+  const { directConversations, privateConnections, followingPlayers, teams, teamSummaries } = inbox;
+
+  useEffect(() => {
+    requestIdRef.current += 1;
+    const nextCachedInbox = user?.id ? inboxCache.get(user.id) : null;
+    setInbox(nextCachedInbox || EMPTY_INBOX_SNAPSHOT);
+    hasLoadedRef.current = Boolean(nextCachedInbox);
+    setLoading(Boolean(user?.id) && !nextCachedInbox);
+  }, [user?.id]);
+
   const loadInbox = useCallback(async ({ showSkeleton = false } = {}) => {
-    if (!user?.id) return;
-    if (showSkeleton && !hasLoadedRef.current) setLoading(true);
+    const userId = user?.id;
+    if (!userId) {
+      setLoading(false);
+      return;
+    }
+    const requestId = ++requestIdRef.current;
+    if (showSkeleton && !hasLoadedRef.current && !inboxCache.has(userId)) setLoading(true);
     try {
       const [direct, connections, following, allTeams] = await Promise.all([
         listDirectConversations(),
@@ -411,16 +420,23 @@ export function InboxScreen({ navigation }) {
       ]);
       const mine = allTeams.filter((team) => team.role);
       const summaries = await listTeamConversationSummaries(mine.map((team) => team.id));
-      setDirectConversations(direct);
-      setPrivateConnections(connections);
-      setFollowingPlayers(following);
-      setTeams(mine);
-      setTeamSummaries(Object.fromEntries(summaries.map((item) => [item.team_id, item])));
-    } catch (error) {
-      Alert.alert('Messages unavailable', error.message);
-    } finally {
+      if (requestId !== requestIdRef.current || activeUserIdRef.current !== userId) return;
+      const nextInbox = {
+        directConversations: direct,
+        privateConnections: connections,
+        followingPlayers: following,
+        teams: mine,
+        teamSummaries: Object.fromEntries(summaries.map((item) => [item.team_id, item])),
+      };
+      inboxCache.set(userId, nextInbox);
+      setInbox(nextInbox);
       hasLoadedRef.current = true;
-      setLoading(false);
+    } catch (error) {
+      if (requestId === requestIdRef.current && activeUserIdRef.current === userId && !hasLoadedRef.current) {
+        Alert.alert('Messages unavailable', error.message);
+      }
+    } finally {
+      if (requestId === requestIdRef.current && activeUserIdRef.current === userId) setLoading(false);
     }
   }, [user?.id]);
   useFocusEffect(useCallback(() => {
@@ -485,7 +501,6 @@ export function InboxScreen({ navigation }) {
     Teams: teams.length,
   };
   const showRequests = filter !== 'Teams' && incomingRequests.length > 0;
-  const showConnections = filter === 'Private' && privateConnections.length > 0;
   const sectionTitle = filter === 'Private' ? 'PRIVATE MESSAGES' : filter === 'Teams' ? 'TEAM CHATS' : 'RECENT';
   const emptyCopy = filter === 'Private'
     ? ['No private conversations', 'Start one from a player profile or the compose button.']
@@ -493,29 +508,12 @@ export function InboxScreen({ navigation }) {
       ? ['No team chats yet', 'Your team conversations will appear here.']
       : ['Your inbox is ready', 'Private and team conversations will appear here.'];
 
-  const showStrip = filter !== 'Teams' && followingPlayers.length > 0;
+  const showStrip = followingPlayers.length > 0;
 
   return (
     <SafeAreaView style={[styles.safe, { backgroundColor: colors.paper }]}>
       <StatusBar style={isDark ? 'light' : 'dark'} backgroundColor={colors.paper} />
       <ScreenHeader eyebrow="CONVERSATIONS" title="Messages" onBack={() => navigation.goBack()} colors={colors} action={<Pressable accessibilityLabel="New private message" hitSlop={8} onPress={() => setComposeOpen(true)} style={[styles.composeButton, { backgroundColor: colors.optic }]}><Icon name="create-outline" size={21} color="#0E2321" /></Pressable>} />
-      <View style={[styles.filters, { backgroundColor: colors.surface, borderColor: colors.line }]}>
-        {['All', 'Private', 'Teams'].map((item) => {
-          const selected = filter === item;
-          return (
-            <Pressable
-              key={item}
-              accessibilityRole="tab"
-              accessibilityState={{ selected }}
-              onPress={() => setFilter(item)}
-              style={({ pressed }) => [styles.filter, selected && { backgroundColor: colors.tealWash }, pressed && styles.filterPressed]}
-            >
-              <Text style={[styles.filterText, { color: selected ? colors.teal : colors.ink70 }]}>{item}</Text>
-              <Text style={[styles.filterCount, { color: selected ? colors.teal : colors.ink40 }]}>{loading ? '—' : filterCounts[item]}</Text>
-            </Pressable>
-          );
-        })}
-      </View>
       <ScrollView contentContainerStyle={styles.inboxContent} showsVerticalScrollIndicator={false}>
         {!loading && showStrip ? (
           <>
@@ -523,20 +521,29 @@ export function InboxScreen({ navigation }) {
             <FollowingStrip players={followingPlayers} onPress={openConnection} colors={colors} />
           </>
         ) : null}
+        <View style={[styles.filters, { backgroundColor: colors.surface, borderColor: colors.line }]}>
+          {['All', 'Private', 'Teams'].map((item) => {
+            const selected = filter === item;
+            return (
+              <Pressable
+                key={item}
+                accessibilityRole="tab"
+                accessibilityState={{ selected }}
+                onPress={() => setFilter(item)}
+                style={({ pressed }) => [styles.filter, selected && { backgroundColor: colors.tealWash }, pressed && styles.filterPressed]}
+              >
+                <Text style={[styles.filterText, { color: selected ? colors.teal : colors.ink70 }]}>{item}</Text>
+                <Text style={[styles.filterCount, { color: selected ? colors.teal : colors.ink40 }]}>{loading ? '—' : filterCounts[item]}</Text>
+              </Pressable>
+            );
+          })}
+        </View>
         {loading ? <InboxLoadingSkeleton colors={colors} /> : null}
         {!loading && showRequests ? (
           <>
             <View style={styles.sectionHead}><Text style={[styles.sectionLabel, { color: colors.brick }]}>MESSAGE REQUESTS</Text><Text style={[styles.sectionMeta, { color: colors.brick }]}>{incomingRequests.length}</Text></View>
             <View style={[styles.conversationList, { backgroundColor: colors.surface, borderColor: colors.line }]}>
               {incomingRequests.map((item, index) => <ConversationRow key={item.id} conversation={item} currentUserId={user?.id} onPress={() => openPrivate(item)} colors={colors} isLast={index === incomingRequests.length - 1} />)}
-            </View>
-          </>
-        ) : null}
-        {!loading && showConnections ? (
-          <>
-            <View style={styles.sectionHead}><Text style={[styles.sectionLabel, { color: colors.teal }]}>READY TO MESSAGE</Text><Text style={[styles.sectionMeta, { color: colors.ink40 }]}>{privateConnections.length} {privateConnections.length === 1 ? 'connection' : 'connections'}</Text></View>
-            <View style={[styles.conversationList, { backgroundColor: colors.surface, borderColor: colors.line }]}>
-              {privateConnections.map((player, index) => <PrivateConnectionRow key={player.id} player={player} onPress={() => openConnection(player)} colors={colors} isLast={index === privateConnections.length - 1} />)}
             </View>
           </>
         ) : null}
@@ -553,7 +560,7 @@ export function InboxScreen({ navigation }) {
             </View>
           </>
         ) : null}
-        {!loading && !threads.length && !showRequests && !showConnections ? <View style={styles.empty}><View style={[styles.emptyIcon, { backgroundColor: colors.surface, borderColor: colors.line }]}><Icon name={filter === 'Private' ? 'chatbubble-outline' : filter === 'Teams' ? 'people-outline' : 'chatbubbles-outline'} size={26} color={colors.teal} /></View><Text style={[styles.emptyTitle, { color: colors.ink }]}>{emptyCopy[0]}</Text><Text style={[styles.emptyText, { color: colors.ink40 }]}>{emptyCopy[1]}</Text></View> : null}
+        {!loading && !threads.length && !showRequests ? <View style={styles.empty}><View style={[styles.emptyIcon, { backgroundColor: colors.surface, borderColor: colors.line }]}><Icon name={filter === 'Private' ? 'chatbubble-outline' : filter === 'Teams' ? 'people-outline' : 'chatbubbles-outline'} size={26} color={colors.teal} /></View><Text style={[styles.emptyTitle, { color: colors.ink }]}>{emptyCopy[0]}</Text><Text style={[styles.emptyText, { color: colors.ink40 }]}>{emptyCopy[1]}</Text></View> : null}
       </ScrollView>
       <NewMessageModal visible={composeOpen} onClose={() => setComposeOpen(false)} onSelect={choosePlayer} colors={colors} />
     </SafeAreaView>
@@ -625,6 +632,7 @@ function MessageRelationshipGate({ peer, permission, busy, onFollow, colors }) {
 
 function DirectMessageInteractionModal({ message, mode, peer, seen, colors, onModeChange, onClose, onReact, onDetails, onReport, onBlock }) {
   if (!message) return null;
+  const preview = message.text || 'Message';
   return (
     <Modal visible transparent animationType="fade" onRequestClose={onClose}>
       <View style={[styles.messageInteractionBackdrop, mode === 'actions' && styles.messageInteractionBackdropBottom]}>
@@ -633,6 +641,12 @@ function DirectMessageInteractionModal({ message, mode, peer, seen, colors, onMo
           <View style={[styles.messageInteractionCard, message.mine && styles.messageInteractionCardMine]}>
             <View style={[styles.directReactionPicker, { backgroundColor: colors.surface }]}>
               {DIRECT_REACTION_OPTIONS.map((emoji) => <Pressable key={emoji} accessibilityLabel={`React ${emoji}`} onPress={() => { onReact(message.id, emoji); onClose(); }} style={({ pressed }) => [styles.directReactionOption, pressed && { backgroundColor: colors.tealWash }]}><Text style={styles.directReactionOptionText}>{emoji}</Text></Pressable>)}
+            </View>
+            <View style={[styles.messageInteractionPreviewRow, message.mine && styles.messageInteractionPreviewRowMine]}>
+              <View style={[styles.messageInteractionPreview, { backgroundColor: colors.surface, borderColor: colors.line }, message.mine && styles.messageInteractionPreviewMine, message.mine && { backgroundColor: colors.teal, borderColor: colors.teal }]}>
+                <Text numberOfLines={5} style={[styles.messageInteractionPreviewText, { color: message.mine ? '#FFFFFF' : colors.ink }]}>{preview}</Text>
+              </View>
+              <Pressable accessibilityLabel="More message actions" onPress={() => onModeChange('actions')} style={[styles.messageInteractionMore, { backgroundColor: colors.surface }]}><Icon name="ellipsis-horizontal" size={22} color={colors.ink} /></Pressable>
             </View>
           </View>
         ) : (
@@ -663,7 +677,7 @@ function DirectChatMessage({ message, grouped, active, interactive, peer, seen, 
       {!message.mine && !grouped ? <ProfilePhoto photo={message.avatar || peer?.avatar} name={message.sender} size={30} /> : !message.mine ? <View style={styles.avatarSpacer} /> : null}
       <View style={[styles.directMessageBlock, message.mine && styles.directMessageBlockMine]}>
         <View style={[styles.directBubbleActionRow, message.mine && styles.directBubbleActionRowMine]}>
-          <Pressable accessibilityHint={interactive ? 'Tap for quick controls. Long press for reactions and message options.' : undefined} disabled={!interactive} onPress={() => onToggleControls(message.id)} onLongPress={() => onOpenActions(message.id)} delayLongPress={240} style={[styles.messageBubble, { backgroundColor: colors.surface, borderColor: colors.line }, message.mine && { backgroundColor: colors.teal, borderColor: colors.teal }]}><Text style={[styles.messageText, { color: message.mine ? '#FFFFFF' : colors.ink }]}>{message.text}</Text><Text style={[styles.messageTime, { color: message.mine ? 'rgba(255,255,255,.7)' : colors.ink40 }]}>{message.time}</Text></Pressable>
+          <Pressable accessibilityHint={interactive ? 'Tap for quick controls. Long press for reactions and message options.' : undefined} disabled={!interactive} onPress={() => onToggleControls(message.id)} onLongPress={() => onOpenReactions(message.id)} delayLongPress={240} style={[styles.messageBubble, { backgroundColor: colors.surface, borderColor: colors.line }, message.mine && { backgroundColor: colors.teal, borderColor: colors.teal }]}><Text style={[styles.messageText, { color: message.mine ? '#FFFFFF' : colors.ink }]}>{message.text}</Text><Text style={[styles.messageTime, { color: message.mine ? 'rgba(255,255,255,.7)' : colors.ink40 }]}>{message.time}</Text></Pressable>
           {active ? <View style={styles.directQuickActions}><Pressable accessibilityLabel="React to message" onPress={() => onOpenReactions(message.id)} style={[styles.directQuickAction, { backgroundColor: colors.surface, borderColor: colors.line }]}><Icon name="happy-outline" size={18} color={colors.ink70} /></Pressable><Pressable accessibilityLabel="More message actions" onPress={() => onOpenActions(message.id)} style={[styles.directQuickAction, { backgroundColor: colors.surface, borderColor: colors.line }]}><Icon name="ellipsis-horizontal" size={19} color={colors.ink70} /></Pressable></View> : null}
         </View>
         {reactionGroups.length ? <View style={[styles.directReactionSummary, message.mine && styles.directReactionSummaryMine]}>{reactionGroups.map((group) => { const mine = group.reactions.some((reaction) => reaction.user_id === currentUserId); return <Pressable key={group.emoji} accessibilityLabel={`${group.emoji}, ${group.reactions.length} reactions`} onPress={() => onReact(message.id, group.emoji)} style={[styles.directReactionChip, { backgroundColor: mine ? colors.tealWash : colors.surface, borderColor: mine ? colors.teal : colors.line }]}><Text style={styles.directReactionEmoji}>{group.emoji}</Text><Text style={[styles.directReactionCount, { color: colors.ink70 }]}>{group.reactions.length}</Text></Pressable>; })}</View> : null}
@@ -684,6 +698,21 @@ export function DirectChatScreen({ route, navigation }) {
   const [messages, setMessages] = useState([]);
   const [draft, setDraft] = useState('');
   const [loading, setLoading] = useState(true);
+  const dmDripIndex = useRef(0);
+  useEffect(() => {
+    if (!DEMO_MODE || conversationId !== DEMO_CONVERSATION_ID) return undefined;
+    const timer = setInterval(() => {
+      const next = DEMO_DIRECT_MESSAGE_DRIP[dmDripIndex.current % DEMO_DIRECT_MESSAGE_DRIP.length];
+      dmDripIndex.current += 1;
+      const createdAt = new Date().toISOString();
+      setMessages((current) => [...current, {
+        id: `${next.id}-${Date.now()}`, conversationId: DEMO_CONVERSATION_ID, senderId: 'p-priya-shah',
+        sender: 'Priya Shah', avatar: null, mine: false, text: next.text, reactions: [], createdAt,
+        time: new Date(createdAt).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }),
+      }]);
+    }, 4500);
+    return () => clearInterval(timer);
+  }, [conversationId]);
   const [sending, setSending] = useState(false);
   const [responding, setResponding] = useState(false);
   const [remoteTyping, setRemoteTyping] = useState(false);
@@ -757,7 +786,6 @@ export function DirectChatScreen({ route, navigation }) {
     }
   }, [conversationId, routePlayer?.id, user?.id]);
   useEffect(() => { loadConversation(); }, [loadConversation]);
-
   const sendTyping = useCallback((isTyping) => {
     if (!conversationId || conversation?.status !== 'accepted' || !channelRef.current) return;
     channelRef.current.send({ type: 'broadcast', event: 'typing', payload: { userId: user?.id, isTyping } }).catch(() => {});
@@ -996,7 +1024,7 @@ const styles = StyleSheet.create({
   iconButton: { width: 40, height: 40, alignItems: 'center', justifyContent: 'center', borderRadius: 20, borderWidth: 1 },
   composeButton: { width: 46, height: 46, alignItems: 'center', justifyContent: 'center', borderRadius: 23, ...Platform.select({ ios: { shadowColor: '#0E2321', shadowOpacity: 0.18, shadowRadius: 10, shadowOffset: { width: 0, height: 5 } }, android: { elevation: 5 } }) },
   rule: { height: 1 },
-  filters: { minHeight: 52, marginHorizontal: 20, marginTop: 16, padding: 4, flexDirection: 'row', borderRadius: 17, borderWidth: 1 },
+  filters: { minHeight: 52, marginTop: 16, padding: 4, flexDirection: 'row', borderRadius: 17, borderWidth: 1 },
   filter: { flex: 1, minHeight: 42, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6, borderRadius: 13 },
   filterPressed: { opacity: 0.72 },
   filterText: { fontSize: 13, fontWeight: '800' },
@@ -1009,8 +1037,6 @@ const styles = StyleSheet.create({
   conversationRow: { minHeight: 84, paddingHorizontal: 14, flexDirection: 'row', alignItems: 'center', gap: 13, borderBottomWidth: 1 },
   conversationRowLast: { borderBottomWidth: 0 },
   privateBadge: { position: 'absolute', right: -1, bottom: -1, width: 18, height: 18, alignItems: 'center', justifyContent: 'center', borderRadius: 9 },
-  connectionBadge: { position: 'absolute', right: -1, bottom: -1, width: 18, height: 18, alignItems: 'center', justifyContent: 'center', borderRadius: 9, borderWidth: 2 },
-  connectionMessageButton: { width: 40, height: 40, alignItems: 'center', justifyContent: 'center', borderRadius: 20 },
   conversationCopy: { flex: 1 },
   conversationNameRow: { flexDirection: 'row', alignItems: 'center', gap: 8 },
   conversationName: { flex: 1, fontSize: 15, fontWeight: '900', letterSpacing: -0.2 },

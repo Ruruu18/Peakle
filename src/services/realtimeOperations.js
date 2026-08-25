@@ -61,12 +61,13 @@ async function flushOpenPlayOperationsUnlocked(userId, { onApplied, onConflict }
     if (result?.conflict) {
       // Rebase once on the authoritative revision. The RPC still validates
       // that the target player is in a compatible state before applying.
-      const { data: retry, error: retryError } = await requireSupabase().rpc('apply_open_play_operation', {
+      const { data: retryData, error: retryError } = await requireSupabase().rpc('apply_open_play_operation', {
         p_operation_id: entry.id,
         p_session_id: entry.sessionId,
         p_base_revision: result.revision,
         p_operation: entry.operation,
       });
+      const retry = Array.isArray(retryData) ? retryData[0] : retryData;
       if (retryError || retry?.conflict) { onConflict?.(entry, retryError || retry); break; }
       revision = retry.revision;
     } else revision = result?.revision ?? revision;

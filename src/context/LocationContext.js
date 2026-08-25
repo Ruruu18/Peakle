@@ -195,42 +195,6 @@ export function LocationProvider({ children }) {
     return () => { active = false; };
   }, [user?.location]);
 
-  // On mount: ask for permission and, if granted, apply the GPS location automatically.
-  useEffect(() => {
-    let active = true;
-    (async () => {
-      try {
-        const servicesEnabled = await Location.hasServicesEnabledAsync();
-        if (!servicesEnabled) return;
-        // Request permission — shows the native prompt if not yet decided.
-        const permission = await Location.requestForegroundPermissionsAsync();
-        if (!active || permission.status !== 'granted') return;
-        const result = await Location.getCurrentPositionAsync({
-          accuracy: Location.Accuracy.Balanced,
-          mayShowUserSettingsDialog: true,
-        });
-        if (!active) return;
-        const coords = {
-          latitude: result.coords.latitude,
-          longitude: result.coords.longitude,
-          accuracy: Number.isFinite(result.coords.accuracy) ? Math.max(0, result.coords.accuracy) : null,
-          timestamp: Number.isFinite(result.timestamp) ? result.timestamp : Date.now(),
-          source: 'gps',
-        };
-        const label = await resolveAddress(coords);
-        if (!active) return;
-        setUserLocation((current) =>
-          // Don't overwrite a manually-set location.
-          current.source === 'manual' ? current : { ...coords, label, source: 'gps' }
-        );
-      } catch {
-        // Permission denied or GPS unavailable — stay on default / profile location.
-      }
-    })();
-    return () => { active = false; };
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
-
   const value = useMemo(() => ({ userLocation, loading, error, getCurrentCoordinates, useCurrentLocation, setManualLocation, clearError }), [userLocation, loading, error, getCurrentCoordinates, useCurrentLocation, setManualLocation, clearError]);
   return <LocationContext.Provider value={value}>{children}</LocationContext.Provider>;
 }

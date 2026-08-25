@@ -120,7 +120,7 @@ export function OperationsProvider({ children }) {
 
   const disablePushNotifications = useCallback(() => disablePushToken(user?.id), [user?.id]);
   useEffect(() => {
-    if (!user?.id || Platform.OS === 'web' || !Device.isDevice) return;
+    if (!user?.id || !user.onboardingCompleted || Platform.OS === 'web' || !Device.isDevice) return;
     const preferences = user.preferences || {};
     const hasEnabledPreference = preferences.messages !== false
       || preferences.squad !== false
@@ -130,13 +130,16 @@ export function OperationsProvider({ children }) {
     if (!hasEnabledPreference) return;
     Notifications.getPermissionsAsync()
       .then((permission) => {
-        if (permission.status === 'granted') return enablePushNotifications();
+        if (permission.status === 'granted') {
+          return enablePushNotifications();
+        }
         return null;
       })
       .catch(() => {});
   }, [
     enablePushNotifications,
     user?.id,
+    user?.onboardingCompleted,
     user?.preferences?.organizerCheckInAlerts,
     user?.preferences?.organizerCourtAlerts,
     user?.preferences?.messages,

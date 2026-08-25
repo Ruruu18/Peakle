@@ -142,81 +142,86 @@ export default function NotificationSheet({ visible, onClose, items, unreadCount
   const clearableCount = items.filter((item) => item.read_at && item.kind !== 'follow_request').length;
   const showInboxActions = unreadCount > 1 || clearableCount > 0;
   const [clearing, setClearing] = useState(false);
-  const confirmClearRead = () => Alert.alert(
-    'Clear read notifications?',
-    `${clearableCount} read notification${clearableCount === 1 ? '' : 's'} will be permanently deleted.`,
-    [
-      { text: 'Cancel', style: 'cancel' },
-      {
-        text: 'Clear',
-        style: 'destructive',
-        onPress: async () => {
-          setClearing(true);
-          try { await onClearRead(); }
-          catch (error) { Alert.alert('Notifications', error.message || 'Read notifications could not be cleared.'); }
-          finally { setClearing(false); }
-        },
-      },
-    ],
-  );
+  const [showClearAlert, setShowClearAlert] = useState(false);
+  const confirmClearRead = () => setShowClearAlert(true);
 
   return (
     <Modal visible={visible} transparent animationType="slide" onRequestClose={onClose} statusBarTranslucent>
-      <View style={styles.backdrop}>
-        <Pressable accessibilityLabel="Close notifications" onPress={onClose} style={styles.backdropDismiss} />
-        <View accessibilityViewIsModal style={[styles.sheet, { paddingBottom: Math.max(insets.bottom, 16) }]}>
-          <View style={styles.handle} />
-          <View style={styles.header}>
-            <View style={styles.headerCopy}>
-              <Text style={styles.eyebrow}>INBOX</Text>
-              <Text style={styles.title}>Notifications</Text>
-              <Text style={styles.subtitle}>{items.length ? `${updateLabel} in your inbox` : 'Your notification inbox'}</Text>
-            </View>
-            <Pressable accessibilityRole="button" accessibilityLabel="Close notifications" hitSlop={8} onPress={onClose} style={({ pressed }) => [styles.closeButton, pressed && styles.controlPressed]}>
-              <Ionicons name="close" size={23} color={colors.ink} />
-            </Pressable>
-          </View>
-          <KitchenLine styles={styles} />
-
-          {showInboxActions ? (
-            <View style={styles.inboxStatus}>
-              <View>
-                <Text style={styles.statusLabel}>{unreadCount > 0 ? `${unreadCount} unread` : 'All caught up'}</Text>
-                <Text style={styles.statusCount}>{items.length === 1 ? '1 notification' : `${items.length} notifications`}</Text>
+      <View style={{ flex: 1 }}>
+        <View style={styles.backdrop}>
+          <Pressable accessibilityLabel="Close notifications" onPress={onClose} style={styles.backdropDismiss} />
+          <View accessibilityViewIsModal style={[styles.sheet, { paddingBottom: Math.max(insets.bottom, 16) }]}>
+            <View style={styles.handle} />
+            <View style={styles.header}>
+              <View style={styles.headerCopy}>
+                <Text style={styles.eyebrow}>INBOX</Text>
+                <Text style={styles.title}>Notifications</Text>
+                <Text style={styles.subtitle}>{items.length ? `${updateLabel} in your inbox` : 'Your notification inbox'}</Text>
               </View>
-              {unreadCount > 1 ? (
-                <Pressable accessibilityRole="button" accessibilityLabel="Mark all notifications as read" onPress={onReadAll} style={({ pressed }) => [styles.markAllButton, pressed && styles.controlPressed]}>
-                  <Ionicons name="checkmark-done" size={17} color={colors.teal} />
-                  <Text style={styles.markAllText}>Read all</Text>
-                </Pressable>
-              ) : clearableCount > 0 ? (
-                <Pressable accessibilityRole="button" accessibilityLabel={`Clear ${clearableCount} read notifications`} disabled={clearing} onPress={confirmClearRead} style={({ pressed }) => [styles.markAllButton, pressed && styles.controlPressed, clearing && styles.followButtonDisabled]}>
-                  {clearing ? <ActivityIndicator size="small" color={colors.ink70} /> : <Ionicons name="trash-outline" size={16} color={colors.ink70} />}
-                  <Text style={styles.clearReadText}>Clear read</Text>
-                </Pressable>
-              ) : null}
+              <Pressable accessibilityRole="button" accessibilityLabel="Close notifications" hitSlop={8} onPress={onClose} style={({ pressed }) => [styles.closeButton, pressed && styles.controlPressed]}>
+                <Ionicons name="close" size={23} color={colors.ink} />
+              </Pressable>
             </View>
-          ) : null}
+            <KitchenLine styles={styles} />
 
-          <ScrollView style={styles.list} contentContainerStyle={[styles.listContent, !items.length && styles.listContentEmpty]} showsVerticalScrollIndicator={false}>
-            {items.length ? items.map((item, index) => (
-              <React.Fragment key={item.id}>
-                {index === 0 || items[index - 1].group !== item.group ? <Text style={styles.groupLabel}>{item.group}</Text> : null}
-                <NotificationCard item={item} onRead={onRead} onDelete={onDelete} onOpen={onOpen} onFollowResponse={onFollowResponse} styles={styles} colors={colors} />
-              </React.Fragment>
-            )) : (
-              <View style={styles.emptyState}>
-                <View style={styles.emptyDotOne} />
-                <View style={styles.emptyDotTwo} />
-                <View style={styles.emptyIcon}>
-                  <Ionicons name="checkmark-done" size={31} color={colors.teal} />
+            {showInboxActions ? (
+              <View style={styles.inboxStatus}>
+                <View>
+                  <Text style={styles.statusLabel}>{unreadCount > 0 ? `${unreadCount} unread` : 'All caught up'}</Text>
+                  <Text style={styles.statusCount}>{items.length === 1 ? '1 notification' : `${items.length} notifications`}</Text>
                 </View>
-                <Text style={styles.emptyTitle}>Nothing needs your attention</Text>
-                <Text style={styles.emptyBody}>Follow requests, booking confirmations, match reminders, and venue updates will land here.</Text>
+                {unreadCount > 1 ? (
+                  <Pressable accessibilityRole="button" accessibilityLabel="Mark all notifications as read" onPress={onReadAll} style={({ pressed }) => [styles.markAllButton, pressed && styles.controlPressed]}>
+                    <Ionicons name="checkmark-done" size={17} color={colors.teal} />
+                    <Text style={styles.markAllText}>Read all</Text>
+                  </Pressable>
+                ) : clearableCount > 0 ? (
+                  <Pressable accessibilityRole="button" accessibilityLabel={`Clear ${clearableCount} read notifications`} disabled={clearing} onPress={confirmClearRead} style={({ pressed }) => [styles.markAllButton, pressed && styles.controlPressed, clearing && styles.followButtonDisabled]}>
+                    {clearing ? <ActivityIndicator size="small" color={colors.ink70} /> : <Ionicons name="trash-outline" size={16} color={colors.ink70} />}
+                    <Text style={styles.clearReadText}>Clear read</Text>
+                  </Pressable>
+                ) : null}
               </View>
-            )}
-          </ScrollView>
+            ) : null}
+
+            <ScrollView style={styles.list} contentContainerStyle={[styles.listContent, !items.length && styles.listContentEmpty]} showsVerticalScrollIndicator={false}>
+              {items.length ? items.map((item, index) => (
+                <React.Fragment key={item.id}>
+                  {index === 0 || items[index - 1].group !== item.group ? <Text style={styles.groupLabel}>{item.group}</Text> : null}
+                  <NotificationCard item={item} onRead={onRead} onDelete={onDelete} onOpen={onOpen} onFollowResponse={onFollowResponse} styles={styles} colors={colors} />
+                </React.Fragment>
+              )) : (
+                <View style={styles.emptyState}>
+                  <View style={styles.emptyDotOne} />
+                  <View style={styles.emptyDotTwo} />
+                  <View style={styles.emptyIcon}>
+                    <Ionicons name="checkmark-done" size={31} color={colors.teal} />
+                  </View>
+                  <Text style={styles.emptyTitle}>Nothing needs your attention</Text>
+                  <Text style={styles.emptyBody}>Follow requests, booking confirmations, match reminders, and venue updates will land here.</Text>
+                </View>
+              )}
+            </ScrollView>
+          </View>
         </View>
+        {showClearAlert && (
+          <View style={styles.alertOverlay}>
+            <View style={styles.alertCard}>
+              <Text style={styles.alertTitle}>Clear read notifications?</Text>
+              <Text style={styles.alertMessage}>{clearableCount} read notification{clearableCount === 1 ? '' : 's'} will be permanently deleted.</Text>
+              <View style={styles.alertActions}>
+                <Pressable accessibilityRole="button" onPress={() => setShowClearAlert(false)} style={({ pressed }) => [styles.alertButton, styles.alertKeep, pressed && styles.controlPressed]}><Text style={styles.alertKeepText}>Cancel</Text></Pressable>
+                <Pressable accessibilityRole="button" onPress={async () => {
+                  setShowClearAlert(false);
+                  setClearing(true);
+                  try { await onClearRead(); }
+                  catch (error) { Alert.alert('Notifications', error.message || 'Read notifications could not be cleared.'); }
+                  finally { setClearing(false); }
+                }} style={({ pressed }) => [styles.alertButton, styles.alertCancel, pressed && styles.controlPressed]}><Text style={styles.alertCancelText}>Clear</Text></Pressable>
+              </View>
+            </View>
+          </View>
+        )}
       </View>
     </Modal>
   );
@@ -288,6 +293,16 @@ const lightStyles = createMobileStyleSheet({
   emptyIcon: { width: 66, height: 66, alignItems: 'center', justifyContent: 'center', borderRadius: 22, backgroundColor: '#E5F0ED' },
   emptyTitle: { marginTop: 18, color: '#0E2321', textAlign: 'center', fontSize: 18, lineHeight: 24, fontWeight: '800' },
   emptyBody: { maxWidth: 330, marginTop: 7, color: '#7C8983', textAlign: 'center', fontSize: 13, lineHeight: 19 },
+  alertOverlay: { ...StyleSheet.absoluteFillObject, backgroundColor: 'rgba(4,18,17,0.58)', alignItems: 'center', justifyContent: 'center', padding: 24, zIndex: 100 },
+  alertCard: { width: '100%', maxWidth: 320, padding: 20, borderRadius: 24, backgroundColor: '#E5F0ED', ...sheetShadow },
+  alertTitle: { color: '#0E2321', fontSize: 18, fontWeight: '900', textAlign: 'center' },
+  alertMessage: { marginTop: 8, color: '#7C8983', fontSize: 13, lineHeight: 18, textAlign: 'center' },
+  alertActions: { marginTop: 24, flexDirection: 'row', gap: 10 },
+  alertButton: { flex: 1, minHeight: 46, alignItems: 'center', justifyContent: 'center', borderRadius: 14 },
+  alertKeep: { backgroundColor: '#BFD8D2' },
+  alertKeepText: { color: '#0E2321', fontSize: 12, fontWeight: '900' },
+  alertCancel: { backgroundColor: '#F7EAE6' },
+  alertCancelText: { color: '#B6472E', fontSize: 12, fontWeight: '900' },
 });
 
 const darkStyles = createDarkStyleSheet(lightStyles);

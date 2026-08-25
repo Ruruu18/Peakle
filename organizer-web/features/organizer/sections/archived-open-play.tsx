@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { Archive, ArchiveRestore, CalendarClock, ChevronLeft, ShieldCheck, Trash2, Users, Swords } from "lucide-react";
+import { Archive, ArchiveRestore, CalendarClock, ChevronLeft, ShieldCheck, Trash2, Users, Swords, UserCheck } from "lucide-react";
 import type { OpenPlaySession } from "@/lib/types";
 import { dateTime, Empty, money, Status } from "../components/portal-ui";
 import type { SessionLifecycleAction } from "../dialogs/session-lifecycle-dialog";
@@ -48,6 +48,7 @@ export function ArchivedOpenPlay({ sessions, onManage }: Props) {
           {canDelete ? <p className="archive-delete-ready"><Trash2 size={14} />{playerCount ? `Deleting also removes ${playerCount} player registration${playerCount === 1 ? "" : "s"}.` : "This empty session can be permanently deleted."}</p> : <p className="archive-protected"><ShieldCheck size={14} />Deletion is unavailable because this session has {blockers.join(", ")}.</p>}
         </div>
         <div className="archive-actions">
+          <Link className="button button-ghost inline-action" href={`/open-play/${session.id}/players`}><UserCheck size={16} />View roster</Link>
           <button className="button button-ghost" type="button" onClick={() => onManage("restore", session.id)}><ArchiveRestore size={16} />Restore</button>
           <button className="button button-danger" type="button" disabled={!canDelete} title={canDelete ? "Permanently delete this session and its registrations" : `Cannot delete: ${blockers.join(", ")}`} onClick={() => onManage("delete", session.id)}><Trash2 size={16} />Delete</button>
         </div>

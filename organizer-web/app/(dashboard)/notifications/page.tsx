@@ -1,2 +1,2 @@
-import { OrganizerPortal } from "@/features/organizer";
-export default function NotificationsPage() { return <OrganizerPortal section="settings" subview="notifications" />; }
+import { SectionPage } from "@/features/organizer";
+export default function NotificationsPage() { return <SectionPage section="settings" subview="notifications" />; }

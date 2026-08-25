@@ -1,2 +1,2 @@
-import { OrganizerPortal } from "@/features/organizer";
-export default function StaffInvitePage() { return <OrganizerPortal section="staff" subview="invite" />; }
+import { SectionPage } from "@/features/organizer";
+export default function StaffInvitePage() { return <SectionPage section="staff" subview="invite" />; }

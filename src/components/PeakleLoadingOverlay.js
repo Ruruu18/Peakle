@@ -1,5 +1,5 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { Animated, Modal, StyleSheet } from 'react-native';
+import { Animated, StyleSheet } from 'react-native';
 import PeakleLoadingScreen from './PeakleLoadingScreen';
 
 export default function PeakleLoadingOverlay({ visible, status, minimumVisibleMs = 650 }) {
@@ -7,8 +7,11 @@ export default function PeakleLoadingOverlay({ visible, status, minimumVisibleMs
   const opacity = useRef(new Animated.Value(visible ? 1 : 0)).current;
   const shownAt = useRef(visible ? Date.now() : 0);
   const exitTimer = useRef(null);
+  const transitionId = useRef(0);
 
   useEffect(() => {
+    const currentTransition = transitionId.current + 1;
+    transitionId.current = currentTransition;
     clearTimeout(exitTimer.current);
     opacity.stopAnimation();
     if (visible) {
@@ -24,33 +27,31 @@ export default function PeakleLoadingOverlay({ visible, status, minimumVisibleMs
         toValue: 0,
         duration: 240,
         useNativeDriver: true,
-      }).start(({ finished }) => {
-        if (finished) setMounted(false);
+      }).start(() => {
+        if (transitionId.current === currentTransition) setMounted(false);
       });
     }, remaining);
     return () => clearTimeout(exitTimer.current);
   }, [minimumVisibleMs, mounted, opacity, visible]);
 
-  useEffect(() => () => clearTimeout(exitTimer.current), []);
+  useEffect(() => () => {
+    transitionId.current += 1;
+    clearTimeout(exitTimer.current);
+    opacity.stopAnimation();
+  }, [opacity]);
   if (!mounted) return null;
   return (
-    <Modal
-      animationType="none"
-      hardwareAccelerated
-      navigationBarTranslucent
-      onRequestClose={() => {}}
-      presentationStyle="overFullScreen"
-      statusBarTranslucent
-      transparent
-      visible={mounted}
+    <Animated.View
+      accessibilityElementsHidden={!visible}
+      importantForAccessibility={visible ? 'yes' : 'no-hide-descendants'}
+      pointerEvents={visible ? 'auto' : 'none'}
+      style={[styles.overlay, { opacity }]}
     >
-      <Animated.View pointerEvents={visible ? 'auto' : 'none'} style={[styles.overlay, { opacity }]}>
-        <PeakleLoadingScreen status={status} />
-      </Animated.View>
-    </Modal>
+      <PeakleLoadingScreen status={status} />
+    </Animated.View>
   );
 }
 
 const styles = StyleSheet.create({
-  overlay: { ...StyleSheet.absoluteFillObject },
+  overlay: { ...StyleSheet.absoluteFillObject, zIndex: 10000, elevation: 10000 },
 });

@@ -29,10 +29,6 @@ export default function ProfilePhotoPicker({ value, name, onChange, onError, col
   const choosePhoto = async () => {
     setPicking(true);
     try {
-      const permission = await ImagePicker.requestMediaLibraryPermissionsAsync();
-      if (!permission.granted) {
-        throw new Error('Allow photo access in your device settings to choose a profile picture.');
-      }
       const result = await ImagePicker.launchImageLibraryAsync({
         mediaTypes: ['images'],
         allowsEditing: true,
