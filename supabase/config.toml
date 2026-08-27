@@ -4,6 +4,9 @@ verify_jwt = false
 [functions.delete-account]
 verify_jwt = true
 
+[functions.support-ai-reply]
+verify_jwt = true
+
 [functions.legal]
 verify_jwt = false
 

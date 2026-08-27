@@ -58,6 +58,7 @@ const SECTION_TITLES: Record<AdminSection, string> = {
   users: "Users",
   venues: "Venues",
   financials: "Financials",
+  support: "Support",
   access: "Access",
 };
 

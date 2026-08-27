@@ -50,6 +50,57 @@ export type PlatformAdmin = {
   granted_by_name: string | null;
 };
 
+export type SupportConversationStatus = "bot" | "open" | "assigned" | "closed";
+
+export type SupportConversation = {
+  conversation_id: string;
+  requester_id: string;
+  requester_name: string;
+  requester_avatar_url: string | null;
+  status: SupportConversationStatus;
+  category: string | null;
+  ai_handled: boolean;
+  assigned_agent_id: string | null;
+  assigned_agent_name: string | null;
+  created_at: string;
+  last_message_at: string | null;
+  last_body: string | null;
+  last_sender_type: string | null;
+  csat_rating: number | null;
+};
+
+export type SupportConversationDetail = {
+  conversation_id: string;
+  requester_id: string;
+  requester_name: string;
+  requester_avatar_url: string | null;
+  status: SupportConversationStatus;
+  category: string | null;
+  ai_handled: boolean;
+  needs_human: boolean;
+  assigned_agent_id: string | null;
+  assigned_agent_name: string | null;
+  created_at: string;
+  last_message_at: string | null;
+  requester_last_read_at: string | null;
+  agent_last_read_at: string | null;
+  csat_rating: number | null;
+  csat_comment: string | null;
+  csat_submitted_at: string | null;
+};
+
+export type SupportMessage = {
+  id: string;
+  conversation_id: string;
+  sender_type: "user" | "ai" | "agent";
+  sender_id: string | null;
+  body: string;
+  media_path: string | null;
+  media_url?: string | null;
+  created_at: string;
+  profiles?: { display_name: string | null; avatar_url: string | null } | null;
+};
+
 export type AdminFinancialSummary = {
   platform_revenue_this_month: number;
   total_disbursed: number;

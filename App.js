@@ -13,6 +13,7 @@ import { OperationsProvider } from './src/context/OperationsContext';
 import { NearbyPlayersProvider } from './src/context/NearbyPlayersContext';
 import { OrganizerPassProvider } from './src/context/OrganizerPassContext';
 import MatchInviteOverlay from './src/components/MatchInviteOverlay';
+import SupportBubble from './src/components/SupportBubble';
 import ErrorBoundary from './src/components/ErrorBoundary';
 import DemoAutopilot from './src/components/DemoAutopilot';
 import { DEMO_MODE } from './src/config/demoMode';
@@ -220,7 +221,7 @@ function Root() {
   if (passwordRecovery) return <AuthFlowScreen key="password-recovery" initialScreen="reset-password" />;
   if (!user) return <AuthFlowScreen key="login" initialScreen="login" />;
   if (!user.onboardingCompleted) return <AuthFlowScreen key={`new-user-setup-${user.id}`} initialScreen="new-user-overview" />;
-  return <View key={`player-session-${user.id}`} style={[styles.appShell, { backgroundColor: appBackground }]}><NavigationContainer ref={navigationRef} theme={navigationTheme} linking={linking}><AppNavigator /></NavigationContainer><MatchInviteOverlay onAccepted={openAcceptedMatch} />{DEMO_MODE ? <DemoAutopilot navigationRef={navigationRef} /> : null}</View>;
+  return <View key={`player-session-${user.id}`} style={[styles.appShell, { backgroundColor: appBackground }]}><NavigationContainer ref={navigationRef} theme={navigationTheme} linking={linking}><AppNavigator /></NavigationContainer><MatchInviteOverlay onAccepted={openAcceptedMatch} /><SupportBubble navigationRef={navigationRef} />{DEMO_MODE ? <DemoAutopilot navigationRef={navigationRef} /> : null}</View>;
 }
 
 export default function App() {

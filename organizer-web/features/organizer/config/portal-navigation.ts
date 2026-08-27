@@ -1,5 +1,5 @@
 import type { LucideIcon } from "lucide-react";
-import { Activity, BarChart3, Building2, CalendarCheck, CalendarDays, CircleDollarSign, KeyRound, LayoutDashboard, Settings, TicketCheck, Trophy, Users, Wallet } from "lucide-react";
+import { Activity, BarChart3, Building2, CalendarCheck, CalendarDays, CircleDollarSign, KeyRound, LayoutDashboard, LifeBuoy, Settings, TicketCheck, Trophy, Users, Wallet } from "lucide-react";
 import type { PortalSection } from "@/lib/portal-sections";
 
 export type OrganizerNavItem = { section: PortalSection; label: string; icon: LucideIcon; group?: string };
@@ -17,7 +17,8 @@ export const organizerNavigation: OrganizerNavItem[] = [
   { section: "analytics", label: "Analytics", icon: BarChart3, group: "INSIGHTS" },
   { section: "earnings", label: "Earnings", icon: Wallet },
   { section: "staff", label: "Staff Access", icon: KeyRound },
-  { section: "settings", label: "Settings", icon: Settings, group: "ACCOUNT" },
+  { section: "support", label: "Support", icon: LifeBuoy, group: "ACCOUNT" },
+  { section: "settings", label: "Settings", icon: Settings },
 ];
 
 export const organizerPageCopy: Record<PortalSection, { eyebrow: string; title: string; detail: string }> = {
@@ -33,5 +34,6 @@ export const organizerPageCopy: Record<PortalSection, { eyebrow: string; title: 
   analytics: { eyebrow: "INSIGHTS & REPORTS", title: "Venue analytics", detail: "Revenue, utilization, attendance, and player retention." },
   earnings: { eyebrow: "PAYOUTS", title: "Earnings", detail: "Your balance, payout history, and withdrawal requests." },
   staff: { eyebrow: "VENUE OPERATIONS", title: "Staff access", detail: "Give every teammate exactly the access their role requires." },
+  support: { eyebrow: "ACCOUNT", title: "Support", detail: "Chat with Peakle support — AI-answered instantly, with a teammate a message away." },
   settings: { eyebrow: "ACCOUNT", title: "Organizer settings", detail: "Your shared Peakle identity, plan, preferences, and security." },
 };

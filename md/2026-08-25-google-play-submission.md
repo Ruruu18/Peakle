@@ -1,6 +1,6 @@
 # Peakle Google Play submission sheet
 
-Last verified: August 25, 2026
+Last verified: August 26, 2026
 Package: `com.peakle.app`
 Release: `1.0.0` (`versionCode` 1)
 Category: Sports
@@ -53,7 +53,7 @@ Instruction name: `Peakle reviewer account`
 
 Instructions:
 
-> Sign in using Email, not Google. No OTP or two-factor authentication is required. The account has completed onboarding. After sign-in, use the bottom navigation to review Home, Book, Play, Team, and Profile. Profile > Settings contains privacy controls, legal documents, support, and permanent account deletion. Location, microphone, photo, and notification permissions are optional; core screens can be reviewed without granting them.
+> Sign in using Email, not Google. No OTP or two-factor authentication is required. The account has completed onboarding. After sign-in, use the bottom navigation to review Home, Explore, Play, Teams, and Profile. Profile > Settings contains privacy controls, legal documents, support, and permanent account deletion. Location, microphone, photo, and notification permissions are optional; core screens can be reviewed without granting them.
 
 Enter the dedicated reviewer email and password supplied separately. Keep the account working until review and rollout are complete, then rotate its password.
 
@@ -141,13 +141,13 @@ Upload real production-like app screens with no debug overlays or personal data.
 Recommended phone screenshot sequence:
 
 1. Home — player dashboard and primary value
-2. Book — nearby venues/court discovery
-3. Open Play — discover or join a session
-4. Live scoring — match scorekeeping
-5. Team — team coordination or leaderboard
-6. Profile — progress and privacy controls
+2. Explore — nearby venues and court discovery
+3. Play — find players or set up a match
+4. Teams — team discovery and coordination
+5. Profile — player identity and progress
+6. Settings — notification, privacy, account, and support controls
 
-Use at least two phone screenshots; six polished portrait screenshots are prepared as the release target. Keep the device frame, captions, and branding consistent. Also prepare the required 512 x 512 app icon and 1024 x 500 feature graphic. Never show reviewer credentials, private chats, exact user locations, access tokens, or real payment data.
+Six real portrait screenshots from the corrected signed production artifact are available in `play-store/screenshots/phone`. Each is a 24-bit PNG at 1428 x 2856 (2:1), with narrow brand-background padding and no cropped app content. Also prepare the required 512 x 512 app icon and 1024 x 500 feature graphic. Never show reviewer credentials, private chats, exact user locations, access tokens, or real payment data.
 
 ## Testing and release declarations
 

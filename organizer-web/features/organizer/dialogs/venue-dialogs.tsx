@@ -81,15 +81,21 @@ function coordinatesFromMapsUrl(url: string): { lat: number; lng: number } | nul
 }
 
 export function CreateVenueDialog({ onClose, onCreated }: { onClose: () => void; onCreated: () => Promise<void> }) {
+  const [step, setStep] = useState(1);
+  const [name, setName] = useState("");
+  const [area, setArea] = useState("");
+  const [address, setAddress] = useState("");
   const [venueType, setVenueType] = useState("Indoor");
   const [opensAt, setOpensAt] = useState("06:00");
   const [closesAt, setClosesAt] = useState("22:00");
   const [mapsUrl, setMapsUrl] = useState("");
   const [latitude, setLatitude] = useState("");
   const [longitude, setLongitude] = useState("");
+  const [description, setDescription] = useState("");
   const [detected, setDetected] = useState(false);
   const [editingCoordinates, setEditingCoordinates] = useState(false);
   const [busy, setBusy] = useState(false);
+
   const handleMapsUrlChange = (value: string) => {
     setMapsUrl(value);
     const coordinates = coordinatesFromMapsUrl(value);
@@ -102,20 +108,145 @@ export function CreateVenueDialog({ onClose, onCreated }: { onClose: () => void;
       setDetected(false);
     }
   };
+
+  const goToStep2 = () => {
+    if (name.trim().length < 2) { toast.error("Enter the venue name."); return; }
+    if (area.trim().length < 2) { toast.error("Enter the city or area."); return; }
+    if (address.trim().length < 5) { toast.error("Enter the full address."); return; }
+    setStep(2);
+  };
+
+  const goToStep3 = () => setStep(3);
+
   const submit = async (event: React.FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     const lat = Number(latitude);
     const lng = Number(longitude);
-    if (latitude.trim() === "" || longitude.trim() === "" || !Number.isFinite(lat) || !Number.isFinite(lng)) { toast.error("We couldn't detect coordinates from that link — enter latitude and longitude manually."); return; }
+    if (latitude.trim() === "" || longitude.trim() === "" || !Number.isFinite(lat) || !Number.isFinite(lng)) {
+      toast.error("We couldn't detect coordinates from that link — enter latitude and longitude manually.");
+      return;
+    }
     setBusy(true);
-    const values = new FormData(event.currentTarget);
     try {
-      const { error } = await requireSupabase().rpc("create_venue_application", { p_name: String(values.get("name") || "").trim(), p_area: String(values.get("area") || "").trim(), p_address: String(values.get("address") || "").trim(), p_venue_type: venueType, p_google_maps_url: mapsUrl.trim(), p_description: String(values.get("description") || "").trim() || null, p_opens_at: opensAt, p_closes_at: closesAt, p_latitude: lat, p_longitude: lng });
+      const { error } = await requireSupabase().rpc("create_venue_application", {
+        p_name: name.trim(),
+        p_area: area.trim(),
+        p_address: address.trim(),
+        p_venue_type: venueType,
+        p_google_maps_url: mapsUrl.trim(),
+        p_description: description.trim() || null,
+        p_opens_at: opensAt,
+        p_closes_at: closesAt,
+        p_latitude: lat,
+        p_longitude: lng,
+      });
       if (error) throw error;
       toast.success("Venue submitted for verification.");
       await onCreated();
     } catch (reason) { toast.error(reason instanceof Error ? reason.message : "Venue creation failed."); }
     finally { setBusy(false); }
   };
-  return <DialogFrame eyebrow="NEW LOCATION" title="Add a venue" detail="Create the location first. Courts and activities are managed after submission." onClose={onClose}><form onSubmit={submit}><div className="dialog-section"><span><Building2 size={18} /></span><div><strong>Venue identity</strong><small>Use the public name and address players will recognize.</small></div></div><div className="dialog-grid"><div className="form-field full"><label htmlFor="venue-name">VENUE NAME</label><input id="venue-name" name="name" placeholder="e.g. Peakle Sports Center" minLength={2} required autoFocus /></div><div className="form-field"><label htmlFor="venue-area">CITY OR AREA</label><input id="venue-area" name="area" placeholder="e.g. Makati City" minLength={2} required /></div><div className="form-field"><label>VENUE TYPE</label><SelectControl value={venueType} onChange={setVenueType} ariaLabel="Venue type" options={[{ value: "Indoor", label: "Indoor" }, { value: "Outdoor", label: "Outdoor" }, { value: "Mixed", label: "Mixed" }]} /></div><div className="form-field full"><label htmlFor="venue-address">FULL ADDRESS</label><input id="venue-address" name="address" placeholder="Street, barangay, city" minLength={5} required /></div><div className="form-field"><label>OPENS</label><TimeControl value={opensAt} onChange={setOpensAt} ariaLabel="Opening time" /></div><div className="form-field"><label>CLOSES</label><TimeControl value={closesAt} onChange={setClosesAt} ariaLabel="Closing time" /></div></div><div className="dialog-section"><span><MapPin size={18} /></span><div><strong>Map verification</strong><small>Paste a Google Maps share link — we&apos;ll read the coordinates from it automatically.</small></div></div><div className="dialog-grid"><div className="form-field full"><label htmlFor="venue-map">GOOGLE MAPS SHARE LINK</label><input id="venue-map" name="maps_url" type="url" value={mapsUrl} onChange={(event) => handleMapsUrlChange(event.target.value)} placeholder="https://maps.app.goo.gl/... or https://www.google.com/maps/@14.55,121.02" required /></div>{detected && !editingCoordinates ? <div className="form-field full"><div className="publish-notice"><MapPin size={17} /><span>Coordinates detected: {Number(latitude).toFixed(5)}, {Number(longitude).toFixed(5)}. <button type="button" className="text-action" onClick={() => setEditingCoordinates(true)}>Adjust manually</button></span></div></div> : <><div className="form-field full"><small className="field-help">{mapsUrl.trim() ? "We couldn't read coordinates from that link (short goo.gl links don't include them). Open the link on desktop Google Maps, right-click the pin, and click the coordinates shown at the top of the menu to copy them — then paste below." : "Coordinates fill in automatically once you paste a link with a location on it."}</small></div><div className="form-field"><label htmlFor="venue-latitude">LATITUDE</label><input id="venue-latitude" name="latitude" type="number" step="any" value={latitude} onChange={(event) => setLatitude(event.target.value)} placeholder="14.5547" required /></div><div className="form-field"><label htmlFor="venue-longitude">LONGITUDE</label><input id="venue-longitude" name="longitude" type="number" step="any" value={longitude} onChange={(event) => setLongitude(event.target.value)} placeholder="121.0244" required /></div></>}<div className="form-field full"><label htmlFor="venue-description">DESCRIPTION · OPTIONAL</label><textarea id="venue-description" name="description" placeholder="Facilities, parking, and arrival notes" /></div></div><div className="dialog-actions"><button className="button button-ghost" type="button" onClick={onClose}>Cancel</button><button className="button button-accent" type="submit" disabled={busy}>{busy ? "Submitting…" : "Submit venue"}<Check size={16} /></button></div></form></DialogFrame>;
+
+  const STEP_TITLES = ["Venue identity", "Operating hours", "Location & map"];
+  const STEP_DETAILS = [
+    "Name and address players will recognize.",
+    "When your venue is open for bookings.",
+    "Pin your venue so players can find it.",
+  ];
+
+  return (
+    <DialogFrame eyebrow={`NEW LOCATION · STEP ${step} OF 3`} title={STEP_TITLES[step - 1]} detail={STEP_DETAILS[step - 1]} onClose={onClose}>
+      <form onSubmit={submit}>
+        <div className="form-progress" aria-label={`Step ${step} of 3`}>
+          <span className="active" />
+          <span className={step >= 2 ? "active" : ""} />
+          <span className={step === 3 ? "active" : ""} />
+        </div>
+
+        {step === 1 && (
+          <div className="wizard-panel">
+            <div className="friendly-intro"><span><Building2 size={19} /></span><div><strong>What&apos;s the venue called?</strong><small>Use the public name and address players will recognize.</small></div></div>
+            <div className="form-field">
+              <label htmlFor="venue-name">VENUE NAME</label>
+              <input id="venue-name" value={name} onChange={(e) => setName(e.target.value)} placeholder="e.g. Peakle Sports Center" minLength={2} required autoFocus />
+            </div>
+            <div className="dialog-grid" style={{ marginTop: 0 }}>
+              <div className="form-field">
+                <label htmlFor="venue-area">CITY OR AREA</label>
+                <input id="venue-area" value={area} onChange={(e) => setArea(e.target.value)} placeholder="e.g. Makati City" minLength={2} required />
+              </div>
+              <div className="form-field">
+                <label>VENUE TYPE</label>
+                <SelectControl value={venueType} onChange={setVenueType} ariaLabel="Venue type" options={[{ value: "Indoor", label: "Indoor" }, { value: "Outdoor", label: "Outdoor" }, { value: "Mixed", label: "Mixed" }]} />
+              </div>
+            </div>
+            <div className="form-field">
+              <label htmlFor="venue-address">FULL ADDRESS</label>
+              <input id="venue-address" value={address} onChange={(e) => setAddress(e.target.value)} placeholder="Street, barangay, city" minLength={5} required />
+            </div>
+          </div>
+        )}
+
+        {step === 2 && (
+          <div className="wizard-panel">
+            <div className="friendly-intro"><span><Building2 size={19} /></span><div><strong>{name}</strong><small>{venueType} · {area}</small></div></div>
+            <div className="dialog-grid">
+              <div className="form-field">
+                <label>OPENS</label>
+                <TimeControl value={opensAt} onChange={setOpensAt} ariaLabel="Opening time" />
+              </div>
+              <div className="form-field">
+                <label>CLOSES</label>
+                <TimeControl value={closesAt} onChange={setClosesAt} ariaLabel="Closing time" />
+              </div>
+            </div>
+            <div className="form-field" style={{ marginTop: 8 }}>
+              <label htmlFor="venue-description">DESCRIPTION · OPTIONAL</label>
+              <textarea id="venue-description" value={description} onChange={(e) => setDescription(e.target.value)} placeholder="Facilities, parking, and arrival notes" />
+            </div>
+          </div>
+        )}
+
+        {step === 3 && (
+          <div className="wizard-panel">
+            <div className="friendly-intro"><span><MapPin size={19} /></span><div><strong>Pin {name} on the map</strong><small>Paste a Google Maps share link — we&apos;ll read the coordinates automatically.</small></div></div>
+            <div className="form-field">
+              <label htmlFor="venue-map">GOOGLE MAPS SHARE LINK</label>
+              <input id="venue-map" name="maps_url" type="url" value={mapsUrl} onChange={(e) => handleMapsUrlChange(e.target.value)} placeholder="https://maps.app.goo.gl/... or https://www.google.com/maps/@14.55,121.02" required />
+            </div>
+            {detected && !editingCoordinates ? (
+              <div className="form-field">
+                <div className="publish-notice"><MapPin size={17} /><span>Coordinates detected: {Number(latitude).toFixed(5)}, {Number(longitude).toFixed(5)}. <button type="button" className="text-action" onClick={() => setEditingCoordinates(true)}>Adjust manually</button></span></div>
+              </div>
+            ) : (
+              <>
+                <div className="form-field">
+                  <small className="field-help">{mapsUrl.trim() ? "We couldn't read coordinates from that link. Open the link on desktop Google Maps, right-click the pin, and copy the coordinates shown at the top of the menu." : "Coordinates fill in automatically once you paste a link with a location on it."}</small>
+                </div>
+                <div className="dialog-grid">
+                  <div className="form-field">
+                    <label htmlFor="venue-latitude">LATITUDE</label>
+                    <input id="venue-latitude" type="number" step="any" value={latitude} onChange={(e) => setLatitude(e.target.value)} placeholder="14.5547" required />
+                  </div>
+                  <div className="form-field">
+                    <label htmlFor="venue-longitude">LONGITUDE</label>
+                    <input id="venue-longitude" type="number" step="any" value={longitude} onChange={(e) => setLongitude(e.target.value)} placeholder="121.0244" required />
+                  </div>
+                </div>
+              </>
+            )}
+          </div>
+        )}
+
+        <div className="dialog-actions wizard-actions">
+          <button className="button button-ghost" type="button" onClick={step === 1 ? onClose : () => setStep(step - 1)}>
+            {step === 1 ? "Cancel" : <><ArrowLeft size={15} />Back</>}
+          </button>
+          {step === 1 && <button className="button button-accent" type="button" onClick={goToStep2}>Continue<ArrowRight size={16} /></button>}
+          {step === 2 && <button className="button button-accent" type="button" onClick={goToStep3}>Continue<ArrowRight size={16} /></button>}
+          {step === 3 && <button className="button button-accent" type="submit" disabled={busy}>{busy ? "Submitting…" : "Submit venue"}<Check size={16} /></button>}
+        </div>
+      </form>
+    </DialogFrame>
+  );
 }

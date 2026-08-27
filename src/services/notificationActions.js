@@ -150,6 +150,11 @@ export async function scheduleClosedAppNotificationTest(seconds = 10) {
   await configureInteractiveNotifications();
   const permission = await Notifications.getPermissionsAsync();
   if (permission.status !== 'granted') throw new Error('Allow notifications before running the test.');
+  // Some Android notification schedulers try to persist the resolved default
+  // sound Uri and fail because android.net.Uri is not Serializable. The
+  // messages channel already supplies the device's default sound on Android,
+  // so only send the content-level sound override to iOS.
+  const sound = Platform.OS === 'android' ? {} : { sound: 'default' };
   const trigger = Platform.OS === 'android'
     ? { type: Notifications.SchedulableTriggerInputTypes.TIME_INTERVAL, seconds, channelId: CHAT_NOTIFICATION_CHANNEL }
     : { type: Notifications.SchedulableTriggerInputTypes.TIME_INTERVAL, seconds };
@@ -158,7 +163,7 @@ export async function scheduleClosedAppNotificationTest(seconds = 10) {
       title: 'Alex from Peakle',
       subtitle: 'Notification test',
       body: 'Are we still on for pickleball tonight?',
-      sound: 'default',
+      ...sound,
       categoryIdentifier: CHAT_NOTIFICATION_CATEGORY,
       data: { notificationTest: true, senderName: 'Alex from Peakle' },
     },

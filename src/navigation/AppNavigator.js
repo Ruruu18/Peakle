@@ -17,6 +17,7 @@ import LegalDocumentScreen from '../screens/LegalDocumentScreen';
 import AccountDeletionScreen from '../screens/AccountDeletionScreen';
 import PaymentHistoryScreen from '../screens/PaymentHistoryScreen';
 import HelpSupportScreen from '../screens/HelpSupportScreen';
+import SupportChatScreen from '../screens/SupportChatScreen';
 import { DirectChatScreen, InboxScreen } from '../screens/DirectMessagesScreens';
 import PublicProfileScreen from '../screens/PublicProfileScreen';
 import ConnectionsScreen from '../screens/ConnectionsScreen';
@@ -120,7 +121,7 @@ function PeakleTabBar({ state, descriptors, navigation }) {
   const [leavingMatch, setLeavingMatch] = useState(false);
   const [leaveError, setLeaveError] = useState('');
   const [pendingRoute, setPendingRoute] = useState(null);
-  const alwaysHiddenRoutes = new Set(['Pickleball', 'Activities', 'ActivityDetails', 'OpenPlayActivity', 'Privacy', 'LegalDocument', 'AccountDeletion', 'PaymentHistory', 'HelpSupport', 'NotificationTest', 'Inbox', 'DirectChat', 'PublicProfile', 'Connections', 'Leaderboard', 'CompetitionDivision']);
+  const alwaysHiddenRoutes = new Set(['Pickleball', 'Activities', 'ActivityDetails', 'OpenPlayActivity', 'Privacy', 'LegalDocument', 'AccountDeletion', 'PaymentHistory', 'HelpSupport', 'SupportChat', 'NotificationTest', 'Inbox', 'DirectChat', 'PublicProfile', 'Connections', 'Leaderboard', 'CompetitionDivision']);
   const currentRoute = state.routes[state.index];
   const theme = isDark
     ? { background: '#0E2321', surface: '#17302D', line: '#304743', activeText: colors.ink, activeLabel: colors.ink, centerActiveLabel: colors.surface, muted: '#9FB3AC', active: colors.optic, kitchenLine: colors.optic }
@@ -130,7 +131,7 @@ function PeakleTabBar({ state, descriptors, navigation }) {
   const contextualOwner = currentRoute.name === 'Pickleball'
     ? (currentRoute.params?.ownerTab || ({ Ratings: 'Profile', Privacy: 'Profile', 'Find play': 'Play', Compete: 'Book' }[currentRoute.params?.openTab]))
     : currentRoute.name === 'Leaderboard' ? 'Home'
-    : ['Privacy', 'HelpSupport', 'NotificationTest', 'Connections'].includes(currentRoute.name) ? 'Profile'
+    : ['Privacy', 'HelpSupport', 'SupportChat', 'NotificationTest', 'Connections'].includes(currentRoute.name) ? 'Profile'
     : ['Inbox', 'DirectChat'].includes(currentRoute.name) ? (currentRoute.params?.ownerTab || 'Team')
     : ['Activities', 'ActivityDetails', 'OpenPlayActivity'].includes(currentRoute.name) ? 'Home'
     : null;
@@ -226,6 +227,7 @@ function PlayerWorkspace({ isDark }) {
       <Tab.Screen name="AccountDeletion" component={AccountDeletionScreen} />
       <Tab.Screen name="PaymentHistory" component={PaymentHistoryScreen} />
       <Tab.Screen name="HelpSupport" component={HelpSupportScreen} />
+      <Tab.Screen name="SupportChat" component={SupportChatScreen} />
       <Tab.Screen name="NotificationTest" component={NotificationTestScreen} />
       <Tab.Screen name="Inbox" component={InboxScreen} />
       <Tab.Screen name="DirectChat" component={DirectChatScreen} />

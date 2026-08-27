@@ -224,7 +224,7 @@ function ActionButton({ icon, imageSource, overline, label, type, onPress }) {
   );
 }
 
-function HeaderAction({ active = false, icon, label, onPress, showBadge = false }) {
+function HeaderAction({ active = false, compact = false, icon, label, onPress, showBadge = false }) {
   const { isDark } = useTheme();
   return (
     <MotionPressable
@@ -232,7 +232,7 @@ function HeaderAction({ active = false, icon, label, onPress, showBadge = false 
       accessibilityRole="button"
       accessibilityState={active ? { selected: true } : {}}
       onPress={onPress}
-      style={[styles.headerAction, isDark && darkStyles.headerAction, active && styles.headerActionActive, active && isDark && styles.headerActionActiveDark]}
+      style={[styles.headerAction, compact && styles.headerActionCompact, isDark && darkStyles.headerAction, active && styles.headerActionActive, active && isDark && styles.headerActionActiveDark]}
     >
       <Icon name={icon} size={19} color={active ? C.ink : isDark ? C.paper : C.ink} />
       {showBadge ? <View style={[styles.unreadDot, isDark && darkStyles.unreadDot]} /> : null}
@@ -431,7 +431,7 @@ export default function HomeScreen() {
   const { userLocation } = useUserLocation();
   const { width } = useWindowDimensions();
   const tablet = width >= 840;
-  const compactHeader = width <= 390;
+  const compactHeader = width <= 440;
   const [notifications, setNotifications] = useState(false);
   const [locationOpen, setLocationOpen] = useState(false);
   const dashboardCacheKey = homeDashboardCacheKey(user?.id || 'guest');
@@ -761,8 +761,8 @@ export default function HomeScreen() {
   return (
     <SafeAreaView style={[styles.safe, isDark && darkStyles.safe]}>
       <StatusBar style={isDark ? 'light' : 'dark'} backgroundColor={isDark ? C.ink : C.paper} />
-      <ScrollView style={styles.scroll} contentContainerStyle={[styles.content, tablet && styles.contentTablet]} showsVerticalScrollIndicator={false}>
-        <View style={styles.header}>
+      <ScrollView style={styles.scroll} contentContainerStyle={[styles.content, compactHeader && styles.contentCompact, tablet && styles.contentTablet]} showsVerticalScrollIndicator={false}>
+        <View style={[styles.header, compactHeader && styles.headerCompact]}>
           <View style={styles.headerProfileGroup}>
             <ProfilePhoto photo={user?.picture || user?.avatar} name={displayName} size={40} />
             <View style={styles.headerIdentityCopy}>
@@ -770,13 +770,13 @@ export default function HomeScreen() {
               <Text numberOfLines={1} style={[styles.h1, compactHeader && styles.h1Compact, isDark && darkStyles.text]}>{displayName}</Text>
             </View>
           </View>
-          <View style={styles.headerActions}>
-              <HeaderAction active={isDark} icon={isDark ? 'sunny-outline' : 'moon-outline'} label={isDark ? 'Use light dashboard' : 'Use dark dashboard'} onPress={toggleColorMode} />
-              <HeaderAction icon="podium-outline" label="Open leaderboard" onPress={() => navigation.navigate('Leaderboard', { defaultFormat: user?.preference?.toLowerCase() === 'singles' ? 'singles' : 'doubles' })} />
-              <HeaderAction icon="notifications-outline" label={`Open notifications${unreadCount ? `, ${unreadCount} unread` : ''}`} onPress={() => setNotifications(true)} showBadge={unreadCount > 0} />
+          <View style={[styles.headerActions, compactHeader && styles.headerActionsCompact]}>
+              <HeaderAction compact={compactHeader} active={isDark} icon={isDark ? 'sunny-outline' : 'moon-outline'} label={isDark ? 'Use light dashboard' : 'Use dark dashboard'} onPress={toggleColorMode} />
+              <HeaderAction compact={compactHeader} icon="podium-outline" label="Open leaderboard" onPress={() => navigation.navigate('Leaderboard', { defaultFormat: user?.preference?.toLowerCase() === 'singles' ? 'singles' : 'doubles' })} />
+              <HeaderAction compact={compactHeader} icon="notifications-outline" label={`Open notifications${unreadCount ? `, ${unreadCount} unread` : ''}`} onPress={() => setNotifications(true)} showBadge={unreadCount > 0} />
           </View>
         </View>
-        <KitchenLine style={styles.headerLine} />
+        <KitchenLine style={[styles.headerLine, compactHeader && styles.headerLineCompact]} />
         {tablet ? <View style={styles.tabletGrid}><View style={styles.primaryColumn}>{schedule}{discovery}{peopleYouMayKnow}{nearby}</View><View style={styles.secondaryColumn}>{gameOverview}{feed}</View></View> : <>{schedule}{discovery}{peopleYouMayKnow}{gameOverview}{nearby}{feed}</>}
       </ScrollView>
       <NotificationSheet visible={notifications} onClose={() => setNotifications(false)} items={notices} unreadCount={unreadCount} onRead={(id) => readNotification(id).catch((error) => Alert.alert('Notifications', error.message || 'This notification could not be marked as read.'))} onReadAll={() => readAllNotifications().catch((error) => Alert.alert('Notifications', error.message || 'Notifications could not be marked as read.'))} onDelete={removeNotification} onClearRead={clearNotifications} onFollowResponse={(item, accept) => respondFollowRequest(item.data?.requesterId, accept, item.id)} onOpen={(item) => { if (!item.read_at) readNotification(item.id).catch(() => {}); setNotifications(false); if (item.data?.conversationId) navigation.navigate('DirectChat', { conversationId: item.data.conversationId, player: item.data?.playerId ? { id: item.data.playerId } : undefined, ownerTab: 'Team' }); else if (item.data?.sessionId) navigation.navigate('OpenPlayActivity', { token: Date.now(), sessionId: item.data.sessionId, direct: true, returnTo: 'Home' }); }} />
@@ -789,11 +789,11 @@ export default function HomeScreen() {
 const shadow = Platform.select({ ios: { shadowColor: C.ink, shadowOpacity: 0.08, shadowRadius: 12, shadowOffset: { width: 0, height: 4 } }, android: { elevation: 3 } });
 const styles = createMobileStyleSheet({
   safe: { flex: 1, backgroundColor: C.paper },
-  scroll: { flex: 1 }, content: { paddingHorizontal: 20, paddingTop: 18, paddingBottom: 126 }, contentTablet: { paddingHorizontal: 34, maxWidth: 1200, width: '100%', alignSelf: 'center' },
-  header: { minHeight: 44, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 12 }, headerProfileGroup: { flex: 1, minWidth: 0, flexDirection: 'row', alignItems: 'center', gap: 10 }, headerIdentityCopy: { flex: 1, minWidth: 0 }, eyebrow: { color: C.ink40, fontSize: 10, lineHeight: 15, fontWeight: '700', letterSpacing: 1.05 }, eyebrowLight: { color: 'rgba(243,245,239,0.52)' },
-  h1: { color: C.ink, fontSize: 22, lineHeight: 27, fontWeight: '900', letterSpacing: -0.45 }, h1Compact: { fontSize: 20, lineHeight: 25, letterSpacing: -0.35 }, h2: { color: C.ink, fontSize: 23, lineHeight: 29, fontWeight: '700', letterSpacing: -0.5 },
-  headerActions: { height: 40, flexDirection: 'row', alignItems: 'center', flexShrink: 0, gap: 6 }, headerAction: { width: 40, height: 40, borderWidth: 1, borderColor: C.line, borderRadius: 13, backgroundColor: C.surface, alignItems: 'center', justifyContent: 'center', ...shadow }, headerActionActive: { backgroundColor: C.optic }, headerActionActiveDark: { backgroundColor: C.optic }, unreadDot: { position: 'absolute', top: 5, right: 5, width: 8, height: 8, borderRadius: 4, borderWidth: 2, borderColor: C.surface, backgroundColor: C.brick },
-  kitchen: { height: 7, marginVertical: 18 }, solid: { height: 2, backgroundColor: C.ink }, dashed: { marginTop: 4, borderTopWidth: 1, borderStyle: 'dashed', borderColor: C.ink40 }, headerLine: { marginTop: 10, marginBottom: 16 },
+  scroll: { flex: 1 }, content: { paddingHorizontal: 20, paddingTop: 18, paddingBottom: 126 }, contentCompact: { paddingHorizontal: 16, paddingTop: 22 }, contentTablet: { paddingHorizontal: 34, maxWidth: 1200, width: '100%', alignSelf: 'center' },
+  header: { minHeight: 44, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 12 }, headerCompact: { minHeight: 48, gap: 9 }, headerProfileGroup: { flex: 1, minWidth: 0, flexDirection: 'row', alignItems: 'center', gap: 10 }, headerIdentityCopy: { flex: 1, minWidth: 0 }, eyebrow: { color: C.ink40, fontSize: 10, lineHeight: 15, fontWeight: '700', letterSpacing: 1.05 }, eyebrowLight: { color: 'rgba(243,245,239,0.52)' },
+  h1: { marginTop: 2, color: C.ink, fontSize: 22, lineHeight: 27, fontWeight: '900', letterSpacing: -0.45 }, h1Compact: { marginTop: 3, fontSize: 20, lineHeight: 25, letterSpacing: -0.35 }, h2: { marginTop: 3, color: C.ink, fontSize: 23, lineHeight: 29, fontWeight: '700', letterSpacing: -0.5 },
+  headerActions: { height: 40, flexDirection: 'row', alignItems: 'center', flexShrink: 0, gap: 6 }, headerActionsCompact: { height: 36, gap: 5 }, headerAction: { width: 40, height: 40, borderWidth: 1, borderColor: C.line, borderRadius: 13, backgroundColor: C.surface, alignItems: 'center', justifyContent: 'center', ...shadow }, headerActionCompact: { width: 36, height: 36, borderRadius: 12 }, headerActionActive: { backgroundColor: C.optic }, headerActionActiveDark: { backgroundColor: C.optic }, unreadDot: { position: 'absolute', top: 5, right: 5, width: 8, height: 8, borderRadius: 4, borderWidth: 2, borderColor: C.surface, backgroundColor: C.brick },
+  kitchen: { height: 7, marginVertical: 18 }, solid: { height: 2, backgroundColor: C.ink }, dashed: { marginTop: 4, borderTopWidth: 1, borderStyle: 'dashed', borderColor: C.ink40 }, headerLine: { marginTop: 10, marginBottom: 16 }, headerLineCompact: { marginTop: 14, marginBottom: 20 },
   openPlayMore: { minHeight: 40, paddingHorizontal: 12, flexDirection: 'row', alignItems: 'center', gap: 6, borderRadius: 13, backgroundColor: C.optic }, openPlayMoreText: { color: C.ink, fontSize: 9, fontWeight: '900' },
   openPlayScroll: { paddingRight: 20, gap: 12 }, openPlayScrollSingle: { width: '100%', paddingRight: 0 },
   homeOpenPlayCard: { width: 252, minHeight: 166, padding: 13, borderWidth: 1, borderColor: C.line, borderRadius: 20, borderBottomLeftRadius: 9, borderBottomRightRadius: 9, backgroundColor: C.surface, ...shadow }, homeOpenPlayCardWide: { width: 280 }, homeOpenPlayCardSingle: { width: '100%', flex: 1, minWidth: '100%' },

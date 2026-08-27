@@ -1,5 +1,6 @@
 import React, { useMemo, useState } from 'react';
 import {
+  ActivityIndicator,
   Image,
   KeyboardAvoidingView,
   Linking,
@@ -19,6 +20,7 @@ import Ionicons from '@expo/vector-icons/Ionicons';
 import { useAuth } from '../context/AuthContext';
 import { DARK_CONTENT_COLORS, useTheme } from '../context/ThemeContext';
 import { createMobileStyleSheet } from '../utils/mobileStyles';
+import { startSupportConversation, triggerSupportAiReply } from '../services/supportChat';
 
 const LIGHT = {
   ink: '#0E2321', paper: '#F3F5EF', surface: '#FFFFFF', optic: '#D6E94A',
@@ -124,7 +126,7 @@ function FaqRow({ item, expanded, onToggle, onAction, C }) {
   );
 }
 
-function ContactModal({ visible, onClose, user, C, onOpened }) {
+function ContactModal({ visible, onClose, user, C, onStarted }) {
   const [category, setCategory] = useState(SUPPORT_CATEGORIES[0]);
   const [details, setDetails] = useState('');
   const [error, setError] = useState('');
@@ -136,13 +138,27 @@ function ContactModal({ visible, onClose, user, C, onOpened }) {
     onClose();
   };
 
-  const openEmail = async () => {
+  const startChat = async () => {
     if (details.trim().length < 10) {
       setError('Add a little more detail so the support team can help.');
       return;
     }
     setOpening(true);
     setError('');
+    try {
+      const { conversationId } = await startSupportConversation(details, category);
+      setDetails('');
+      onClose();
+      onStarted(conversationId);
+      triggerSupportAiReply(conversationId);
+    } catch (err) {
+      setError(err.message || 'Could not start a conversation. Please try again.');
+    } finally {
+      setOpening(false);
+    }
+  };
+
+  const emailFallback = () => {
     const subject = `Peakle support · ${category}`;
     const body = [
       'Hi Peakle Support,',
@@ -156,16 +172,9 @@ function ContactModal({ visible, onClose, user, C, onOpened }) {
       `Device: ${Platform.OS} ${String(Platform.Version)}`,
     ].join('\n');
     const url = `mailto:${SUPPORT_EMAIL}?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`;
-    try {
-      await Linking.openURL(url);
-      setDetails('');
-      onClose();
-      onOpened();
-    } catch {
+    Linking.openURL(url).catch(() => {
       setError(`No email app could be opened. Email us directly at ${SUPPORT_EMAIL}.`);
-    } finally {
-      setOpening(false);
-    }
+    });
   };
 
   return (
@@ -220,13 +229,15 @@ function ContactModal({ visible, onClose, user, C, onOpened }) {
             <Pressable
               accessibilityRole="button"
               disabled={opening}
-              onPress={openEmail}
+              onPress={startChat}
               style={[s.sendButton, { backgroundColor: C.optic }, opening && s.disabled]}
             >
-              <Icon name="mail-outline" color="#0E2321" />
-              <Text style={s.sendButtonText}>{opening ? 'Opening email…' : 'Continue in email'}</Text>
+              {opening ? <ActivityIndicator color="#0E2321" /> : <Icon name="chatbubble-ellipses-outline" color="#0E2321" />}
+              <Text style={s.sendButtonText}>{opening ? 'Starting chat…' : 'Start chat with support'}</Text>
             </Pressable>
-            <Text style={[s.emailNote, { color: C.ink40 }]}>Your email app will open with your message and device details ready to send to {SUPPORT_EMAIL}.</Text>
+            <Pressable accessibilityRole="button" onPress={emailFallback} style={s.emailFallback}>
+              <Text style={[s.emailNote, { color: C.ink40 }]}>Prefer email? Contact {SUPPORT_EMAIL} instead.</Text>
+            </Pressable>
           </View>
         </View>
       </KeyboardAvoidingView>
@@ -241,7 +252,6 @@ export default function HelpSupportScreen({ navigation }) {
   const [query, setQuery] = useState('');
   const [expandedId, setExpandedId] = useState(null);
   const [contactOpen, setContactOpen] = useState(false);
-  const [message, setMessage] = useState('');
 
   const faqs = useMemo(() => {
     const normalized = query.trim().toLowerCase();
@@ -287,14 +297,6 @@ export default function HelpSupportScreen({ navigation }) {
           </View>
         </View>
 
-        {message ? (
-          <View style={[s.messageBanner, { backgroundColor: C.tealWash }]}>
-            <Icon name="checkmark-circle" color={C.teal} />
-            <Text style={[s.messageText, { color: C.teal }]}>{message}</Text>
-            <Pressable accessibilityLabel="Dismiss message" onPress={() => setMessage('')}><Icon name="close" size={17} color={C.teal} /></Pressable>
-          </View>
-        ) : null}
-
         <Text style={[s.sectionLabel, { color: C.ink40 }]}>QUICK LINKS</Text>
         <View style={s.quickGrid}>
           <Pressable onPress={() => navigation.navigate('PaymentHistory')} style={[s.quickCard, { backgroundColor: C.surface, borderColor: C.line }]}>
@@ -339,8 +341,8 @@ export default function HelpSupportScreen({ navigation }) {
           <View style={[s.contactIcon, { backgroundColor: C.optic }]}><Icon name="chatbubble-ellipses-outline" color="#0E2321" /></View>
           <View style={s.flex}>
             <Text style={s.contactEyebrow}>STILL NEED HELP?</Text>
-            <Text style={s.contactTitle}>Contact Peakle support</Text>
-            <Text style={s.contactBody}>Tell us what happened and we’ll prepare an email with useful account and device details.</Text>
+            <Text style={s.contactTitle}>Chat with Peakle support</Text>
+            <Text style={s.contactBody}>Tell us what happened and get an instant answer, or connect with a teammate.</Text>
           </View>
           <Pressable accessibilityRole="button" accessibilityLabel="Contact Peakle support" onPress={() => setContactOpen(true)} style={[s.contactButton, { backgroundColor: C.optic }]}>
             <Icon name="arrow-forward" color="#0E2321" />
@@ -359,7 +361,7 @@ export default function HelpSupportScreen({ navigation }) {
         onClose={() => setContactOpen(false)}
         user={user}
         C={C}
-        onOpened={() => setMessage('Your email app opened with the support request ready to send.')}
+        onStarted={(conversationId) => navigation.navigate('SupportChat', { conversationId })}
       />
     </SafeAreaView>
   );
@@ -381,8 +383,6 @@ const s = createMobileStyleSheet({
   heroBody: { marginTop: 5, color: 'rgba(255,255,255,.67)', fontSize: 9, lineHeight: 14 },
   search: { minHeight: 50, marginTop: 17, paddingHorizontal: 13, flexDirection: 'row', alignItems: 'center', gap: 8, borderRadius: 14 },
   searchInput: { minWidth: 0, flex: 1, height: 50, paddingVertical: 0, fontSize: 11 },
-  messageBanner: { marginTop: 13, padding: 11, flexDirection: 'row', alignItems: 'center', gap: 8, borderRadius: 13 },
-  messageText: { flex: 1, fontSize: 8, lineHeight: 12, fontWeight: '800' },
   sectionLabel: { marginTop: 22, marginBottom: 9, fontSize: 8, fontWeight: '900', letterSpacing: .8 },
   quickGrid: { flexDirection: 'row', gap: 8 },
   quickCard: { minWidth: 0, flex: 1, minHeight: 113, padding: 10, borderWidth: 1, borderRadius: 15 },
@@ -428,6 +428,7 @@ const s = createMobileStyleSheet({
   formError: { marginTop: 7, fontSize: 8, lineHeight: 12, fontWeight: '800' },
   sendButton: { minHeight: 52, marginTop: 15, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 7, borderRadius: 14 },
   sendButtonText: { color: '#0E2321', fontSize: 10, fontWeight: '900' },
+  emailFallback: { marginTop: 4, alignSelf: 'center' },
   emailNote: { marginTop: 8, textAlign: 'center', fontSize: 7, lineHeight: 11 },
   disabled: { opacity: .6 },
 });

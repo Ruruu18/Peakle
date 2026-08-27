@@ -15,6 +15,7 @@ import { PlayersSection } from "./players-section";
 import { ProgramsSection } from "./programs-section";
 import { SettingsSection } from "./settings-section";
 import { StaffSection } from "./staff-section";
+import { SupportSection } from "./support-section";
 import { VenuesSection } from "./venues-section";
 
 export function SectionContent({ section, data, venue, venueId, onVenueChange, navigate, refresh, onCreate, resourceId, subview }: { section: PortalSection; data: OrganizerData; venue: Venue | null; venueId: string | null; onVenueChange: (venueId: string | null) => void; navigate: (section: PortalSection) => void; refresh: () => Promise<void>; onCreate: (type: CreateType) => void; resourceId?: string; subview?: string }) {
@@ -30,5 +31,6 @@ export function SectionContent({ section, data, venue, venueId, onVenueChange, n
   if (section === "analytics") return <AnalyticsSection data={data} />;
   if (section === "earnings") return <EarningsSection data={data} venue={venue} />;
   if (section === "staff") return <StaffSection data={data} venue={venue} refresh={refresh} subview={subview} />;
+  if (section === "support") return <SupportSection />;
   return <SettingsSection data={data} subview={subview} refresh={refresh} />;
 }

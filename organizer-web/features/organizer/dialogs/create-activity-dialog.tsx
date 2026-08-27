@@ -1,6 +1,6 @@
 "use client";
 
-import { Check, ChevronDown, ChevronUp, Plus, Trash2, X } from "lucide-react";
+import { ArrowLeft, ArrowRight, Check, ChevronDown, ChevronUp, Plus, Trash2, X } from "lucide-react";
 import { useState } from "react";
 import { toast } from "sonner";
 import { requireSupabase } from "@/lib/supabase";
@@ -72,6 +72,7 @@ function DivisionEditor({ divisions, onChange }: { divisions: Division[]; onChan
 }
 
 function GenericCreateDialog({ type, venue, userId, onClose, onCreated }: CreateDialogProps) {
+  const [step, setStep] = useState(1);
   const [name, setName] = useState("");
   const [schedule, setSchedule] = useState("");
   const [capacity, setCapacity] = useState("16");
@@ -82,12 +83,25 @@ function GenericCreateDialog({ type, venue, userId, onClose, onCreated }: Create
   const label = { session: "open play", program: "program", competition: "competition", membership: "membership" }[type];
   const divisionsValid = type !== "competition" || (divisions.length > 0 && divisions.every((division) => division.name.trim().length >= 3 && Number(division.capacity) >= 2 && Number(division.capacity) <= 200 && Number.isFinite(Number(division.feeAmount)) && Number(division.feeAmount) >= 0) && divisions.reduce((sum, division) => sum + Number(division.capacity), 0) <= 512);
 
+  // For membership there's no schedule step so total steps = 2
+  const totalSteps = type === "membership" ? 2 : 3;
+
+  const goNext = () => {
+    if (step === 1) {
+      if (name.trim().length < 2) { toast.error("Enter a name (at least 2 characters)."); return; }
+      setStep(2);
+    } else if (step === 2) {
+      if (type !== "membership" && !schedule) { toast.error("Pick a date to continue."); return; }
+      if (type === "competition" && schedule < manilaToday()) { toast.error("Competition dates cannot be in the past."); return; }
+      if (type !== "competition" && type !== "membership" && manilaDateTime(schedule) <= new Date()) { toast.error("Choose a start time in the future."); return; }
+      setStep(3);
+    }
+  };
+
   const submit = async (event: React.FormEvent) => {
     event.preventDefault();
     if (!venue) { toast.error("Add or select a verified venue first."); return; }
-    if (type === "competition" && schedule < manilaToday()) { toast.error("Competition dates cannot be in the past."); return; }
     if (type === "competition" && !divisionsValid) { toast.error("Give every division a name (3+ characters) and a valid capacity."); return; }
-    if (type !== "competition" && type !== "membership" && (!schedule || manilaDateTime(schedule) <= new Date())) { toast.error("Choose a start time in the future."); return; }
     setBusy(true);
     try {
       const client = requireSupabase();
@@ -123,5 +137,97 @@ function GenericCreateDialog({ type, venue, userId, onClose, onCreated }: Create
         ? [{ value: "tournament", label: "Tournament" }, { value: "league", label: "League" }, { value: "ladder", label: "Ladder" }]
         : [{ value: "membership", label: "Membership" }, { value: "court_package", label: "Court pack" }, { value: "session_package", label: "Session pack" }, { value: "credit_pack", label: "Credit pack" }];
 
-  return <div className="dialog-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) onClose(); }}><div className={`dialog dialog-activity ${type === "membership" ? "compact" : ""}`} role="dialog" aria-modal="true" aria-labelledby="create-title"><div className="dialog-head"><div><p className="eyebrow">NEW {label.toUpperCase()}</p><h2 id="create-title">Create {label}</h2><p>{venue?.name || "Select a venue to continue"}</p></div><button className="icon-button" type="button" onClick={onClose} aria-label="Close"><X size={18} /></button></div><form onSubmit={submit}><div className="activity-dialog-layout"><div className="activity-form-panel"><div className="form-field"><label htmlFor="create-name">NAME</label><input id="create-name" value={name} onChange={(event) => setName(event.target.value)} placeholder={type === "session" ? "e.g. Friday Night Open Play" : `Enter ${label} name`} required minLength={2} autoFocus /></div><div className="form-field"><label htmlFor="create-kind">TYPE</label><SelectControl id="create-kind" className="form-select" value={kind} onChange={setKind} ariaLabel={`${titleCase(label)} type`} options={kindOptions} /></div>{type !== "competition" ? <div className="activity-number-grid"><div className="form-field"><label htmlFor="create-capacity">{type === "membership" ? "CREDITS" : "CAPACITY"}</label><input id="create-capacity" type="number" inputMode="numeric" min="1" max="500" value={capacity} onChange={(event) => setCapacity(event.target.value)} required /></div><div className="form-field"><label htmlFor="create-price">PRICE · PHP</label><input id="create-price" type="number" inputMode="decimal" min="0" step="1" value={price} onChange={(event) => setPrice(event.target.value)} required /></div></div> : null}</div>{type !== "membership" ? <div className="activity-schedule-panel"><div className="activity-panel-head"><span>02</span><div><strong>{type === "competition" ? "Competition date" : "Schedule"}</strong><small>Select it here without leaving the form.</small></div></div><ScheduleControl inline value={schedule} onChange={setSchedule} ariaLabel={`${titleCase(label)} start`} dateOnly={type === "competition"} /></div> : null}</div>{type === "competition" ? <div className="dialog-section"><span><Plus size={18} /></span><div><strong>Divisions</strong><small>Add one division per bracket players enter — by gender, skill, or format. Most tournaments need at least one.</small></div></div> : null}{type === "competition" ? <DivisionEditor divisions={divisions} onChange={setDivisions} /> : null}<div className="dialog-actions"><span className="dialog-hint">All times use the venue’s local timezone.</span><button className="button button-ghost" type="button" onClick={onClose}>Cancel</button><button className="button button-accent" disabled={busy || !venue || (type !== "membership" && !schedule) || !divisionsValid} type="submit">{busy ? "Publishing…" : `Publish ${label}`}<Check size={16} /></button></div></form></div></div>;
+  const STEP_TITLES: Record<number, string> = {
+    1: "Basics",
+    2: type === "membership" ? "Pricing & credits" : type === "competition" ? "Competition date" : "Schedule",
+    3: type === "competition" ? "Divisions" : "Capacity & pricing",
+  };
+
+  const stepCount = totalSteps;
+
+  return (
+    <div className="dialog-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) onClose(); }}>
+      <div className={`dialog dialog-activity ${type === "membership" ? "compact" : ""}`} role="dialog" aria-modal="true" aria-labelledby="create-title">
+        <div className="dialog-head">
+          <div>
+            <p className="eyebrow">NEW {label.toUpperCase()} · STEP {step} OF {stepCount}</p>
+            <h2 id="create-title">{STEP_TITLES[step]}</h2>
+            <p>{venue?.name || "Select a venue to continue"}</p>
+          </div>
+          <button className="icon-button" type="button" onClick={onClose} aria-label="Close"><X size={18} /></button>
+        </div>
+
+        <form onSubmit={submit}>
+          <div className="form-progress" aria-label={`Step ${step} of ${stepCount}`}>
+            <span className="active" />
+            <span className={step >= 2 ? "active" : ""} />
+            {stepCount === 3 && <span className={step === 3 ? "active" : ""} />}
+          </div>
+
+          {step === 1 && (
+            <div className="wizard-panel">
+              <div className="form-field">
+                <label htmlFor="create-name">NAME</label>
+                <input id="create-name" value={name} onChange={(event) => setName(event.target.value)} placeholder={type === "session" ? "e.g. Friday Night Open Play" : `Enter ${label} name`} required minLength={2} autoFocus />
+              </div>
+              <div className="form-field">
+                <label htmlFor="create-kind">TYPE</label>
+                <SelectControl id="create-kind" className="form-select" value={kind} onChange={setKind} ariaLabel={`${titleCase(label)} type`} options={kindOptions} />
+              </div>
+            </div>
+          )}
+
+          {step === 2 && type !== "membership" && (
+            <div className="wizard-panel" style={{ padding: "0 18px 8px" }}>
+              <ScheduleControl inline value={schedule} onChange={setSchedule} ariaLabel={`${titleCase(label)} start`} dateOnly={type === "competition"} />
+            </div>
+          )}
+
+          {step === 2 && type === "membership" && (
+            <div className="wizard-panel">
+              <div className="activity-number-grid">
+                <div className="form-field">
+                  <label htmlFor="create-capacity">CREDITS</label>
+                  <input id="create-capacity" type="number" inputMode="numeric" min="1" max="500" value={capacity} onChange={(event) => setCapacity(event.target.value)} required />
+                </div>
+                <div className="form-field">
+                  <label htmlFor="create-price">PRICE · PHP</label>
+                  <input id="create-price" type="number" inputMode="decimal" min="0" step="1" value={price} onChange={(event) => setPrice(event.target.value)} required />
+                </div>
+              </div>
+            </div>
+          )}
+
+          {step === 3 && type === "competition" && (
+            <DivisionEditor divisions={divisions} onChange={setDivisions} />
+          )}
+
+          {step === 3 && type !== "competition" && (
+            <div className="wizard-panel">
+              <div className="activity-number-grid">
+                <div className="form-field">
+                  <label htmlFor="create-capacity">CAPACITY</label>
+                  <input id="create-capacity" type="number" inputMode="numeric" min="1" max="500" value={capacity} onChange={(event) => setCapacity(event.target.value)} required />
+                </div>
+                <div className="form-field">
+                  <label htmlFor="create-price">PRICE · PHP</label>
+                  <input id="create-price" type="number" inputMode="decimal" min="0" step="1" value={price} onChange={(event) => setPrice(event.target.value)} required />
+                </div>
+              </div>
+            </div>
+          )}
+
+          <div className="dialog-actions wizard-actions">
+            <button className="button button-ghost" type="button" onClick={step === 1 ? onClose : () => setStep(step - 1)}>
+              {step === 1 ? "Cancel" : <><ArrowLeft size={15} />Back</>}
+            </button>
+            {step < stepCount
+              ? <button className="button button-accent" type="button" onClick={goNext} disabled={!venue}>Continue<ArrowRight size={16} /></button>
+              : <button className="button button-accent" type="submit" disabled={busy || !venue || !divisionsValid}>{busy ? "Publishing…" : `Publish ${label}`}<Check size={16} /></button>
+            }
+          </div>
+        </form>
+      </div>
+    </div>
+  );
 }

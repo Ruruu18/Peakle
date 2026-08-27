@@ -338,11 +338,12 @@ describe('scheduleClosedAppNotificationTest', () => {
     expect(id).toBe('scheduled-id');
     const [args] = Notifications.scheduleNotificationAsync.mock.calls.slice(-1);
     expect(args[0].trigger).toEqual({ type: 'timeInterval', seconds: 10 });
+    expect(args[0].content.sound).toBe('default');
     expect(args[0].content.categoryIdentifier).toBe(notificationActions.CHAT_NOTIFICATION_CATEGORY);
     expect(args[0].content.data).toEqual({ notificationTest: true, senderName: 'Alex from Peakle' });
   });
 
-  it('includes the messages channel id in the trigger on Android, and forwards a custom delay', async () => {
+  it('uses the messages channel on Android without serializing a content sound Uri', async () => {
     const { notificationActions, Notifications } = setupNotificationActions({ platformOS: 'android' });
 
     await notificationActions.scheduleClosedAppNotificationTest(30);
@@ -353,6 +354,7 @@ describe('scheduleClosedAppNotificationTest', () => {
       seconds: 30,
       channelId: notificationActions.CHAT_NOTIFICATION_CHANNEL,
     });
+    expect(args[0].content).not.toHaveProperty('sound');
   });
 });
 

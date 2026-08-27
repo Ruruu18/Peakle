@@ -9,7 +9,13 @@ import type {
   AdminFinancialSummary,
   AdminWithdrawalRequest,
   AdminRefundQueueItem,
+  SupportConversation,
+  SupportConversationDetail,
+  SupportConversationStatus,
+  SupportMessage,
 } from "./types";
+
+const SUPPORT_MEDIA_BUCKET = "support-chat-media";
 
 const MONTH_LABELS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
 
@@ -384,4 +390,58 @@ export async function retryRefund(bookingId: string): Promise<void> {
   const { data, error } = await supabase.functions.invoke("process-refund", { body: { booking_id: bookingId } });
   if (error) throw new Error(`Failed to process refund: ${error.message}`);
   if (data?.error) throw new Error(data.error);
+}
+
+export async function fetchSupportConversations(status?: SupportConversationStatus): Promise<SupportConversation[]> {
+  await assertPlatformAdmin();
+  const supabase = requireSupabase();
+  const { data, error } = await supabase.rpc("list_support_conversations_admin", { p_status: status ?? null });
+  if (error) throw new Error(`Failed to load support conversations: ${error.message}`);
+  return (data ?? []) as SupportConversation[];
+}
+
+export async function fetchSupportMessages(conversationId: string): Promise<SupportMessage[]> {
+  await assertPlatformAdmin();
+  const supabase = requireSupabase();
+  const { data, error } = await supabase
+    .from("support_messages")
+    .select("id, conversation_id, sender_type, sender_id, body, media_path, created_at, profiles(display_name, avatar_url)")
+    .eq("conversation_id", conversationId)
+    .order("created_at", { ascending: true })
+    .order("id", { ascending: true })
+    .limit(200);
+  if (error) throw new Error(`Failed to load messages: ${error.message}`);
+  const rows = (data ?? []) as unknown as SupportMessage[];
+  const paths = [...new Set(rows.map((row) => row.media_path).filter((path): path is string => Boolean(path)))];
+  let signed = new Map<string, string | null>();
+  if (paths.length) {
+    const { data: urls, error: signError } = await supabase.storage.from(SUPPORT_MEDIA_BUCKET).createSignedUrls(paths, 3600);
+    if (signError) throw new Error(`Failed to load attachments: ${signError.message}`);
+    signed = new Map((urls ?? []).map((item, index) => [paths[index], item.signedUrl]));
+  }
+  await supabase.rpc("mark_support_conversation_read", { p_conversation_id: conversationId });
+  return rows.map((row) => ({ ...row, media_url: row.media_path ? signed.get(row.media_path) || null : null }));
+}
+
+export async function fetchSupportConversationDetail(conversationId: string): Promise<SupportConversationDetail | null> {
+  await assertPlatformAdmin();
+  const supabase = requireSupabase();
+  const { data, error } = await supabase.rpc("get_support_conversation", { p_conversation_id: conversationId });
+  if (error) throw new Error(`Failed to load conversation: ${error.message}`);
+  const row = Array.isArray(data) ? data[0] : data;
+  return (row ?? null) as SupportConversationDetail | null;
+}
+
+export async function sendSupportAgentMessage(conversationId: string, body: string): Promise<void> {
+  await assertPlatformAdmin();
+  const supabase = requireSupabase();
+  const { error } = await supabase.rpc("send_support_agent_message", { p_conversation_id: conversationId, p_body: body.trim() });
+  if (error) throw new Error(`Failed to send message: ${error.message}`);
+}
+
+export async function closeSupportConversation(conversationId: string): Promise<void> {
+  await assertPlatformAdmin();
+  const supabase = requireSupabase();
+  const { error } = await supabase.rpc("close_support_conversation", { p_conversation_id: conversationId });
+  if (error) throw new Error(`Failed to close conversation: ${error.message}`);
 }
