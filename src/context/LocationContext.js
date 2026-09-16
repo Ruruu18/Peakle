@@ -1,7 +1,9 @@
 import React, { createContext, useCallback, useContext, useEffect, useMemo, useState } from 'react';
+import { Platform } from 'react-native';
 import * as Location from 'expo-location';
 import { useAuth } from './AuthContext';
 import { knownLocationCoordinates } from '../data/phLocations';
+import { geocode, reverseGeocode } from '../utils/geocode';
 
 const DEFAULT_LOCATION = {
   latitude: null,
@@ -19,6 +21,18 @@ function locationAccessError(code, message) {
 }
 
 export function locationErrorMessage(error) {
+  if (Platform.OS === 'web') {
+    if (error?.code === 'LOCATION_PERMISSION_DENIED' || error?.code === 1) {
+      return 'Location access is blocked for this website. Allow Location in your browser’s site settings, then try again.';
+    }
+    if (error?.code === 'LOCATION_SERVICES_DISABLED' || error?.code === 2) {
+      return 'Your browser could not determine your location. Check that location services are enabled on your device, then try again.';
+    }
+    if (error?.code === 3) {
+      return 'Finding your location timed out. Check your connection and try again.';
+    }
+    return 'Your browser could not get your current location. Check your connection and location settings, then try again.';
+  }
   if (error?.code === 'LOCATION_SERVICES_DISABLED') {
     return 'Your phone location service is off. Turn it on, then try again.';
   }
@@ -52,7 +66,7 @@ export async function geocodeArea(query) {
 
   for (const placeQuery of [...new Set(queries)]) {
     try {
-      const results = await Location.geocodeAsync(placeQuery);
+      const results = await geocode(placeQuery);
       geocoderResponded = true;
       const coords = results.find((result) => (
         [result?.latitude, result?.longitude].every(Number.isFinite)
@@ -100,7 +114,7 @@ export function LocationProvider({ children }) {
 
   const resolveAddress = useCallback(async (coords, fallback = 'Current location') => {
     try {
-      const [address] = await Location.reverseGeocodeAsync(coords);
+      const address = await reverseGeocode(coords);
       return address ? addressLabel(address) : fallback;
     } catch {
       return fallback;

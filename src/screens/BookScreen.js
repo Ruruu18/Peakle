@@ -25,6 +25,7 @@ import Ionicons from '@expo/vector-icons/Ionicons';
 import LocationPicker from '../components/LocationPicker';
 import ScrollView from '../components/FocusResetScrollView';
 import SectionList from '../components/FocusResetSectionList';
+import useResponsiveWidth from '../hooks/useResponsiveWidth';
 import { distanceInKm, formatDistance, useUserLocation } from '../context/LocationContext';
 import { useAuth } from '../context/AuthContext';
 import { useOperations } from '../context/OperationsContext';
@@ -35,7 +36,7 @@ import {
   listTeams, listVenues, modifyBooking, quoteCourtBooking, startBookingCheckout,
 } from '../services/database';
 import * as Crypto from 'expo-crypto';
-import { WebView } from 'react-native-webview';
+import { WebView } from '../components/CheckoutBrowser';
 import { getAvailableMapProviders, openMapProvider } from '../services/externalMaps';
 import { requireSupabase } from '../lib/supabase';
 import { peekCachedData, readCachedData, withTimeout, writeCachedData } from '../lib/asyncData';
@@ -193,7 +194,8 @@ function Icon({ name, size = 20, color = C.ink }) {
 
 function Header({ title = 'Explore courts', subtitle = null, onBack, action }) {
   const { userLocation } = useUserLocation();
-  const { width, fontScale } = useWindowDimensions();
+  const { fontScale } = useWindowDimensions();
+  const width = useResponsiveWidth();
   const [locationOpen, setLocationOpen] = useState(false);
   const compact = width <= 360 || fontScale > 1.15;
   const locationLabel = String(userLocation.label || 'Location').split(' · ')[0];

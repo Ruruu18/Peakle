@@ -1,9 +1,9 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { Send, Star } from "lucide-react";
+import { Bot, Headset, Send, Sparkles, Star, UserCheck } from "lucide-react";
 import { toast } from "sonner";
-import { Badge, ConfirmDialog, Drawer, Tabs } from "@/components/admin-ui";
+import { Badge, ConfirmDialog, Drawer, StatCard, Tabs } from "@/components/admin-ui";
 import { requireSupabase } from "@/lib/supabase";
 import {
   closeSupportConversation,
@@ -13,6 +13,7 @@ import {
   sendSupportAgentMessage,
 } from "@/lib/admin-data";
 import { useAuth } from "@/components/providers";
+import { AGENT_QUICK_REPLIES } from "../config/support-quick-replies";
 import type { SupportConversation, SupportConversationDetail, SupportConversationStatus, SupportMessage } from "@/lib/types";
 
 const TABS: { id: string; label: string; status?: SupportConversationStatus }[] = [
@@ -32,6 +33,7 @@ export default function SupportSection() {
   const { user } = useAuth();
   const [tab, setTab] = useState("all");
   const [conversations, setConversations] = useState<SupportConversation[]>([]);
+  const [allConversations, setAllConversations] = useState<SupportConversation[]>([]);
   const [loading, setLoading] = useState(true);
   const [selected, setSelected] = useState<SupportConversation | null>(null);
   const [detail, setDetail] = useState<SupportConversationDetail | null>(null);
@@ -59,10 +61,20 @@ export default function SupportSection() {
 
   useEffect(() => { void load(); }, [load]);
 
+  const loadStats = useCallback(async () => {
+    try {
+      setAllConversations(await fetchSupportConversations());
+    } catch {
+      // stats are best-effort — the table above already surfaces load errors
+    }
+  }, []);
+
+  useEffect(() => { void loadStats(); }, [loadStats]);
+
   useEffect(() => {
     const supabase = requireSupabase();
     let timer: ReturnType<typeof setTimeout> | undefined;
-    const queueRefresh = () => { clearTimeout(timer); timer = setTimeout(() => void load(), 350); };
+    const queueRefresh = () => { clearTimeout(timer); timer = setTimeout(() => { void load(); void loadStats(); }, 350); };
     const channel = supabase.channel("admin-support-list")
       .on("postgres_changes", { event: "*", schema: "public", table: "support_conversations" }, queueRefresh)
       .on("postgres_changes", { event: "INSERT", schema: "public", table: "support_messages" }, queueRefresh)
@@ -162,6 +174,12 @@ export default function SupportSection() {
   const requesterSeen = detail?.requester_last_read_at && lastRequesterMessageAt
     && new Date(detail.requester_last_read_at) >= new Date(lastRequesterMessageAt);
 
+  const botCount = allConversations.filter((item) => item.status === "bot").length;
+  const openCount = allConversations.filter((item) => item.status === "open").length;
+  const assignedCount = allConversations.filter((item) => item.status === "assigned").length;
+  const ratings = allConversations.map((item) => item.csat_rating).filter((value): value is number => value != null);
+  const avgRating = ratings.length ? (ratings.reduce((sum, value) => sum + value, 0) / ratings.length).toFixed(1) : null;
+
   return (
     <div className="section-content">
       <div className="page-head">
@@ -170,6 +188,13 @@ export default function SupportSection() {
           <h1>Support</h1>
           <p>Conversations Peakle AI couldn&apos;t resolve, or that a player or organizer asked to escalate.</p>
         </div>
+      </div>
+
+      <div className="stat-grid">
+        <StatCard label="AI Handling" value={botCount} icon={Bot} />
+        <StatCard label="Waiting For a Teammate" value={openCount} icon={Headset} />
+        <StatCard label="Assigned" value={assignedCount} icon={UserCheck} />
+        <StatCard label="Avg. Rating" value={avgRating ?? "—"} sub={ratings.length ? `${ratings.length} rated` : undefined} icon={Star} />
       </div>
 
       <Tabs tabs={TABS.map(({ id, label }) => ({ id, label }))} active={tab} onChange={setTab} />
@@ -233,12 +258,13 @@ export default function SupportSection() {
           <>
             <div className="support-drawer-meta">
               <Badge status={selected.status} />
-              {selected.category ? <span className="table-secondary">{selected.category}</span> : null}
+              {selected.category ? <span className="support-category-chip">{selected.category}</span> : null}
               {detail?.csat_rating ? (
                 <span className="table-secondary" style={{ display: "inline-flex", alignItems: "center", gap: 2 }}>
                   <Star size={13} color="var(--optic)" fill="var(--optic)" /> {detail.csat_rating}/5
                 </span>
               ) : null}
+              <div style={{ flex: 1 }} />
               {selected.status !== "closed" ? (
                 <button className="button button-ghost" type="button" onClick={() => setCloseTarget(selected)}>Close conversation</button>
               ) : null}
@@ -246,11 +272,12 @@ export default function SupportSection() {
             <div className="support-thread-messages" ref={messagesRef}>
               {messages.map((message) => {
                 const mine = message.sender_type === "agent" && message.sender_id === user?.id;
+                const fromAi = message.sender_type === "ai";
                 return (
-                  <div key={message.id} className={`support-message${mine ? " mine" : ""}`}>
+                  <div key={message.id} className={`support-message${mine ? " mine" : ""}${fromAi ? " ai" : ""}`}>
                     {!mine ? (
-                      <span className={`support-sender-label${message.sender_type === "ai" ? " ai" : ""}`}>
-                        {message.sender_type === "ai" ? "Peakle AI" : message.sender_type === "agent" ? message.profiles?.display_name || "Teammate" : selected.requester_name}
+                      <span className={`support-sender-label${fromAi ? " ai" : ""}`}>
+                        {fromAi ? <><Sparkles size={10} aria-hidden="true" /> Peakle AI</> : message.sender_type === "agent" ? message.profiles?.display_name || "Teammate" : selected.requester_name}
                       </span>
                     ) : null}
                     <div className="support-bubble">
@@ -267,6 +294,20 @@ export default function SupportSection() {
               })()}
               {remoteTyping ? <p className="table-secondary">{selected.requester_name} is typing…</p> : null}
             </div>
+            {selected.status !== "closed" ? (
+              <div className="support-quick-replies">
+                {AGENT_QUICK_REPLIES.map((item) => (
+                  <button
+                    key={item.label}
+                    type="button"
+                    className="support-quick-reply-chip"
+                    onClick={() => setDraft((current) => (current.trim() ? `${current.trim()} ${item.text}` : item.text))}
+                  >
+                    {item.label}
+                  </button>
+                ))}
+              </div>
+            ) : null}
             <form className="support-composer" onSubmit={send}>
               <textarea
                 value={draft}

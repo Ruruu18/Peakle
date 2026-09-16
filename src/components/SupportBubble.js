@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useState } from 'react';
-import { Modal, Pressable, StyleSheet, Text, View } from 'react-native';
+import { Modal, Pressable, Text, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import Ionicons from '@expo/vector-icons/Ionicons';
 import { useAuth } from '../context/AuthContext';
@@ -7,6 +7,7 @@ import { useTheme } from '../context/ThemeContext';
 import { supabase } from '../lib/supabase';
 import { listSupportConversations } from '../services/supportChat';
 import { SupportChatBody } from '../screens/SupportChatScreen';
+import { createMobileStyleSheet } from '../utils/mobileStyles';
 
 // Hide the bubble on screens that are already a support conversation, to
 // avoid a redundant floating button over the full chat UI.
@@ -24,7 +25,10 @@ export default function SupportBubble({ navigationRef }) {
     if (!user?.id) return;
     try {
       const list = await listSupportConversations();
-      setUnread(list.reduce((sum, item) => sum + (item.status !== 'closed' ? item.unreadCount : 0), 0));
+      // Count unread messages on every conversation, closed included — a
+      // teammate's final reply can arrive right before an admin closes the
+      // thread, and that message still deserves a badge.
+      setUnread(list.reduce((sum, item) => sum + item.unreadCount, 0));
     } catch {
       // best-effort badge; ignore failures
     }
@@ -76,7 +80,7 @@ export default function SupportBubble({ navigationRef }) {
   );
 }
 
-const styles = StyleSheet.create({
+const styles = createMobileStyleSheet({
   bubble: {
     position: 'absolute',
     right: 18,
@@ -94,12 +98,12 @@ const styles = StyleSheet.create({
   },
   badge: {
     position: 'absolute',
-    top: -2,
-    right: -2,
-    minWidth: 18,
-    height: 18,
-    paddingHorizontal: 4,
-    borderRadius: 9,
+    top: -3,
+    right: -3,
+    minWidth: 20,
+    height: 20,
+    paddingHorizontal: 5,
+    borderRadius: 10,
     backgroundColor: '#B6472E',
     alignItems: 'center',
     justifyContent: 'center',

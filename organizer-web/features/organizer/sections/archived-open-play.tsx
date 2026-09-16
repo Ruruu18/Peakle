@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { Archive, ArchiveRestore, CalendarClock, ChevronLeft, ShieldCheck, Trash2, Users, Swords, UserCheck } from "lucide-react";
+import { Archive, ArchiveRestore, CalendarClock, ShieldCheck, Trash2, Users, Swords, UserCheck } from "lucide-react";
 import type { OpenPlaySession } from "@/lib/types";
 import { dateTime, Empty, money, Status } from "../components/portal-ui";
 import type { SessionLifecycleAction } from "../dialogs/session-lifecycle-dialog";
@@ -29,7 +29,6 @@ export function ArchivedOpenPlay({ sessions, onManage }: Props) {
           <p>Restore a session or remove a free session with no recorded matches.</p>
         </div>
       </div>
-      <div><Link className="button button-ghost inline-action" href="/open-play"><ChevronLeft size={16} />Back to sessions</Link></div>
     </div>
     {sessions.length ? <div className="archive-list">{sessions.map((session) => {
       const blockers = deletionBlockers(session);

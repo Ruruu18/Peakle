@@ -1,8 +1,11 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Platform } from 'react-native';
-import * as Notifications from 'expo-notifications';
 import { requireOptionalNativeModule } from 'expo-modules-core';
 import { requireSupabase } from '../lib/supabase';
+
+// Importing Expo notifications registers push-token listeners immediately.
+// Keep that module initialization on native, even when this service is shared.
+const Notifications = Platform.OS === 'web' ? null : require('expo-notifications');
 
 export const CHAT_NOTIFICATION_CATEGORY = 'peakle_direct_message';
 export const CHAT_NOTIFICATION_CHANNEL = 'messages';
@@ -123,6 +126,7 @@ async function recordTestReply(response) {
 }
 
 export async function handleInteractiveNotificationResponse(response) {
+  if (Platform.OS === 'web') return false;
   const action = response?.actionIdentifier;
   if (!action || action === Notifications.DEFAULT_ACTION_IDENTIFIER) return false;
   const request = response.notification?.request;
@@ -147,6 +151,7 @@ export async function handleInteractiveNotificationResponse(response) {
 }
 
 export async function scheduleClosedAppNotificationTest(seconds = 10) {
+  if (Platform.OS === 'web') throw new Error('Push notification tests are only available in the iOS and Android app.');
   await configureInteractiveNotifications();
   const permission = await Notifications.getPermissionsAsync();
   if (permission.status !== 'granted') throw new Error('Allow notifications before running the test.');

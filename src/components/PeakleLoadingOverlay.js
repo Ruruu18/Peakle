@@ -1,5 +1,5 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { Animated, StyleSheet } from 'react-native';
+import { Animated, Platform, StyleSheet } from 'react-native';
 import PeakleLoadingScreen from './PeakleLoadingScreen';
 
 export default function PeakleLoadingOverlay({ visible, status, minimumVisibleMs = 650 }) {
@@ -26,7 +26,7 @@ export default function PeakleLoadingOverlay({ visible, status, minimumVisibleMs
       Animated.timing(opacity, {
         toValue: 0,
         duration: 240,
-        useNativeDriver: true,
+        useNativeDriver: Platform.OS !== 'web',
       }).start(() => {
         if (transitionId.current === currentTransition) setMounted(false);
       });

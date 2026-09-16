@@ -8,6 +8,7 @@ export type AdminUser = {
   ban_reason: string | null;
   membership_tier: string | null;
   avatar_url: string | null;
+  trial_ends_at: string | null;
 };
 
 export type AdminVenue = {

@@ -5,6 +5,9 @@ import { useState } from "react";
 import { toast } from "sonner";
 import { requireSupabase } from "@/lib/supabase";
 import type { MembershipProduct, Program, Venue } from "@/lib/types";
+import { canManagePrograms, validateProgramDetails } from "@/lib/program-utils";
+import { isDemoModeActive } from "@/lib/demo-mode";
+import { addDemoProgram } from "@/lib/demo-data";
 import { manilaDateTime, manilaToday, ScheduleControl } from "../components/schedule-control";
 import { SelectControl, titleCase } from "../components/portal-ui";
 import { CreateOpenPlayDialog } from "./create-open-play-dialog";
@@ -77,6 +80,9 @@ function GenericCreateDialog({ type, venue, userId, onClose, onCreated }: Create
   const [schedule, setSchedule] = useState("");
   const [capacity, setCapacity] = useState("16");
   const [price, setPrice] = useState("0");
+  const [duration, setDuration] = useState("2");
+  const [skill, setSkill] = useState("all");
+  const [description, setDescription] = useState("");
   const [kind, setKind] = useState(type === "program" ? "clinic" : type === "competition" ? "tournament" : type === "membership" ? "membership" : "doubles");
   const [divisions, setDivisions] = useState<Division[]>(() => [makeDivision("Open Doubles")]);
   const [busy, setBusy] = useState(false);
@@ -88,6 +94,7 @@ function GenericCreateDialog({ type, venue, userId, onClose, onCreated }: Create
 
   const goNext = () => {
     if (step === 1) {
+      if (type === "program" && (name.trim().length < 3 || name.trim().length > 100)) { toast.error("Use a program name between 3 and 100 characters."); return; }
       if (name.trim().length < 2) { toast.error("Enter a name (at least 2 characters)."); return; }
       setStep(2);
     } else if (step === 2) {
@@ -100,6 +107,8 @@ function GenericCreateDialog({ type, venue, userId, onClose, onCreated }: Create
 
   const submit = async (event: React.FormEvent) => {
     event.preventDefault();
+    if (busy) return;
+    if (step < totalSteps) { goNext(); return; }
     if (!venue) { toast.error("Add or select a verified venue first."); return; }
     if (type === "competition" && !divisionsValid) { toast.error("Give every division a name (3+ characters) and a valid capacity."); return; }
     setBusy(true);
@@ -112,9 +121,18 @@ function GenericCreateDialog({ type, venue, userId, onClose, onCreated }: Create
         const { error } = await client.rpc("create_open_play_session", { p_name: name.trim(), p_venue_id: venue.id, p_court_ids: courtIds, p_capacity: Number(capacity), p_visibility: "public", p_approval_mode: "manual", p_skill_min: null, p_skill_max: null, p_fee_amount: Number(price), p_scheduled_start: start.toISOString(), p_scheduled_end: end.toISOString(), p_rules: null, p_cancellation_policy: null, p_match_format: kind, p_court_formats: courtIds.map(() => kind), p_average_match_minutes: 15, p_max_consecutive_games: 2, p_rest_minutes: 0 });
         if (error) throw error;
       } else if (type === "program") {
+        if (!canManagePrograms(venue)) throw new Error("Only venue owners, managers, and platform admins can create programs.");
         const start = manilaDateTime(schedule);
-        const { error } = await client.from("venue_programs").insert({ venue_id: venue.id, created_by: userId, name: name.trim(), kind, skill_division: "all", starts_at: start.toISOString(), ends_at: new Date(start.getTime() + 2 * 3600000).toISOString(), capacity: Number(capacity), price: Number(price), registration_status: "open" }).select().single<Program>();
-        if (error) throw error;
+        if (!Number.isFinite(start.getTime()) || start <= new Date()) throw new Error("Choose a start time in the future.");
+        if (!Number.isFinite(Number(duration)) || Number(duration) < 0.25 || Number(duration) > 24) throw new Error("Choose a duration between 0.25 and 24 hours.");
+        const details = { name: name.trim(), kind, skill_division: skill, starts_at: start.toISOString(), ends_at: new Date(start.getTime() + Number(duration) * 3600000).toISOString(), capacity: Number(capacity), price: Number(price), description: description.trim() || null };
+        const validation = validateProgramDetails(details, 0);
+        if (validation) throw new Error(validation);
+        if (isDemoModeActive()) addDemoProgram({ ...details, venue_id: venue.id, registration_status: "open" });
+        else {
+          const { error } = await client.from("venue_programs").insert({ ...details, venue_id: venue.id, created_by: userId, registration_status: "open" }).select().single<Program>();
+          if (error) throw new Error(error.message);
+        }
       } else if (type === "competition") {
         const { error } = await client.rpc("create_competition_with_divisions", { p_venue_id: venue.id, p_name: name.trim(), p_kind: kind, p_starts_on: new Date(schedule).toISOString().slice(0, 10), p_ends_on: null, p_rules: null, p_visibility: "public", p_divisions: divisions.map((division) => ({ name: division.name.trim(), format: division.format, participantDivision: division.participantDivision, skillCategory: division.skillCategory, entryType: division.entryType, capacity: Number(division.capacity), feeAmount: Number(division.feeAmount), feeBasis: division.feeBasis })) });
         if (error) throw error;
@@ -168,12 +186,13 @@ function GenericCreateDialog({ type, venue, userId, onClose, onCreated }: Create
             <div className="wizard-panel">
               <div className="form-field">
                 <label htmlFor="create-name">NAME</label>
-                <input id="create-name" value={name} onChange={(event) => setName(event.target.value)} placeholder={type === "session" ? "e.g. Friday Night Open Play" : `Enter ${label} name`} required minLength={2} autoFocus />
+                <input id="create-name" value={name} onChange={(event) => setName(event.target.value)} placeholder={type === "session" ? "e.g. Friday Night Open Play" : `Enter ${label} name`} required minLength={type === "program" ? 3 : 2} maxLength={type === "program" ? 100 : undefined} autoFocus />
               </div>
               <div className="form-field">
                 <label htmlFor="create-kind">TYPE</label>
                 <SelectControl id="create-kind" className="form-select" value={kind} onChange={setKind} ariaLabel={`${titleCase(label)} type`} options={kindOptions} />
               </div>
+              {type === "program" ? <div className="form-field"><label htmlFor="create-program-skill">SKILL LEVEL</label><SelectControl id="create-program-skill" value={skill} onChange={setSkill} ariaLabel="Program skill level" options={[{ value: "all", label: "All skill levels" }, { value: "beginner", label: "Beginner" }, { value: "intermediate", label: "Intermediate" }, { value: "advanced", label: "Advanced" }]} /></div> : null}
             </div>
           )}
 
@@ -207,13 +226,14 @@ function GenericCreateDialog({ type, venue, userId, onClose, onCreated }: Create
               <div className="activity-number-grid">
                 <div className="form-field">
                   <label htmlFor="create-capacity">CAPACITY</label>
-                  <input id="create-capacity" type="number" inputMode="numeric" min="1" max="500" value={capacity} onChange={(event) => setCapacity(event.target.value)} required />
+                  <input id="create-capacity" type="number" inputMode="numeric" min="1" max={type === "program" ? 200 : 500} value={capacity} onChange={(event) => setCapacity(event.target.value)} required />
                 </div>
                 <div className="form-field">
                   <label htmlFor="create-price">PRICE · PHP</label>
                   <input id="create-price" type="number" inputMode="decimal" min="0" step="1" value={price} onChange={(event) => setPrice(event.target.value)} required />
                 </div>
               </div>
+              {type === "program" ? <><div className="form-field"><label htmlFor="create-program-duration">DURATION · HOURS</label><input id="create-program-duration" type="number" min="0.25" max="24" step="0.25" value={duration} onChange={(event) => setDuration(event.target.value)} required /></div><div className="form-field"><label htmlFor="create-program-description">DESCRIPTION · OPTIONAL</label><textarea id="create-program-description" rows={3} value={description} onChange={(event) => setDescription(event.target.value)} placeholder="What players will learn and what to bring." /></div></> : null}
             </div>
           )}
 
@@ -222,8 +242,8 @@ function GenericCreateDialog({ type, venue, userId, onClose, onCreated }: Create
               {step === 1 ? "Cancel" : <><ArrowLeft size={15} />Back</>}
             </button>
             {step < stepCount
-              ? <button className="button button-accent" type="button" onClick={goNext} disabled={!venue}>Continue<ArrowRight size={16} /></button>
-              : <button className="button button-accent" type="submit" disabled={busy || !venue || !divisionsValid}>{busy ? "Publishing…" : `Publish ${label}`}<Check size={16} /></button>
+              ? <button key="continue" className="button button-accent" type="button" onClick={(event) => { event.preventDefault(); goNext(); }} disabled={!venue}>Continue<ArrowRight size={16} /></button>
+              : <button key="publish" className="button button-accent" type="submit" disabled={busy || !venue || !divisionsValid}>{busy ? "Publishing…" : `Publish ${label}`}<Check size={16} /></button>
             }
           </div>
         </form>

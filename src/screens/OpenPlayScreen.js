@@ -11,7 +11,6 @@ import {
   StyleSheet,
   Text,
   TextInput,
-  useWindowDimensions,
   View,
 } from 'react-native';
 import Ionicons from '@expo/vector-icons/Ionicons';
@@ -27,6 +26,7 @@ import BlinkingDot from '../components/BlinkingDot';
 import { publishOpenPlayAnnouncement } from '../services/realtimeOperations';
 import ConnectionStatus from '../components/ConnectionStatus';
 import ScrollView from '../components/FocusResetScrollView';
+import useResponsiveWidth from '../hooks/useResponsiveWidth';
 import { createMobileStyleSheet } from '../utils/mobileStyles';
 import { SKILL_CATEGORIES, skillCategory, skillRangeLabel } from '../utils/skillCategories';
 
@@ -648,7 +648,7 @@ function Queue({ session, now, onDone, onPriority }) {
 }
 
 function Dashboard({ session, now, onCourt, onPlayerDone, onPlayerPriority, onAddPlayer, onAnnouncement, onTV, onEndSession, endingSession }) {
-  const { width } = useWindowDimensions();
+  const width = useResponsiveWidth();
   const [density, setDensity] = useState('comfortable');
   const activeCount = session.courts.filter((court) => court.match).length;
   const nextCourt = session.courts.find((court) => !court.match) || session.courts[0];

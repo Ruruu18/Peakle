@@ -14,7 +14,7 @@ export const supabase = isSupabaseConfigured
         autoRefreshToken: true,
         persistSession: true,
         detectSessionInUrl: false,
-        lock: processLock,
+        ...(Platform.OS === 'web' ? { flowType: 'pkce' } : { lock: processLock }),
       },
     })
   : null;

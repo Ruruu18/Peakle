@@ -16,7 +16,7 @@ export function OverviewSection({ data, venue, navigate, onCreate }: { data: Org
   const pending = activeRegistrations.filter((player) => player.registration_status === "requested").length;
   return <>
     <div className="metric-grid">
-      <Metric icon={Users} value={String(checkedIn)} label="PLAYERS CHECKED IN" trend={`${pending} pending`} />
+      <Metric icon={Users} value={String(checkedIn)} label="PLAYERS CHECKED IN" trend={`${pending} pending`} highlight />
       <Metric icon={Activity} value={`${activeCourts}/${Math.max(data.liveCourts.length, venue?.courts.length || 0)}`} label="COURTS IN PLAY" trend={activeCourts > 0 ? "Live" : undefined} />
       <Metric icon={CalendarDays} value={String(data.sessions.filter((session) => session.status === "active" && !session.live_started_at).length)} label="UPCOMING SESSIONS" trend="Ready when you are" />
       <Metric icon={CircleDollarSign} value={money(data.analytics?.grossRevenue)} label="30-DAY REVENUE" trend={`${data.analytics?.courtUtilization || 0}% util.`} />

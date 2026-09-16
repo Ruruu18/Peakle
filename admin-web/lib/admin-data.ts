@@ -157,6 +157,7 @@ export async function fetchUsers(search = ""): Promise<AdminUser[]> {
     ban_reason: (row.ban_reason as string | null) ?? null,
     membership_tier: (row.membership_tier as string | null) ?? null,
     avatar_url: (row.avatar_url as string | null) ?? null,
+    trial_ends_at: (row.trial_ends_at as string | null) ?? null,
   }));
 }
 
@@ -178,6 +179,7 @@ export async function fetchUserDetail(userId: string): Promise<AdminUser> {
     ban_reason: (row.ban_reason as string | null) ?? null,
     membership_tier: (row.membership_tier as string | null) ?? null,
     avatar_url: (row.avatar_url as string | null) ?? null,
+    trial_ends_at: (row.trial_ends_at as string | null) ?? null,
   };
 }
 

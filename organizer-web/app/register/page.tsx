@@ -1,9 +1,10 @@
 import type { Metadata } from "next";
 import RegisterScreen from "@/components/register-screen";
+import { organizerRegisterDescription, organizerRegisterTitle } from "@/lib/launch-offer";
 
 export const metadata: Metadata = {
-  title: "Create organizer account",
-  description: "Create a Peakle account for organizer tools on web and mobile.",
+  title: organizerRegisterTitle,
+  description: organizerRegisterDescription,
 };
 
 export default function RegisterPage() {

@@ -14,6 +14,46 @@ function venueFrom(row) {
   } : null;
 }
 
+function mapCompetitionActivity(competition) {
+  return {
+    id: `competition:${competition.id}`,
+    sourceId: competition.id,
+    type: 'competition',
+    typeLabel: competition.kind || 'Competition',
+    title: competition.name,
+    venue: venueFrom(competition),
+    startsAt: `${competition.starts_on}T00:00:00+08:00`,
+    endsAt: competition.ends_on ? `${competition.ends_on}T23:59:59+08:00` : null,
+    feeAmount: null,
+    capacity: competition.capacity,
+    registeredCount: null,
+    availability: competition.status === 'active' ? 'LIVE' : 'REGISTER',
+    status: competition.status,
+    description: competition.rules,
+  };
+}
+
+function mapProgramActivity(program) {
+  return {
+    id: `program:${program.id}`,
+    sourceId: program.id,
+    type: 'program',
+    typeLabel: program.kind === 'coaching' ? 'Coaching' : program.kind === 'clinic' ? 'Clinic' : program.kind === 'camp' ? 'Camp' : 'Program',
+    title: program.name,
+    venue: venueFrom(program),
+    startsAt: program.starts_at,
+    endsAt: program.ends_at,
+    feeAmount: Number(program.price || 0),
+    capacity: program.capacity,
+    registeredCount: null,
+    availability: 'OPEN',
+    status: program.registration_status,
+    description: program.description,
+    skillDivision: program.skill_division,
+    registration: program.program_registrations?.[0] || null,
+  };
+}
+
 export async function listDiscoverablePlayerActivities() {
   if (DEMO_MODE) return DEMO_ACTIVITIES;
   const client = requireSupabase();
@@ -57,43 +97,21 @@ export async function listDiscoverablePlayerActivities() {
   }));
   const publicCompetitions = (competitions.data || [])
     .filter((competition) => competition.venues?.verification_status === 'verified' && competition.venues?.active)
-    .map((competition) => ({
-      id: `competition:${competition.id}`,
-      sourceId: competition.id,
-      type: 'competition',
-      typeLabel: competition.kind || 'Competition',
-      title: competition.name,
-      venue: venueFrom(competition),
-      startsAt: `${competition.starts_on}T00:00:00+08:00`,
-      endsAt: competition.ends_on ? `${competition.ends_on}T23:59:59+08:00` : null,
-      feeAmount: null,
-      capacity: competition.capacity,
-      registeredCount: null,
-      availability: competition.status === 'active' ? 'LIVE' : 'REGISTER',
-      status: competition.status,
-      description: competition.rules,
-    }));
+    .map(mapCompetitionActivity);
   const publicPrograms = (programs.data || [])
     .filter((program) => program.venues?.verification_status === 'verified' && program.venues?.active)
-    .map((program) => ({
-      id: `program:${program.id}`,
-      sourceId: program.id,
-      type: 'program',
-      typeLabel: program.kind === 'coaching' ? 'Coaching' : program.kind === 'clinic' ? 'Clinic' : program.kind === 'camp' ? 'Camp' : 'Program',
-      title: program.name,
-      venue: venueFrom(program),
-      startsAt: program.starts_at,
-      endsAt: program.ends_at,
-      feeAmount: Number(program.price || 0),
-      capacity: program.capacity,
-      registeredCount: null,
-      availability: 'OPEN',
-      status: program.registration_status,
-      description: program.description,
-      skillDivision: program.skill_division,
-      registration: program.program_registrations?.[0] || null,
-    }));
+    .map(mapProgramActivity);
 
   return [...openPlay, ...publicCompetitions, ...publicPrograms]
     .sort((a, b) => new Date(a.startsAt) - new Date(b.startsAt));
+}
+
+export async function getPlayerActivity(type, id) {
+  if (!id || !['competition', 'program'].includes(type)) return null;
+  const table = type === 'competition' ? 'competitions' : 'venue_programs';
+  const { data, error } = await requireSupabase().from(table)
+    .select(type === 'competition' ? '*,venues(id,name,area,latitude,longitude)' : '*,venues(id,name,area,latitude,longitude),program_registrations(user_id,status)')
+    .eq('id', id).maybeSingle();
+  if (error) throw error;
+  return data ? (type === 'competition' ? mapCompetitionActivity(data) : mapProgramActivity(data)) : null;
 }

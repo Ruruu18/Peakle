@@ -35,5 +35,6 @@ export const organizerPageCopy: Record<PortalSection, { eyebrow: string; title: 
   earnings: { eyebrow: "PAYOUTS", title: "Earnings", detail: "Your balance, payout history, and withdrawal requests." },
   staff: { eyebrow: "VENUE OPERATIONS", title: "Staff access", detail: "Give every teammate exactly the access their role requires." },
   support: { eyebrow: "ACCOUNT", title: "Support", detail: "Chat with Peakle support — AI-answered instantly, with a teammate a message away." },
-  settings: { eyebrow: "ACCOUNT", title: "Organizer settings", detail: "Your shared Peakle identity, plan, preferences, and security." },
+  notifications: { eyebrow: "INBOX", title: "Notifications", detail: "Booking activity, court alerts, and account updates for your organizer account." },
+  settings: { eyebrow: "ACCOUNT", title: "Organizer settings", detail: "Manage your profile, preferences, notifications, and security." },
 };

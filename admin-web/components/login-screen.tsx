@@ -8,7 +8,7 @@ import { useAuth, useTheme } from "./providers";
 import { getSupabase } from "@/lib/supabase";
 
 export default function LoginScreen() {
-  const { configured, issue, signIn } = useAuth();
+  const { configured, issue, signIn, signInWithGoogle } = useAuth();
   const { mode, toggle } = useTheme();
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
@@ -35,6 +35,16 @@ export default function LoginScreen() {
     } catch (error) {
       toast.error(error instanceof Error ? error.message : "Sign in could not be completed.");
     } finally {
+      setBusy(false);
+    }
+  };
+
+  const google = async () => {
+    setBusy(true);
+    try {
+      await signInWithGoogle();
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Google sign in could not be started.");
       setBusy(false);
     }
   };
@@ -137,6 +147,11 @@ export default function LoginScreen() {
               <ArrowRight size={17} />
             </button>
           </form>
+
+          <div className="or"><span />OR<span /></div>
+          <button className="button button-ghost google-button" disabled={busy || !configured} type="button" onClick={google}>
+            <Image src="/google.svg" alt="" width={18} height={18} className="google-icon" /> Continue with Google
+          </button>
 
           <div className="login-trust">
             <ShieldCheck size={14} /> Access is gated by verified platform admin status.

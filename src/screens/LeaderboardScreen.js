@@ -6,7 +6,6 @@ import {
   RefreshControl,
   StyleSheet,
   Text,
-  useWindowDimensions,
   View,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
@@ -14,6 +13,7 @@ import { StatusBar } from 'expo-status-bar';
 import Ionicons from '@expo/vector-icons/Ionicons';
 import ScrollView from '../components/FocusResetScrollView';
 import ProfilePhoto from '../components/ProfilePhoto';
+import useResponsiveWidth from '../hooks/useResponsiveWidth';
 import { useTheme } from '../context/ThemeContext';
 import { loadLeaderboard } from '../services/leaderboard';
 
@@ -196,7 +196,7 @@ function EmptyState({ format, palette }) {
 export default function LeaderboardScreen({ navigation, route }) {
   const { isDark } = useTheme();
   const palette = isDark ? DARK : LIGHT;
-  const { width } = useWindowDimensions();
+  const width = useResponsiveWidth();
   const wide = width >= 760;
   const defaultFormat = route?.params?.defaultFormat === 'singles' ? 'singles' : 'doubles';
   const [scope, setScope] = useState('local');

@@ -20,6 +20,7 @@ const ICONS_BY_KIND = {
   direct_message_accepted: 'chatbubbles-outline',
   follow_request: 'person-add-outline',
   follow_accepted: 'people-outline',
+  community_announcement: 'megaphone-outline',
 };
 
 export function presentNotification(notice) {

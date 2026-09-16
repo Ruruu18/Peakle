@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import type { LucideIcon } from "lucide-react";
-import { Bell, Camera, ExternalLink, Laptop, LogOut, Moon, Settings as SettingsIcon, ShieldCheck, Sun, Trash2, UserCheck } from "lucide-react";
+import { Bell, Camera, ExternalLink, Laptop, LogOut, Moon, RotateCcw, Settings as SettingsIcon, ShieldCheck, Sun, Trash2, UserCheck } from "lucide-react";
 import { useEffect, useState } from "react";
 import { toast } from "sonner";
 import { useAuth, useTheme } from "@/components/providers";
@@ -29,7 +29,7 @@ const NAV_ITEMS: { key: SettingsTab; label: string; icon: LucideIcon; href: stri
 
 const PANEL_COPY: Record<SettingsTab, { eyebrow: string; title: string; detail: string }> = {
   overview: { eyebrow: "PREFERENCES", title: "Account and workspace", detail: "A quick summary of your identity, appearance, and account tools." },
-  profile: { eyebrow: "PROFILE", title: "Shared Peakle identity", detail: "Changes here are synchronized with your player profile." },
+  profile: { eyebrow: "PROFILE", title: "Your profile", detail: "Used across the organizer workspace and Peakle player app." },
   notifications: { eyebrow: "NOTIFICATIONS", title: "Organizer alerts", detail: "Choose which updates should reach your Peakle account." },
   security: { eyebrow: "SECURITY", title: "Account security", detail: "Review the identity and session currently used by this organizer workspace." },
   "player-app": { eyebrow: "MOBILE APP", title: "Player mobile app", detail: "Continue in the player experience using the same Peakle account." },
@@ -51,14 +51,6 @@ export function SettingsSection({ data, subview, refresh }: { data: OrganizerDat
             <h2>{data.profile.name}</h2>
             <p>{data.profile.email || "No email available"}</p>
           </div>
-        </div>
-        <div className="settings-profile-meta">
-          <span>HOME AREA</span>
-          <strong>{data.profile.location || "Not set"}</strong>
-        </div>
-        <div className="plan-badge">
-          <strong>{data.isAdmin ? "Platform Admin" : data.venues.length ? `Venue ${titleCase(data.venues[0].role)}` : "No venue access"}</strong>
-          <small>{data.venues.length ? `${data.venues.length} venue${data.venues.length === 1 ? "" : "s"} managed` : "Add a venue to get started"}</small>
         </div>
         <nav className="settings-nav-list" aria-label="Settings sections">
           {NAV_ITEMS.map((item) => (
@@ -94,7 +86,7 @@ function OverviewSettings({ mode, toggle }: { mode: "light" | "dark"; toggle: ()
   return (
     <div className="settings-quick-list">
       <SettingRow icon={mode === "dark" ? Moon : Sun} title="Appearance" detail={`${titleCase(mode)} mode is active on this browser`} action="Toggle" onAction={toggle} />
-      <SettingRow icon={UserCheck} title="Shared Peakle identity" detail="Update the name, photo, and home area used across Peakle" action="Edit" href="/settings/profile" />
+      <SettingRow icon={UserCheck} title="Your profile" detail="Update the name, photo, and home area used across Peakle" action="Edit" href="/settings/profile" />
       <SettingRow icon={Bell} title="Organizer alerts" detail="Choose the venue and account updates you receive" action="Manage" href="/settings/notifications" />
       <SettingRow icon={ShieldCheck} title="Account security" detail="Password, sessions, and sign-in method" action="Review" href="/settings/security" />
       <SettingRow icon={ExternalLink} title="Player mobile app" detail="Return to the Peakle player experience" action="Open" href="/settings/player-app" />
@@ -210,6 +202,7 @@ function ProfileSettings({ data, refresh }: { data: OrganizerData; refresh: () =
   const submit = async (event: React.FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     const displayName = name.trim();
+    const homeArea = location.trim();
     if (displayName.length < 2) {
       toast.error("Display name must contain at least two characters.");
       return;
@@ -217,10 +210,12 @@ function ProfileSettings({ data, refresh }: { data: OrganizerData; refresh: () =
     setBusy(true);
     try {
       const nextAvatar = photo ? await uploadProfilePhoto(data.profile.id, photo) : removePhoto ? null : data.profile.avatar;
-      const { error } = await requireSupabase().from("profiles").update({ display_name: displayName, home_area: location.trim() || null, avatar_url: nextAvatar }).eq("id", data.profile.id);
+      const { error } = await requireSupabase().from("profiles").update({ display_name: displayName, home_area: homeArea || null, avatar_url: nextAvatar }).eq("id", data.profile.id);
       if (error) throw error;
       if ((photo || removePhoto) && data.profile.avatar && data.profile.avatar !== nextAvatar) void deleteProfilePhoto(data.profile.avatar).catch(() => undefined);
       await refresh();
+      setName(displayName);
+      setLocation(homeArea);
       setPhoto(null);
       setPreview(null);
       setRemovePhoto(false);
@@ -233,26 +228,49 @@ function ProfileSettings({ data, refresh }: { data: OrganizerData; refresh: () =
   };
 
   const shownPhoto = removePhoto ? null : preview || data.profile.avatar;
+  const normalizedName = name.trim();
+  const normalizedLocation = location.trim();
+  const dirty = normalizedName !== data.profile.name.trim()
+    || normalizedLocation !== (data.profile.location || "").trim()
+    || photo !== null
+    || removePhoto;
+  const invalidName = normalizedName.length > 0 && normalizedName.length < 2;
+  const reset = () => {
+    setName(data.profile.name);
+    setLocation(data.profile.location || "");
+    setPhoto(null);
+    setPreview(null);
+    setRemovePhoto(false);
+  };
+
   return (
-    <form className="management-form settings-form" onSubmit={submit}>
+    <form className="management-form settings-form profile-editor" onSubmit={submit}>
       <div className="profile-photo-field">
         <ProfileAvatar name={name} photo={shownPhoto} />
         <div>
           <label className="mini-button inline-action" htmlFor="profile-photo"><Camera size={14} />{shownPhoto ? "Change photo" : "Add photo"}</label>
           <input className="file-input" id="profile-photo" type="file" accept="image/jpeg,image/png,image/webp" onChange={(event) => { const file = event.target.files?.[0] || null; try { if (file) validateProfilePhoto(file); setPhoto(file); setPreview(file ? URL.createObjectURL(file) : null); setRemovePhoto(false); } catch (reason) { event.currentTarget.value = ""; toast.error(reason instanceof Error ? reason.message : "Invalid profile photo."); } }} />
-          {shownPhoto ? <button className="mini-button profile-photo-remove" type="button" onClick={() => { setPhoto(null); setPreview(null); setRemovePhoto(true); }}><Trash2 size={14} />Remove</button> : null}
-          <small>JPG, PNG, or WebP · up to 2 MB</small>
+          {shownPhoto ? <button className="mini-button profile-photo-remove" type="button" onClick={() => { setPhoto(null); setPreview(null); setRemovePhoto(true); }}><Trash2 size={14} />Remove photo</button> : null}
+          <small className={`profile-photo-note ${removePhoto ? "pending" : ""}`}>
+            {removePhoto ? "Photo will be removed when you save." : "JPG, PNG, or WebP · up to 2 MB"}
+          </small>
         </div>
       </div>
       <div className="form-field">
         <label htmlFor="profile-name">DISPLAY NAME</label>
-        <input id="profile-name" name="name" value={name} onChange={(event) => setName(event.target.value)} required minLength={2} autoComplete="name" />
+        <input id="profile-name" name="name" value={name} onChange={(event) => setName(event.target.value)} required minLength={2} autoComplete="name" aria-describedby="profile-name-help" aria-invalid={invalidName} />
+        <small className="field-help" id="profile-name-help">Shown to players, staff, and other Peakle members.</small>
       </div>
       <div className="form-field">
         <label htmlFor="profile-location">HOME AREA</label>
-        <input id="profile-location" name="location" value={location} onChange={(event) => setLocation(event.target.value)} placeholder="e.g. Makati City" />
+        <input id="profile-location" name="location" value={location} onChange={(event) => setLocation(event.target.value)} placeholder="e.g. Makati City" aria-describedby="profile-location-help" />
+        <small className="field-help" id="profile-location-help">Your city or usual playing area—not your venue address.</small>
       </div>
-      <button className="button button-accent" type="submit" disabled={busy || name.trim().length < 2}>{busy ? "Saving…" : "Save profile"}</button>
+      <div className="settings-form-actions">
+        <button className="button button-accent" type="submit" disabled={busy || normalizedName.length < 2 || !dirty}>{busy ? "Saving…" : dirty ? "Save changes" : "Saved"}</button>
+        {dirty ? <button className="button button-ghost" type="button" onClick={reset} disabled={busy}><RotateCcw size={15} /> Reset</button> : null}
+        <span className={`settings-form-status ${dirty ? "dirty" : ""}`} aria-live="polite">{dirty ? "Unsaved changes" : "All changes saved"}</span>
+      </div>
     </form>
   );
 }

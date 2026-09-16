@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { ActivityIndicator, Pressable, StyleSheet, Text, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { StatusBar } from 'expo-status-bar';
@@ -7,6 +7,7 @@ import ScrollView from '../components/FocusResetScrollView';
 import { distanceInKm, formatDistance, useUserLocation } from '../context/LocationContext';
 import { useTheme } from '../context/ThemeContext';
 import { joinProgram } from '../services/pickleball';
+import { getPlayerActivity } from '../services/playerActivities';
 
 const LIGHT = { ink: '#0E2321', paper: '#F3F5EF', surface: '#FFFFFF', optic: '#D6E94A', teal: '#1C6B66', brick: '#B6472E', ink70: '#3C4A45', ink40: '#7C8983', line: '#DDE3DA' };
 const DARK = { ...LIGHT, ink: '#F3F5EF', paper: '#0E2321', surface: '#17302D', ink70: '#C1CECA', ink40: '#8FA39C', line: '#304743' };
@@ -19,10 +20,29 @@ export default function PlayerActivityDetailsScreen({ navigation, route }) {
   const { isDark } = useTheme();
   const { userLocation } = useUserLocation();
   const colors = isDark ? DARK : LIGHT;
-  const [activity, setActivity] = useState(route?.params?.activity || null);
+  const [activity, setActivity] = useState(typeof route?.params?.activity === 'object' ? route.params.activity : null);
+  const [loading, setLoading] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   const returnTo = route?.params?.returnTo || 'Activities';
+
+  useEffect(() => {
+    if (typeof route?.params?.activity === 'object') {
+      setActivity(route.params.activity);
+      return;
+    }
+    let active = true;
+    setActivity(null);
+    setLoading(true);
+    setError('');
+    getPlayerActivity(route?.params?.activityType, route?.params?.activityId)
+      .then((next) => { if (active) setActivity(next); })
+      .catch((failure) => { if (active) setError(failure.message); })
+      .finally(() => { if (active) setLoading(false); });
+    return () => { active = false; };
+  }, [route?.params?.activity, route?.params?.activityType, route?.params?.activityId]);
+
+  if (loading) return <SafeAreaView style={[styles.safe, { backgroundColor: colors.paper, justifyContent: 'center' }]}><ActivityIndicator accessibilityLabel="Loading activity" color={colors.teal} /></SafeAreaView>;
 
   if (!activity) {
     return <SafeAreaView style={[styles.safe, { backgroundColor: colors.paper }]}><Pressable accessibilityRole="button" accessibilityLabel="Back" onPress={() => navigation.navigate(returnTo)} style={[styles.fallbackBack, { backgroundColor: colors.surface }]}><Icon name="arrow-back" color={colors.ink} /></Pressable><View style={styles.missing}><Text style={[styles.missingTitle, { color: colors.ink }]}>Activity unavailable</Text><Text style={[styles.missingMeta, { color: colors.ink40 }]}>Return and choose the activity again.</Text></View></SafeAreaView>;

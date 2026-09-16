@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useState } from 'react';
-import { Pressable, Text, View } from 'react-native';
+import { Platform, Pressable, Text, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { StatusBar } from 'expo-status-bar';
 import PlayerOpenPlayScreen from './PlayerOpenPlayScreen';
@@ -10,8 +10,8 @@ import PeakleLoadingOverlay from '../components/PeakleLoadingOverlay';
 export default function PlayerOpenPlayRouteScreen({ navigation, route }) {
   const { isDark } = useTheme();
   const returnTo = route?.params?.returnTo || 'Home';
-  const direct = Boolean(route?.params?.direct);
   const sessionId = route?.params?.sessionId || null;
+  const direct = Boolean(route?.params?.direct || (Platform.OS === 'web' && sessionId));
   const [session, setSession] = useState(null);
   const [loading, setLoading] = useState(direct);
   const [error, setError] = useState('');
@@ -50,6 +50,7 @@ export default function PlayerOpenPlayRouteScreen({ navigation, route }) {
         navigationToken={direct ? null : route?.params?.token || null}
         onBack={leave}
         onDetailBack={direct ? leave : null}
+        onOpenChat={(session) => navigation.navigate('CommunityChat', { eventKind: 'open_play', eventId: session.id, title: session.name, ownerTab: 'Home' })}
       /> : null}
       <PeakleLoadingOverlay visible={direct && loading} status="OPENING ACTIVITY DETAILS" />
     </SafeAreaView>

@@ -1,9 +1,8 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { Animated, Easing, StyleSheet, Text, View } from 'react-native';
-import { DarkTheme, DefaultTheme, NavigationContainer, useNavigationContainerRef } from '@react-navigation/native';
+import { Animated, Easing, Platform, StyleSheet, Text, View } from 'react-native';
+import { DarkTheme, DefaultTheme, NavigationContainer, getPathFromState, useNavigationContainerRef } from '@react-navigation/native';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 import * as SplashScreen from 'expo-splash-screen';
-import * as Notifications from 'expo-notifications';
 import AppNavigator from './src/navigation/AppNavigator';
 import { LocationProvider } from './src/context/LocationContext';
 import { AuthProvider, useAuth } from './src/context/AuthContext';
@@ -17,14 +16,30 @@ import SupportBubble from './src/components/SupportBubble';
 import ErrorBoundary from './src/components/ErrorBoundary';
 import DemoAutopilot from './src/components/DemoAutopilot';
 import { DEMO_MODE } from './src/config/demoMode';
+import { webNavigationState } from './src/lib/webNavigation';
 
+const Notifications = Platform.OS === 'web' ? null : require('expo-notifications');
 const colors = { ink: '#0E2321', optic: '#D6E94A', surface: '#FFFFFF' };
 const BALL_IMAGE = require('./public/images/ball_green.png');
-const MINIMUM_LAUNCH_MS = 2500;
-SplashScreen.setOptions({ duration: 180, fade: true });
+const MINIMUM_LAUNCH_MS = Platform.OS === 'web' ? 150 : 2500;
+if (Platform.OS !== 'web') SplashScreen.setOptions({ duration: 180, fade: true });
 const linking = {
   prefixes: ['peakle://'],
-  config: { screens: { Book: 'booking/:paymentBookingId/payment-result', Play: 'open-play/:openPlayCode', Inbox: 'messages', DirectChat: 'messages/:conversationId' } },
+  ...(Platform.OS === 'web' ? { getPathFromState: (state, options) => getPathFromState(webNavigationState(state), options) } : {}),
+  config: { screens: {
+    ...(Platform.OS === 'web' ? {
+      Home: '', Team: 'teams', Profile: 'profile', Pickleball: 'compete',
+      Activities: 'activities', ActivityDetails: 'activities/:activityType/:activityId',
+      OpenPlayActivity: 'sessions/:sessionId?', Privacy: 'privacy', LegalDocument: 'legal/:documentKey',
+      AccountDeletion: 'account-deletion', PaymentHistory: 'payment-history',
+      HelpSupport: 'help', SupportChat: 'support', Inbox: 'chats', CommunityChat: 'chats/:eventKind/:eventId', PublicProfile: 'players/:userId',
+      Connections: 'connections', Leaderboard: 'leaderboard',
+      CompetitionDivision: 'competitions/:competitionId/divisions/:divisionId',
+      Book: { path: 'explore', alias: ['booking/:paymentBookingId/payment-result'] },
+      Play: { path: 'play', alias: ['open-play/:openPlayCode'] },
+    } : { Book: 'booking/:paymentBookingId/payment-result', Play: 'open-play/:openPlayCode' }),
+    ...(Platform.OS !== 'web' ? { Inbox: 'messages', DirectChat: 'messages/:conversationId' } : {}),
+  } },
 };
 
 function LaunchScreen({ edition = 'player', fromEdition = null, overlay = false, status = 'GETTING THE COURT READY' }) {
@@ -37,10 +52,10 @@ function LaunchScreen({ edition = 'player', fromEdition = null, overlay = false,
   useEffect(() => {
     const animation = Animated.loop(
       Animated.sequence([
-        Animated.timing(bounce, { toValue: 1, duration: 420, easing: Easing.out(Easing.cubic), useNativeDriver: true }),
-        Animated.timing(bounce, { toValue: 0, duration: 310, easing: Easing.in(Easing.quad), useNativeDriver: true }),
-        Animated.timing(bounce, { toValue: 0.32, duration: 170, easing: Easing.out(Easing.quad), useNativeDriver: true }),
-        Animated.timing(bounce, { toValue: 0, duration: 140, easing: Easing.in(Easing.quad), useNativeDriver: true }),
+        Animated.timing(bounce, { toValue: 1, duration: 420, easing: Easing.out(Easing.cubic), useNativeDriver: Platform.OS !== 'web' }),
+        Animated.timing(bounce, { toValue: 0, duration: 310, easing: Easing.in(Easing.quad), useNativeDriver: Platform.OS !== 'web' }),
+        Animated.timing(bounce, { toValue: 0.32, duration: 170, easing: Easing.out(Easing.quad), useNativeDriver: Platform.OS !== 'web' }),
+        Animated.timing(bounce, { toValue: 0, duration: 140, easing: Easing.in(Easing.quad), useNativeDriver: Platform.OS !== 'web' }),
         Animated.delay(100),
       ]),
     );
@@ -55,14 +70,14 @@ function LaunchScreen({ edition = 'player', fromEdition = null, overlay = false,
         toValue: 1,
         duration: 140,
         easing: Easing.out(Easing.cubic),
-        useNativeDriver: true,
+        useNativeDriver: Platform.OS !== 'web',
       }),
       Animated.delay(500),
       Animated.timing(screenOpacity, {
         toValue: 0,
         duration: 180,
         easing: Easing.in(Easing.cubic),
-        useNativeDriver: true,
+        useNativeDriver: Platform.OS !== 'web',
       }),
     ]);
     overlayAnimation.start();
@@ -75,7 +90,7 @@ function LaunchScreen({ edition = 'player', fromEdition = null, overlay = false,
         toValue: 1,
         duration: 420,
         easing: Easing.inOut(Easing.cubic),
-        useNativeDriver: true,
+        useNativeDriver: Platform.OS !== 'web',
       }),
       Animated.sequence([
         Animated.delay(70),
@@ -83,7 +98,7 @@ function LaunchScreen({ edition = 'player', fromEdition = null, overlay = false,
           toValue: 1,
           duration: 360,
           easing: Easing.out(Easing.cubic),
-          useNativeDriver: true,
+          useNativeDriver: Platform.OS !== 'web',
         }),
       ]),
     ]);
@@ -172,7 +187,7 @@ function Root() {
   };
 
   useEffect(() => {
-    if (!user?.id) return undefined;
+    if (!user?.id || Platform.OS === 'web') return undefined;
     const timers = new Set();
     const openResponse = (response) => {
       if (response?.actionIdentifier !== Notifications.DEFAULT_ACTION_IDENTIFIER) return;
@@ -221,7 +236,7 @@ function Root() {
   if (passwordRecovery) return <AuthFlowScreen key="password-recovery" initialScreen="reset-password" />;
   if (!user) return <AuthFlowScreen key="login" initialScreen="login" />;
   if (!user.onboardingCompleted) return <AuthFlowScreen key={`new-user-setup-${user.id}`} initialScreen="new-user-overview" />;
-  return <View key={`player-session-${user.id}`} style={[styles.appShell, { backgroundColor: appBackground }]}><NavigationContainer ref={navigationRef} theme={navigationTheme} linking={linking}><AppNavigator /></NavigationContainer><MatchInviteOverlay onAccepted={openAcceptedMatch} /><SupportBubble navigationRef={navigationRef} />{DEMO_MODE ? <DemoAutopilot navigationRef={navigationRef} /> : null}</View>;
+  return <View key={`player-session-${user.id}`} style={[styles.appShell, { backgroundColor: appBackground }]}><NavigationContainer ref={navigationRef} theme={navigationTheme} linking={linking}><AppNavigator /></NavigationContainer><MatchInviteOverlay onAccepted={openAcceptedMatch} />{Platform.OS !== 'web' ? <SupportBubble navigationRef={navigationRef} /> : null}{DEMO_MODE && Platform.OS !== 'web' ? <DemoAutopilot navigationRef={navigationRef} /> : null}</View>;
 }
 
 export default function App() {

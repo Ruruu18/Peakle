@@ -2,6 +2,14 @@
 
 React Native implementation of Peakle, backed by Supabase for authentication and persistent app data.
 
+## Player web beta
+
+Run `npm run web` for browser development, or `npm run build:web` followed by
+`npm run preview:web` for the static beta. It shares the native app's accounts
+and saved records, with group chat and player tournament flows. See
+[`PLAYER_WEB_BETA.md`](./PLAYER_WEB_BETA.md) for deployment, verification, and
+the transition to Android/iOS.
+
 ## Organizer web portal
 
 The responsive Next.js organizer workspace now lives in [`organizer-web`](./organizer-web). It shares Peakle authentication and backend permissions while providing desktop, tablet, and mobile-web layouts for venue operations, open play, players, competitions, memberships, analytics, and staff access.

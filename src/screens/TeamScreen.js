@@ -28,11 +28,13 @@ import * as ImagePicker from 'expo-image-picker';
 import { VideoView, useVideoPlayer } from 'expo-video';
 import { useFocusEffect } from '@react-navigation/native';
 import { DEMO_MODE } from '../config/demoMode';
+import { PRIVATE_MESSAGES_ENABLED } from '../config/features';
 import { DEMO_TEAM_ID, DEMO_TEAM_MESSAGE_DRIP } from '../config/demoData';
 import ProfilePhoto from '../components/ProfilePhoto';
 import ResilientImage from '../components/ResilientImage';
 import LocationPicker from '../components/LocationPicker';
 import ScrollView from '../components/FocusResetScrollView';
+import useResponsiveWidth from '../hooks/useResponsiveWidth';
 import { PH_LOCATIONS, formatLocation, locationMatchesSearch, parseLocation } from '../data/phLocations';
 import { useAuth } from '../context/AuthContext';
 import { distanceInKm, formatDistance, geocodeArea, useUserLocation } from '../context/LocationContext';
@@ -243,7 +245,7 @@ function TeamCard({ team, joined, requested, requesting, cancelling, summary, on
 
 function TeamDetail({ team, joined, requested, requesting, cancelling, onBack, onJoin, onCancel, onViewHub, onChat, onUpdateImage, onShare }) {
   const editable = canEditTeam(team);
-  const { width } = useWindowDimensions();
+  const width = useResponsiveWidth();
   const compactPhone = width <= 440;
   return (
     <ScrollView contentContainerStyle={[styles.content, compactPhone && styles.contentCompact]} showsVerticalScrollIndicator={false}>
@@ -289,8 +291,8 @@ function TypingBubble({ people = [] }) {
   const dotAnimations = useRef([0, 1, 2].map(() => new Animated.Value(0.35))).current;
   useEffect(() => {
     const animation = Animated.loop(Animated.stagger(130, dotAnimations.map((dot) => Animated.sequence([
-      Animated.timing(dot, { toValue: 1, duration: 220, easing: Easing.out(Easing.quad), useNativeDriver: true }),
-      Animated.timing(dot, { toValue: 0.35, duration: 220, easing: Easing.in(Easing.quad), useNativeDriver: true }),
+      Animated.timing(dot, { toValue: 1, duration: 220, easing: Easing.out(Easing.quad), useNativeDriver: Platform.OS !== 'web' }),
+      Animated.timing(dot, { toValue: 0.35, duration: 220, easing: Easing.in(Easing.quad), useNativeDriver: Platform.OS !== 'web' }),
     ]))));
     animation.start();
     return () => animation.stop();
@@ -341,7 +343,7 @@ function PopImage({ uri, sticker = false, style, onPress, onLongPress }) {
   const reveal = useRef(new Animated.Value(0)).current;
   const [failed, setFailed] = useState(false);
   const show = () => Animated.spring(reveal, {
-    toValue: 1, damping: 16, stiffness: 190, mass: .7, useNativeDriver: true,
+    toValue: 1, damping: 16, stiffness: 190, mass: .7, useNativeDriver: Platform.OS !== 'web',
   }).start();
   const image = (
     <Animated.View style={[style, {
@@ -495,7 +497,7 @@ function MessageInteractionModal({ message, visible, mode, canModerate, onModeCh
       setHoveredReaction(-1);
       return;
     }
-    Animated.spring(reveal, { toValue: 1, damping: 17, stiffness: 230, useNativeDriver: true }).start();
+    Animated.spring(reveal, { toValue: 1, damping: 17, stiffness: 230, useNativeDriver: Platform.OS !== 'web' }).start();
   }, [reveal, visible]);
   if (!message) return null;
   const editableText = message.text && !/^Shared a (photo|video|GIF|sticker)$/i.test(message.text);
@@ -535,7 +537,7 @@ function MessageInteractionModal({ message, visible, mode, canModerate, onModeCh
 function ChatMessage({ message, grouped, active, highlighted, seenBy, showDeliveryStatus, currentUserId, peopleById, onLayout, onToggleControls, onOpenReactions, onOpenActions, onShowPeople, onPreview }) {
   const enter = useRef(new Animated.Value(0)).current;
   useEffect(() => {
-    Animated.timing(enter, { toValue: 1, duration: 190, easing: Easing.out(Easing.cubic), useNativeDriver: true }).start();
+    Animated.timing(enter, { toValue: 1, duration: 190, easing: Easing.out(Easing.cubic), useNativeDriver: Platform.OS !== 'web' }).start();
   }, [enter]);
   const reactionGroups = REACTION_OPTIONS.map((emoji) => ({
     emoji,
@@ -931,7 +933,7 @@ function TeamChatInfo({ team, currentUserId, pinnedMessages, sharedMedia, blocke
         ))}</View> : !loading && <View style={styles.chatInfoEmpty}><View style={styles.chatInfoEmptyIcon}><Icon name="images-outline" size={22} color={C.teal} /></View><View style={styles.rosterCopy}><Text style={styles.emptyTitle}>Nothing shared yet</Text><Text style={styles.footText}>Photos, videos, GIFs, and stickers sent in this chat will collect here.</Text></View></View>}
 
         <View style={styles.chatInfoSectionHead}><View><Text style={styles.eyebrow}>PEOPLE</Text><Text style={styles.h2}>Team members</Text></View><Text style={styles.sectionLink}>{team.members} total</Text></View>
-        <View style={styles.chatInfoMembers}>{(team.roster || []).map((member, index) => <View key={member.id || `${member.name}-${index}`} style={[styles.chatInfoMember, index > 0 && styles.rosterBorder]}><ProfilePhoto photo={member.avatar} name={member.name} size={42} /><View style={styles.rosterCopy}><Text style={styles.rosterName}>{member.name}{member.id === currentUserId ? ' (You)' : ''}</Text><Text style={styles.footText}>{member.role || 'Member'}</Text></View>{member.id !== currentUserId && <Pressable accessibilityLabel={`Message ${member.name} privately`} onPress={() => onMessageMember(member)} style={styles.memberMessageButton}><Icon name="chatbubble-outline" size={17} color={C.teal} /></Pressable>}{canManageRosterMember(team, member, currentUserId) && <Pressable accessibilityLabel={`Manage ${member.name}`} accessibilityHint={team.role === 'Co-admin' ? 'Remove this member' : 'Change role or remove this member'} onPress={() => setManagedMember(member)} style={styles.memberMoreButton}><Icon name="ellipsis-horizontal" size={20} color={C.ink70} /></Pressable>}</View>)}</View>
+        <View style={styles.chatInfoMembers}>{(team.roster || []).map((member, index) => <View key={member.id || `${member.name}-${index}`} style={[styles.chatInfoMember, index > 0 && styles.rosterBorder]}><ProfilePhoto photo={member.avatar} name={member.name} size={42} /><View style={styles.rosterCopy}><Text style={styles.rosterName}>{member.name}{member.id === currentUserId ? ' (You)' : ''}</Text><Text style={styles.footText}>{member.role || 'Member'}</Text></View>{PRIVATE_MESSAGES_ENABLED && member.id !== currentUserId && <Pressable accessibilityLabel={`Message ${member.name} privately`} onPress={() => onMessageMember(member)} style={styles.memberMessageButton}><Icon name="chatbubble-outline" size={17} color={C.teal} /></Pressable>}{canManageRosterMember(team, member, currentUserId) && <Pressable accessibilityLabel={`Manage ${member.name}`} accessibilityHint={team.role === 'Co-admin' ? 'Remove this member' : 'Change role or remove this member'} onPress={() => setManagedMember(member)} style={styles.memberMoreButton}><Icon name="ellipsis-horizontal" size={20} color={C.ink70} /></Pressable>}</View>)}</View>
 
         <View style={styles.chatInfoSectionHead}><View><Text style={styles.eyebrow}>SAFETY</Text><Text style={styles.h2}>Blocked players</Text></View>{blockedUsers.length > 0 && <Text style={styles.sectionLink}>{blockedUsers.length} blocked</Text>}</View>
         {blockedUsers.length ? <View style={styles.chatInfoMembers}>{blockedUsers.map((player, index) => <View key={player.id} style={[styles.chatInfoMember, index > 0 && styles.rosterBorder]}><ProfilePhoto photo={player.avatar} name={player.name} size={42} /><View style={styles.rosterCopy}><Text style={styles.rosterName}>{player.name}</Text><Text style={styles.footText}>Messages hidden from your team chats</Text></View><Pressable accessibilityLabel={`Unblock ${player.name}`} onPress={() => onUnblock(player)} style={styles.unblockButton}><Text style={styles.unblockButtonText}>Unblock</Text></Pressable></View>)}</View> : <View style={styles.chatInfoEmpty}><View style={styles.chatInfoEmptyIcon}><Icon name="shield-checkmark-outline" size={22} color={C.teal} /></View><View style={styles.rosterCopy}><Text style={styles.emptyTitle}>No blocked players</Text><Text style={styles.footText}>Use a message’s options to report or block its sender.</Text></View></View>}
@@ -1327,7 +1329,7 @@ export default function TeamScreen({ navigation, route }) {
       toValue: 0,
       duration: 380,
       easing: Easing.out(Easing.cubic),
-      useNativeDriver: true,
+      useNativeDriver: Platform.OS !== 'web',
     }).start();
   }, [createSlide]);
 
@@ -1336,7 +1338,7 @@ export default function TeamScreen({ navigation, route }) {
       toValue: SCREEN_HEIGHT,
       duration: 300,
       easing: Easing.in(Easing.cubic),
-      useNativeDriver: true,
+      useNativeDriver: Platform.OS !== 'web',
     }).start(() => setCreating(false));
   }, [createSlide]);
   const [joinRequests, setJoinRequests] = useState({});
@@ -1449,7 +1451,7 @@ export default function TeamScreen({ navigation, route }) {
     navigation.setParams({ unreadCount: teamUnreadCount + directUnreadCount });
   }, [chatSafetyStatus?.eligible, conversationSummaries, directConversations, navigation]);
   const refreshDirectConversations = useCallback(() => {
-    if (!user?.id || !chatSafetyStatus?.eligible) {
+    if (!PRIVATE_MESSAGES_ENABLED || !user?.id || !chatSafetyStatus?.eligible) {
       setDirectConversations([]);
       return Promise.resolve([]);
     }
@@ -1461,7 +1463,7 @@ export default function TeamScreen({ navigation, route }) {
     refreshDirectConversations();
   }, [refreshDirectConversations]);
   useEffect(() => {
-    if (!supabase || !user?.id || !chatSafetyStatus?.eligible) return undefined;
+    if (!PRIVATE_MESSAGES_ENABLED || !supabase || !user?.id || !chatSafetyStatus?.eligible) return undefined;
     let refreshTimer;
     const refresh = () => {
       clearTimeout(refreshTimer);
@@ -2355,7 +2357,7 @@ export default function TeamScreen({ navigation, route }) {
             <Text numberOfLines={1} style={styles.h1}>Teams</Text>
           </View>
           <View style={styles.headerActions}>
-            <Pressable accessibilityLabel="Open messages" onPress={() => navigation.navigate('Inbox')} style={styles.inboxButton}>
+            <Pressable accessibilityLabel="Open chats" onPress={() => navigation.navigate('Inbox')} style={styles.inboxButton}>
               <Icon name="chatbubbles-outline" size={18} color={C.teal} />
               {directConversations.reduce((total, item) => total + Number(item.unreadCount || 0), 0) > 0 && <View style={styles.inboxBadge}><Text style={styles.inboxBadgeText}>{Math.min(99, directConversations.reduce((total, item) => total + Number(item.unreadCount || 0), 0))}</Text></View>}
             </Pressable>

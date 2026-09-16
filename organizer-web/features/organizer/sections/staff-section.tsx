@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import { useRouter } from "next/navigation";
 import { Activity, Eye, Search, ShieldCheck, UserPlus, Users } from "lucide-react";
 import { toast } from "sonner";
 import { requireSupabase } from "@/lib/supabase";
@@ -12,7 +13,7 @@ const invitableRoles = ["manager", "front_desk", "court_monitor", "scorer", "vie
 
 export function StaffSection({ data, venue, refresh, subview }: { data: OrganizerData; venue: Venue | null; refresh: () => Promise<void>; subview?: string }) {
   if (!venue) return <Empty title="No managed venue" detail="Staff access becomes available after a venue is added." />;
-  if (subview === "invite") return <InviteStaff venue={venue} refresh={refresh} />;
+  if (subview === "add") return <AddStaff venue={venue} refresh={refresh} />;
   const changeRole = async (userId: string, role: string) => {
     try {
       const { error } = await requireSupabase().rpc("set_venue_staff_role", { p_venue_id: venue.id, p_user_id: userId, p_role: role });
@@ -30,7 +31,8 @@ export function StaffSection({ data, venue, refresh, subview }: { data: Organize
 
 type Candidate = { user_id: string; display_name: string; already_staff: boolean };
 
-function InviteStaff({ venue, refresh }: { venue: Venue; refresh: () => Promise<void> }) {
+function AddStaff({ venue, refresh }: { venue: Venue; refresh: () => Promise<void> }) {
+  const router = useRouter();
   const [email, setEmail] = useState("");
   const [searched, setSearched] = useState(false);
   const [candidate, setCandidate] = useState<Candidate | null>(null);
@@ -58,19 +60,14 @@ function InviteStaff({ venue, refresh }: { venue: Venue; refresh: () => Promise<
     try {
       const { error } = await requireSupabase().rpc("set_venue_staff_role", { p_venue_id: venue.id, p_user_id: candidate.user_id, p_role: role });
       if (error) throw error;
-      toast.success(`${candidate.display_name} added to your team.`);
       await refresh();
-      setCandidate(null);
-      setSearched(false);
-      setEmail("");
+      toast.success(`${candidate.display_name} added to your team.`);
+      router.replace("/staff");
     } catch (reason) { toast.error(reason instanceof Error ? reason.message : "Could not add this teammate."); }
     finally { setAdding(false); }
   };
 
   return <div className="management-grid"><div className="card management-card">
-    <div className="card-topline"><span className="card-kicker">STAFF ACCESS</span></div>
-    <h2>Add staff</h2>
-    <p>{venue.name}</p>
     <form onSubmit={search} className="form-field"><label htmlFor="staff-email">TEAMMATE&apos;S EMAIL</label><input id="staff-email" type="email" value={email} onChange={(event) => { setEmail(event.target.value); setSearched(false); setCandidate(null); }} placeholder="name@email.com" required /><button className="button button-accent inline-action" type="submit" disabled={searching || !email.trim()}><Search size={15} /> {searching ? "Searching…" : "Find their account"}</button></form>
 
     {searched && candidate && !candidate.already_staff ? <div className="notice"><strong>Found {candidate.display_name}</strong><span>Choose their role and add them to {venue.name}.</span><div className="form-field"><label>ROLE</label><SelectControl value={role} onChange={setRole} ariaLabel="Staff role" options={invitableRoles.map((item) => ({ value: item, label: titleCase(item) }))} /></div><button className="button button-accent inline-action" type="button" onClick={addToTeam} disabled={adding}><UserPlus size={15} /> {adding ? "Adding…" : `Add as ${titleCase(role)}`}</button></div> : null}

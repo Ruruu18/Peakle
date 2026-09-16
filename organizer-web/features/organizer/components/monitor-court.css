@@ -1,0 +1,151 @@
+.monitor-court-board {
+  min-width: 0;
+  margin: 13px 0;
+  overflow: hidden;
+  border: 1px solid #3e6653;
+  border-radius: 14px;
+  display: flex;
+  flex-direction: column;
+  color: #f0f4e6;
+  background: radial-gradient(ellipse at 20% 0%, #365d48, #1b3e30 65%, #133127);
+  box-shadow: inset 0 1px 0 #ffffff0d;
+}
+
+.monitor-court-scores {
+  min-height: 52px;
+  padding: 8px 15px 0;
+  display: grid;
+  grid-template-columns: 1fr auto 1fr;
+  align-items: center;
+  gap: 10px;
+}
+
+.monitor-court-scores > div { display: flex; align-items: center; gap: 8px; }
+.monitor-court-scores > div:last-child { justify-content: flex-end; }
+.monitor-court-scores small { font-size: 9px; font-weight: 750; letter-spacing: .08em; color: #cad8c6; }
+.monitor-court-scores strong { font: 650 clamp(27px, 3.6vh, 40px)/1 var(--font-score); font-variant-numeric: tabular-nums; letter-spacing: -.04em; }
+.monitor-team-dot { width: 5px; height: 5px; flex: 0 0 auto; border-radius: 50%; background: #d6e94a; }
+.monitor-team-dot.away { background: #cae5df; }
+.monitor-court-clock { display: flex; align-items: center; justify-content: center; gap: 4px; color: #bacdb9; font: 600 10px var(--font-score); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.monitor-court-available { min-height: 52px; padding: 10px 15px 0; display: flex; flex-direction: column; justify-content: center; gap: 4px; }
+.monitor-court-available > span { display: flex; align-items: center; gap: 7px; font-size: 12px; font-weight: 650; }
+.monitor-court-available i { width: 6px; height: 6px; border-radius: 50%; background: #d6e94a; box-shadow: 0 0 0 3px #d6e94a15; }
+.monitor-court-available small { color: #bdcdb9; font-size: 10px; }
+
+.monitor-court-scene { position: relative; min-height: 156px; flex: 1; }
+.monitor-court-art { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; }
+.monitor-ball-layer { position: absolute; inset: 0; z-index: 2; pointer-events: none; --ball-size: 20px; }
+.monitor-ball-flight { position: absolute; left: var(--ball-x-0); top: var(--ball-y-0); width: 0; height: 0; animation: monitor-ball-travel 5.6s linear infinite; }
+.monitor-ball-shadow { position: absolute; left: -11px; top: -2px; width: 22px; height: 7px; border-radius: 50%; background: radial-gradient(ellipse, #02180de0, #02180d00 72%); transform-origin: center; animation: monitor-ball-shadow 1.4s linear infinite; }
+.monitor-ball-lift { position: absolute; left: calc(var(--ball-size) / -2); bottom: 0; width: var(--ball-size); height: var(--ball-size); transform-origin: center bottom; animation: monitor-ball-hop 1.4s linear infinite; }
+.monitor-ball-spin { display: block; width: 100%; height: 100%; background-image: var(--ball-artwork); background-size: contain; background-repeat: no-repeat; filter: drop-shadow(1px 2px 1px #183e1640); animation: monitor-ball-spin 5.6s linear infinite; }
+.monitor-ball-layer[data-moving="false"] .monitor-ball-flight,
+.monitor-ball-layer[data-moving="false"] .monitor-ball-shadow,
+.monitor-ball-layer[data-moving="false"] .monitor-ball-lift,
+.monitor-ball-layer[data-moving="false"] .monitor-ball-spin { animation-play-state: paused; }
+
+@keyframes monitor-ball-travel {
+  0%, 100% { left: var(--ball-x-0); top: var(--ball-y-0); }
+  25% { left: var(--ball-x-1); top: var(--ball-y-1); }
+  50% { left: var(--ball-x-2); top: var(--ball-y-2); }
+  75% { left: var(--ball-x-3); top: var(--ball-y-3); }
+}
+@keyframes monitor-ball-hop {
+  0%, 100% { transform: translateY(0) scale(1.06, .9); animation-timing-function: cubic-bezier(.16, .6, .4, 1); }
+  50% { transform: translateY(-34px) scale(1.08); animation-timing-function: cubic-bezier(.6, 0, .84, .4); }
+}
+@keyframes monitor-ball-shadow {
+  0%, 100% { transform: scale(.8); opacity: .8; }
+  50% { transform: scale(1.6); opacity: .28; }
+}
+@keyframes monitor-ball-spin { to { transform: rotate(360deg); } }
+
+@media (prefers-reduced-motion: reduce) {
+  .monitor-ball-flight, .monitor-ball-shadow, .monitor-ball-lift, .monitor-ball-spin { animation: none; }
+}
+.monitor-court-player { position: absolute; z-index: 1; width: 35%; max-width: 150px; display: flex; flex-direction: column; align-items: center; transform: translate(-50%, -100%); }
+.monitor-court-player::before { content: ""; position: absolute; bottom: -3px; width: 45px; height: 10px; transform: translateX(5px); background: radial-gradient(ellipse, #052a1dd9, #052a1d00 70%); }
+.monitor-court-player .avatar { width: 34px; height: 34px; min-width: 34px; padding: 0; flex-shrink: 0; overflow: hidden; border: 2px solid #d6e94a; border-radius: 50%; color: #e7f197; background: #163c2f; box-shadow: 0 2px 0 #092d20, 0 4px 6px #062c2259; font-size: 10px; }
+.monitor-court-player.side-1 .avatar { color: #edf4e1; border-color: #cae5df; }
+.monitor-court-player.is-serving .avatar { outline: 2px solid #eff6cf; outline-offset: 3px; }
+.monitor-court-player-name { position: relative; max-width: 100%; margin-top: 3px; padding: 2px 6px; overflow: hidden; border: 1px solid #f0f4e61a; border-radius: 5px; color: #f0f4e6; background: #103326ed; font-size: 10px; font-weight: 650; line-height: 13px; text-overflow: ellipsis; white-space: nowrap; }
+.monitor-court-player > i { position: relative; width: 1px; height: 4px; background: #eaf1d786; }
+.monitor-court-player > i::after { content: ""; position: absolute; bottom: -1px; left: -2px; width: 5px; height: 2px; border-radius: 50%; background: #d6e94a; }
+.monitor-court-player.side-1 > i::after { background: #cae5df; }
+
+.monitor-court-announcement {
+  position: absolute;
+  inset: 6%;
+  z-index: 5;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 2px;
+  padding: 10px;
+  border-radius: 14px;
+  background: #0e2321eb;
+  color: #eff6cf;
+  text-align: center;
+  pointer-events: none;
+  animation: monitor-announcement-fade 1.9s ease-in-out forwards;
+}
+.monitor-court-announcement strong { font-size: 15px; font-weight: 900; }
+.monitor-court-announcement-team { max-width: 90%; margin-top: 3px; overflow: hidden; color: #f0f4e6; font-size: 10px; font-weight: 800; text-overflow: ellipsis; white-space: nowrap; }
+.monitor-court-announcement-action { margin-top: 6px; color: #ffffff94; font-size: 8px; font-weight: 900; letter-spacing: .12em; }
+.monitor-court-announcement-score { margin-top: 3px; font: 900 25px/1 var(--font-score); font-variant-numeric: tabular-nums; }
+.monitor-court-announcement-note { max-width: 92%; margin-top: 5px; color: #eff6cf; font-size: 8px; font-weight: 800; }
+
+@keyframes monitor-announcement-fade {
+  0%, 100% { opacity: 0; transform: scale(.86); }
+  10%, 82% { opacity: 1; transform: scale(1); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .monitor-court-announcement { animation-duration: .01ms; }
+}
+
+.monitor-zoom .zoom-court-card::before { content: none; }
+.monitor-zoom .zoom-court-card { box-shadow: 0 5px 16px #0e23210d; }
+.zoom-court-card .monitor-court-board { flex: 1; margin: 10px 0; }
+.zoom-court-card .monitor-court-scene { min-height: 140px; }
+.zoom-court-card .zoom-court-head > div { min-width: 0; }
+.zoom-court-card .zoom-court-state { flex-shrink: 0; }
+.zoom-next-lineup { display: grid; gap: 4px; margin-bottom: 10px; }
+.zoom-next-lineup small { display: flex; align-items: center; gap: 5px; color: var(--ink-40); font-size: 8px; font-weight: 700; letter-spacing: .08em; }
+.zoom-next-lineup strong { color: var(--ink-70); font-size: 10px; line-height: 1.4; font-weight: 650; overflow-wrap: anywhere; }
+.zoom-next-lineup .lineup-chips { margin-top: 2px; gap: 4px; }
+.zoom-next-lineup .lineup-chip { min-height: 30px; padding: 3px 6px 3px 3px; gap: 6px; font-size: 9px; }
+.zoom-next-lineup .lineup-player-photo .avatar { width: 22px; height: 22px; font-size: 8px; }
+.zoom-next-lineup .lineup-player-position { width: 12px; height: 12px; font-size: 6px; }
+.zoom-court-card .zoom-court-foot { flex-shrink: 0; }
+.court-operation-card .monitor-court-board + .next-lineup { margin-top: 0; }
+
+@media (min-width: 761px) {
+  .monitor-zoom .monitor-zoom-court-grid { grid-template-rows: repeat(2, minmax(310px, 1fr)); }
+}
+
+@media (max-width: 760px) {
+  .monitor-zoom .monitor-zoom-court-grid { grid-template-rows: none; grid-auto-rows: minmax(320px, auto); }
+  .zoom-court-card .monitor-court-scene { min-height: 155px; }
+}
+
+@media (min-width: 1060px) and (max-height: 850px) {
+  .monitor-zoom .monitor-zoom-header { min-height: 68px; padding-top: 8px; padding-bottom: 8px; }
+  .monitor-zoom .monitor-zoom-body { padding: 12px; grid-template-rows: minmax(min-content, 1fr) 80px; gap: 12px; }
+  .monitor-zoom .monitor-zoom-section-head { min-height: 44px; }
+  .monitor-zoom .monitor-zoom-court-grid { grid-template-rows: repeat(2, minmax(258px, 1fr)); gap: 10px; }
+  .monitor-zoom .zoom-court-card { padding: 12px; }
+  .zoom-court-card .monitor-court-board { margin: 8px 0; }
+  .zoom-court-card .monitor-court-scores, .zoom-court-card .monitor-court-available { min-height: 36px; padding-top: 6px; }
+  .zoom-court-card .monitor-court-scores strong { font-size: 28px; }
+  .zoom-court-card .monitor-court-available small { display: none; }
+  .zoom-court-card .monitor-court-scene { min-height: 116px; }
+  .zoom-court-card .monitor-court-player .avatar { width: 28px; height: 28px; min-width: 28px; font-size: 9px; }
+  .zoom-court-card .monitor-court-player-name { margin-top: 2px; padding: 1px 5px; font-size: 9px; line-height: 11px; }
+  .zoom-court-card .monitor-court-player > i { height: 3px; }
+  .zoom-court-card .zoom-next-lineup { gap: 2px; margin-bottom: 6px; }
+  .zoom-court-card .zoom-next-lineup small { font-size: 7px; line-height: 9px; }
+  .zoom-court-card .zoom-next-lineup strong { font-size: 9px; line-height: 12px; }
+  .zoom-court-card .zoom-court-foot { padding-top: 6px; }
+}

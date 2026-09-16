@@ -1,19 +1,44 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import Image from "next/image";
 import Link from "next/link";
-import { ArrowRight, Check, Eye, EyeOff, Moon, ShieldCheck, Sun, Trophy, Users } from "lucide-react";
+import { usePathname, useRouter } from "next/navigation";
+import { ArrowLeft, ArrowRight, Check, Eye, EyeOff, Moon, PlayCircle, ShieldCheck, Sun, Trophy, Users } from "lucide-react";
 import { toast } from "sonner";
 import { useAuth, useTheme } from "./providers";
+import { organizerCtaLabel, organizerSignupHref } from "@/lib/launch-offer";
+
+// No production beta host is chosen yet (see PLAYER_WEB_BETA.md) — default to
+// the local player-web dev server and override with the real origin via env
+// once the beta is actually hosted somewhere.
+const PLAYER_APP_URL = (process.env.NEXT_PUBLIC_PLAYER_APP_URL || "http://localhost:8081").replace(/\/+$/, "");
 
 export default function LoginScreen() {
-  const { configured, issue, signIn, signInWithGoogle } = useAuth();
+  const { user, loading, configured, issue, signIn, signInWithGoogle, enterDemo } = useAuth();
   const { mode, toggle } = useTheme();
+  const router = useRouter();
+  const pathname = usePathname();
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [showPassword, setShowPassword] = useState(false);
   const [busy, setBusy] = useState(false);
+
+  // Elsewhere, this screen is rendered in place of whatever protected page the
+  // user tried to reach (e.g. a deep link into a session roster); once signed
+  // in, that same route re-renders on its own, so only the dedicated /login
+  // route needs an explicit redirect.
+  useEffect(() => {
+    if (!loading && user && pathname === "/login") router.replace("/overview");
+  }, [loading, pathname, router, user]);
+
+  useEffect(() => {
+    const resetOnRestore = (event: PageTransitionEvent) => {
+      if (event.persisted) setBusy(false);
+    };
+    window.addEventListener("pageshow", resetOnRestore);
+    return () => window.removeEventListener("pageshow", resetOnRestore);
+  }, []);
 
   const submit = async (event: React.FormEvent) => {
     event.preventDefault();
@@ -21,11 +46,17 @@ export default function LoginScreen() {
     setBusy(true);
     try {
       await signIn(email, password);
+      if (pathname === "/login") router.replace("/overview");
     } catch (error) {
       toast.error(error instanceof Error ? error.message : "Sign in could not be completed.");
     } finally {
       setBusy(false);
     }
+  };
+
+  const viewDemo = () => {
+    enterDemo();
+    if (pathname === "/login") router.replace("/overview");
   };
 
   const google = async () => {
@@ -65,7 +96,9 @@ export default function LoginScreen() {
       <section className="login-panel">
         <div className="mobile-login-brand"><Brand /></div>
         <div className="login-card">
-
+          <Link className="auth-home-link" href="/">
+            <ArrowLeft size={16} /> Back to home
+          </Link>
           <p className="eyebrow">WELCOME BACK</p>
           <h2>Organizer sign in</h2>
           <p className="login-intro">Use the same Peakle account you use on mobile.</p>
@@ -82,7 +115,7 @@ export default function LoginScreen() {
               <button type="button" onClick={() => setShowPassword((current) => !current)} aria-label={showPassword ? "Hide password" : "Show password"}>{showPassword ? <EyeOff size={18} /> : <Eye size={18} />}</button>
             </div>
             <button className="button button-accent login-submit" disabled={busy || !configured} type="submit">
-              {busy ? "Opening workspace…" : "Sign in"}<ArrowRight size={17} />
+              Sign in<ArrowRight size={17} />
             </button>
           </form>
 
@@ -91,7 +124,13 @@ export default function LoginScreen() {
             <Image src="/google.svg" alt="" width={18} height={18} className="google-icon" /> Continue with Google
           </button>
 
-          <p className="auth-switch">New to Peakle Organizer? <Link href="/register">Create an organizer account</Link></p>
+          <button className="button button-ghost login-demo-button" type="button" onClick={viewDemo}>
+            <PlayCircle size={17} /> View the interactive demo
+          </button>
+          <p className="login-demo-caption">No account needed — explore a fully populated Peakle venue workspace.</p>
+
+          <p className="auth-switch">New to Peakle Organizer? <Link href={organizerSignupHref}>{organizerCtaLabel}</Link></p>
+          <p className="auth-switch">Here to play, not manage a venue? <a href={PLAYER_APP_URL} className="player-app-link">Sign in to the player app<span className="beta-tag">BETA</span></a></p>
 
           <div className="login-trust"><Check size={14} /> Protected by the same Peakle permissions and venue roles.</div>
         </div>

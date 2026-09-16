@@ -4,10 +4,11 @@ import { useEffect, useState } from "react";
 import Image from "next/image";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { ArrowRight, Check, Eye, EyeOff, MailCheck, Moon, ShieldCheck, Smartphone, Sun, Trophy, Users } from "lucide-react";
+import { ArrowLeft, ArrowRight, Check, Eye, EyeOff, MailCheck, Moon, ShieldCheck, Smartphone, Sun, Trophy, Users } from "lucide-react";
 import { toast } from "sonner";
 import { Brand } from "./login-screen";
 import { useAuth, useTheme } from "./providers";
+import { organizerRegisterDescription, organizerTrialEnabled } from "@/lib/launch-offer";
 
 export default function RegisterScreen() {
   const { user, loading, configured, signUp, signInWithGoogle } = useAuth();
@@ -84,21 +85,24 @@ export default function RegisterScreen() {
       <section className="login-panel register-panel">
         <div className="mobile-login-brand"><Brand /></div>
         <div className="login-card">
+          <Link className="auth-home-link" href="/">
+            <ArrowLeft size={16} /> Back to home
+          </Link>
           {confirmationEmail ? (
             <div className="confirmation-card" role="status">
               <span className="confirmation-icon"><MailCheck size={25} /></span>
               <p className="eyebrow">CHECK YOUR INBOX</p>
               <h2>Confirm your email</h2>
               <p className="login-intro">We sent a confirmation link to <strong>{confirmationEmail}</strong>. Open it to activate your organizer account.</p>
-              <Link className="button button-accent login-submit" href="/overview">Back to sign in <ArrowRight size={17} /></Link>
+              <Link className="button button-accent login-submit" href="/login">Back to sign in <ArrowRight size={17} /></Link>
             </div>
           ) : (
             <>
-              <p className="eyebrow">GET STARTED</p>
-              <h2>Create organizer account</h2>
-              <p className="login-intro">Set up your Peakle identity for organizer tools.</p>
+              <p className="eyebrow">{organizerTrialEnabled ? "14-DAY FREE TRIAL" : "PILOT TESTING"}</p>
+              <h2>{organizerTrialEnabled ? "Start your organizer trial" : "Create your pilot account"}</h2>
+              <p className="login-intro">{organizerRegisterDescription}</p>
 
-              <div className="identity-note"><Smartphone size={18} /><p><strong>Already use Peakle on mobile?</strong><span>Don’t register again. <Link href="/overview">Sign in with the same email or Google account.</Link></span></p></div>
+              <div className="identity-note"><Smartphone size={18} /><p><strong>Already use Peakle on mobile?</strong><span>Don’t register again. <Link href="/login">Sign in with the same email or Google account.</Link></span></p></div>
 
               {!configured ? <div className="notice warning"><strong>Supabase setup needed</strong><span>Add the public environment values to enable account registration.</span></div> : null}
 
@@ -115,7 +119,7 @@ export default function RegisterScreen() {
                 <label htmlFor="register-confirm-password">CONFIRM PASSWORD</label>
                 <input id="register-confirm-password" type={showPassword ? "text" : "password"} value={confirmPassword} onChange={(event) => setConfirmPassword(event.target.value)} placeholder="Type your password again" autoComplete="new-password" minLength={6} required />
                 <button className="button button-accent login-submit" disabled={busy || !configured} type="submit">
-                  {busy ? "Creating account…" : "Create account"}<ArrowRight size={17} />
+                  {busy ? (organizerTrialEnabled ? "Starting your trial…" : "Creating account…") : (organizerTrialEnabled ? "Start free trial" : "Create account")}<ArrowRight size={17} />
                 </button>
               </form>
 
@@ -124,8 +128,8 @@ export default function RegisterScreen() {
                 <Image src="/google.svg" alt="" width={18} height={18} className="google-icon" /> Continue with Google
               </button>
 
-              <p className="auth-switch">Already have an account? <Link href="/overview">Sign in</Link></p>
-              <div className="login-trust"><Check size={14} /> One account for Peakle mobile and organizer web.</div>
+              <p className="auth-switch">Already have an account? <Link href="/login">Sign in</Link></p>
+              <div className="login-trust"><Check size={14} /> {organizerTrialEnabled ? "₱0 for 14 days · 0% booking fee · No card required." : "Organizer and player accounts connect to the same sessions."}</div>
             </>
           )}
         </div>

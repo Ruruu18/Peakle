@@ -1,11 +1,13 @@
 "use client";
 
 import { useRouter } from "next/navigation";
-import { Crown, Maximize2, Minimize2, Radio, RotateCcw, Sparkles, Trophy, ZoomIn, ZoomOut } from "lucide-react";
+import { Check, Crown, Maximize2, Minimize2, Pencil, Radio, RotateCcw, Sparkles, Trophy, X, ZoomIn, ZoomOut } from "lucide-react";
 import { Fragment, useEffect, useMemo, useRef, useState } from "react";
+import { toast } from "sonner";
 import { requireSupabase } from "@/lib/supabase";
 import type { Competition, CompetitionBracketMatch, CompetitionDivision, CompetitionEntry } from "@/lib/types";
 import { Empty, ProfileAvatar, SelectControl, Status, titleCase } from "../components/portal-ui";
+import { PointAnnouncementOverlay } from "../components/monitor-court";
 
 const CARD_W = 264;
 const CARD_H = 76;
@@ -24,9 +26,15 @@ const roundLabel = (round: number, totalRounds: number) => {
   return `Round ${round}`;
 };
 
+const sortedGames = (match: CompetitionBracketMatch) => [...(match.matches?.match_games || [])].sort((a, b) => a.game_number - b.game_number);
+
 const matchScore = (match: CompetitionBracketMatch): [number, number] | null => {
-  const game = match.matches?.match_games?.[0];
-  return game ? [game.home_score, game.away_score] : null;
+  const games = sortedGames(match);
+  if (!games.length) return null;
+  if (games.length === 1) return [games[0].home_score, games[0].away_score];
+  const homeGames = games.filter((game) => game.winner_side === 0).length;
+  const awayGames = games.filter((game) => game.winner_side === 1).length;
+  return [homeGames, awayGames];
 };
 
 const matchTime = (match: CompetitionBracketMatch) => match.matches?.ended_at || match.matches?.started_at || match.scheduled_at || null;
@@ -82,7 +90,39 @@ function useCompetitionBracket(competitionId: string) {
   };
 }
 
+function ScoreEntryActions({ match, home, away, onDone, onCancel }: { match: CompetitionBracketMatch; home: string; away: string; onDone: () => void; onCancel: () => void }) {
+  const [busy, setBusy] = useState(false);
+
+  const submit = async () => {
+    if (busy) return;
+    const homeScore = Number(home);
+    const awayScore = Number(away);
+    if (!match.match_id) { toast.error("This match has not been scheduled yet."); return; }
+    if (!Number.isFinite(homeScore) || !Number.isFinite(awayScore) || homeScore < 0 || awayScore < 0 || homeScore === awayScore) {
+      toast.error("Enter two valid scores with one winner.");
+      return;
+    }
+    setBusy(true);
+    try {
+      const { error } = await requireSupabase().rpc("record_competition_match_result", { p_match_id: match.match_id, p_home_score: homeScore, p_away_score: awayScore });
+      if (error) throw error;
+      toast.success("Result recorded.");
+      onDone();
+    } catch (reason) {
+      toast.error(reason instanceof Error ? reason.message : "The result could not be recorded.");
+    } finally { setBusy(false); }
+  };
+
+  return <div className="bracket-score-actions" onClick={(event) => event.stopPropagation()}>
+    <button type="button" className="bracket-score-save" aria-label="Save result" disabled={busy} onClick={() => void submit()}><Check size={11} /></button>
+    <button type="button" className="bracket-score-cancel" aria-label="Cancel" disabled={busy} onClick={onCancel}><X size={11} /></button>
+  </div>;
+}
+
 function BracketTree({ matches, entryById }: { matches: CompetitionBracketMatch[]; entryById: Map<string, CompetitionEntry> }) {
+  const [scoringId, setScoringId] = useState<string | null>(null);
+  const [homeInput, setHomeInput] = useState("");
+  const [awayInput, setAwayInput] = useState("");
   const rounds = useMemo(() => {
     const byRound = new Map<number, CompetitionBracketMatch[]>();
     matches.forEach((match) => { const list = byRound.get(match.round_number) || []; list.push(match); byRound.set(match.round_number, list); });
@@ -118,10 +158,31 @@ function BracketTree({ matches, entryById }: { matches: CompetitionBracketMatch[
         const winnerId = match.winner_entry_id;
         const homeLabel = entryName(home) || (match.status === "bye" && !match.away_entry_id ? "" : "TBD");
         const awayLabel = entryName(away) || (match.status === "bye" ? "BYE" : "TBD");
+        const canScore = (match.status === "ready" || match.status === "live") && Boolean(match.home_entry_id) && Boolean(match.away_entry_id) && Boolean(match.match_id);
+        const isScoring = scoringId === match.id;
+        const startScoring = () => {
+          const current = matchScore(match);
+          setHomeInput(current ? String(current[0]) : "");
+          setAwayInput(current ? String(current[1]) : "");
+          setScoringId(match.id);
+        };
+        const stopScoring = () => { setScoringId(null); setHomeInput(""); setAwayInput(""); };
         return <div key={match.id} className={`bracket-match status-${match.status}`} style={{ top: topFor(roundIndex, match.position), width: CARD_W, height: CARD_H }}>
           {match.status === "live" ? <span className="bracket-live-badge"><i /> LIVE</span> : null}
-          <div className={`bracket-slot ${winnerId && winnerId === match.home_entry_id ? "winner" : ""}`}><BracketEntrant entry={home} label={homeLabel} /><b className={score && score[0] > score[1] ? "high-score" : ""}>{score ? score[0] : match.status === "bye" ? "" : "–"}</b></div>
-          <div className={`bracket-slot ${winnerId && winnerId === match.away_entry_id ? "winner" : ""}`}><BracketEntrant entry={away} label={awayLabel} /><b className={score && score[1] > score[0] ? "high-score" : ""}>{score ? score[1] : match.status === "bye" ? "" : "–"}</b></div>
+          {isScoring ? <ScoreEntryActions match={match} home={homeInput} away={awayInput} onDone={stopScoring} onCancel={stopScoring} />
+            : canScore ? <button type="button" className="bracket-score-trigger" onClick={startScoring}><Pencil size={9} /> SCORE</button> : null}
+          <div className={`bracket-slot ${winnerId && winnerId === match.home_entry_id ? "winner" : ""}`}>
+            <BracketEntrant entry={home} label={homeLabel} />
+            {isScoring
+              ? <input type="number" inputMode="numeric" className="bracket-slot-score-input" value={homeInput} onChange={(event) => setHomeInput(event.target.value)} onClick={(event) => event.stopPropagation()} />
+              : <b className={score && score[0] > score[1] ? "high-score" : ""}>{score ? score[0] : match.status === "bye" ? "" : "–"}</b>}
+          </div>
+          <div className={`bracket-slot ${winnerId && winnerId === match.away_entry_id ? "winner" : ""}`}>
+            <BracketEntrant entry={away} label={awayLabel} />
+            {isScoring
+              ? <input type="number" inputMode="numeric" className="bracket-slot-score-input" value={awayInput} onChange={(event) => setAwayInput(event.target.value)} onClick={(event) => event.stopPropagation()} />
+              : <b className={score && score[1] > score[0] ? "high-score" : ""}>{score ? score[1] : match.status === "bye" ? "" : "–"}</b>}
+          </div>
         </div>;
       })}
     </div>)}
@@ -151,7 +212,7 @@ function BracketTree({ matches, entryById }: { matches: CompetitionBracketMatch[
   </div>;
 }
 
-export function CompetitionMonitor({ competitions, competitionId, presentationFullscreen = false }: { competitions: Competition[]; competitionId: string; presentationFullscreen?: boolean }) {
+export function CompetitionMonitor({ competitions, competitionId, presentationFullscreen = false, displaySettings }: { competitions: Competition[]; competitionId: string; presentationFullscreen?: boolean; displaySettings?: React.ReactNode }) {
   const router = useRouter();
   const { divisions, error } = useCompetitionBracket(competitionId);
   const competition = competitions.find((item) => item.id === competitionId);
@@ -228,13 +289,14 @@ export function CompetitionMonitor({ competitions, competitionId, presentationFu
       <button className="mini-button" type="button" onClick={toggleFullscreen}>{fullscreen || presentationFullscreen ? <Minimize2 size={14} /> : <Maximize2 size={14} />} {fullscreen || presentationFullscreen ? "Exit full screen" : "Full screen"}</button>
     </header>
     <div className="competition-monitor-switchers">
+      {displaySettings}
       <SelectControl value={competitionId} options={competitions.map((item) => ({ value: item.id, label: item.name, detail: titleCase(item.kind || "competition") }))} onChange={(value) => { if (value) router.push(`/competitions/${value}/monitor`); }} ariaLabel="Competition" className="competition-switch" />
-      <SelectControl value={divisionId} options={(divisions || []).map((item) => ({ value: item.id, label: item.name, detail: titleCase(item.skill_category || "open") }))} onChange={(value) => setSelectedDivisionId(value)} ariaLabel="Division" disabled={!divisions?.length} className="division-switch" />
+      <SelectControl value={divisionId} options={(divisions || []).map((item) => ({ value: item.id, label: item.name, detail: `${titleCase(item.skill_category || "open")} · ${titleCase(item.format || "doubles")}` }))} onChange={(value) => setSelectedDivisionId(value)} ariaLabel="Division" disabled={!divisions?.length} className="division-switch" />
     </div>
     {error ? <Empty title="Could not load the bracket" detail={error} /> : divisions === null ? <div className="bracket-empty"><Trophy size={26} /><strong>Loading bracket…</strong></div> : !divisions.length ? <Empty title="No divisions yet" detail="Add a division to this competition to build its bracket." /> : <div className="competition-monitor-body">
       <section className="bracket-panel">
         <div className="bracket-panel-controls">
-          <div className="bracket-panel-title"><span><Sparkles size={14} /></span><div><p>LIVE BRACKET</p><strong>{division?.name || "Competition bracket"}</strong></div><small>{entryById.size} entrants · {totalRounds} rounds</small></div>
+          <div className="bracket-panel-title"><span><Sparkles size={14} /></span><div><p>LIVE BRACKET</p><strong>{division?.name || "Competition bracket"}</strong></div><small>{titleCase(division?.format || "doubles")} · {entryById.size} entrants · {totalRounds} rounds</small></div>
           <div className="bracket-zoom-tools">
             <button className="icon-button" type="button" aria-label="Zoom out" onClick={() => setZoom((value) => Math.max(ZOOM_MIN, value - 0.1))}><ZoomOut size={16} /></button>
             <span>{Math.round(zoom * 100)}%</span>
@@ -263,7 +325,7 @@ export function CompetitionMonitor({ competitions, competitionId, presentationFu
                   <span>{label}</span>
                   {nextMatch.status === "live" && nextMatch.matches?.match_games ? (
                     <div className="monitor-player-scores">
-                      {nextMatch.matches.match_games.map((game, i) => {
+                      {sortedGames(nextMatch).map((game, i) => {
                         const isHigh = index === 0 ? game.home_score > game.away_score : game.away_score > game.home_score;
                         return <strong key={game.id || i} className={isHigh ? "high-score" : ""}>{index === 0 ? game.home_score : game.away_score}</strong>;
                       })}
@@ -274,6 +336,7 @@ export function CompetitionMonitor({ competitions, competitionId, presentationFu
             })}
           </div>
           <Status value={nextMatch.status} />
+          {nextMatch.status === "live" && nextMatch.last_point ? <PointAnnouncementOverlay key={nextMatch.last_point.id} announcement={nextMatch.last_point} /> : null}
         </> : <p className="monitor-next-match-empty">No upcoming match. Schedule the next ready pairing to fill this slot.</p>}
       </aside>
     </div>}

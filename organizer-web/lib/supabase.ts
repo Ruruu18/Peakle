@@ -1,7 +1,10 @@
 import { createBrowserClient } from "@supabase/ssr";
 import type { SupabaseClient } from "@supabase/supabase-js";
+import { isDemoModeActive } from "./demo-mode";
+import { createDemoSupabaseClient } from "./demo-supabase";
 
 let browserClient: SupabaseClient | null = null;
+let demoClient: SupabaseClient | null = null;
 
 export function isSupabaseConfigured() {
   return Boolean(
@@ -11,6 +14,12 @@ export function isSupabaseConfigured() {
 }
 
 export function getSupabase(): SupabaseClient | null {
+  // DEMO MODE — see demo-mode.ts. Every caller of getSupabase()/requireSupabase()
+  // transparently gets a safe mock client while the interactive demo is active.
+  if (isDemoModeActive()) {
+    if (!demoClient) demoClient = createDemoSupabaseClient();
+    return demoClient;
+  }
   if (!isSupabaseConfigured()) return null;
   if (!browserClient) {
     browserClient = createBrowserClient(

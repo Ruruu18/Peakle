@@ -143,17 +143,6 @@ export async function rateSupportConversation(conversationId, rating, comment = 
   if (error) throw error;
 }
 
-export async function triggerSupportAiReply(conversationId) {
-  try {
-    await requireSupabase().functions.invoke('support-ai-reply', {
-      body: { conversation_id: conversationId },
-    });
-  } catch {
-    // Best-effort: the requester can still reach a human via "Talk to a human"
-    // even if the AI responder is unavailable right now.
-  }
-}
-
 export async function listSupportConversations() {
   const { data, error } = await requireSupabase().rpc('list_support_conversations');
   if (error) throw error;

@@ -1,12 +1,15 @@
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.45.4';
+import { CORS_HEADERS, handleCorsPreflight } from '../_shared/cors.ts';
 
 const PAYMONGO_API = 'https://api.paymongo.com/v1';
 
 function json(body: unknown, status = 200) {
-  return new Response(JSON.stringify(body), { status, headers: { 'Content-Type': 'application/json' } });
+  return new Response(JSON.stringify(body), { status, headers: { 'Content-Type': 'application/json', ...CORS_HEADERS } });
 }
 
 Deno.serve(async (request) => {
+  const preflight = handleCorsPreflight(request);
+  if (preflight) return preflight;
   if (request.method !== 'POST') return json({ error: 'Method not allowed' }, 405);
 
   const supabaseUrl = Deno.env.get('SUPABASE_URL');

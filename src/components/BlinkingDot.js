@@ -1,5 +1,5 @@
 import React, { useEffect, useRef } from 'react';
-import { Animated } from 'react-native';
+import { Animated, Platform } from 'react-native';
 
 export default function BlinkingDot({ style }) {
   const opacity = useRef(new Animated.Value(1)).current;
@@ -10,12 +10,12 @@ export default function BlinkingDot({ style }) {
         Animated.timing(opacity, {
           toValue: 0.2,
           duration: 800,
-          useNativeDriver: true,
+          useNativeDriver: Platform.OS !== 'web',
         }),
         Animated.timing(opacity, {
           toValue: 1,
           duration: 800,
-          useNativeDriver: true,
+          useNativeDriver: Platform.OS !== 'web',
         }),
       ])
     );

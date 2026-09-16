@@ -9,6 +9,7 @@ import { CompetitionsSection } from "./competitions-section";
 import { EarningsSection } from "./earnings-section";
 import { MembershipsSection } from "./memberships-section";
 import { MonitorSection } from "./monitor-section";
+import { NotificationsSection } from "./notifications-section";
 import { OpenPlaySection } from "./open-play-section";
 import { OverviewSection } from "./overview-section";
 import { PlayersSection } from "./players-section";
@@ -25,12 +26,13 @@ export function SectionContent({ section, data, venue, venueId, onVenueChange, n
   if (section === "monitor") return <MonitorSection data={data} venueId={venueId} onVenueChange={onVenueChange} refresh={refresh} />;
   if (section === "players") return <PlayersSection data={data} refresh={refresh} />;
   if (section === "venues") return <VenuesSection venue={venue} refresh={refresh} subview={subview} />;
-  if (section === "programs") return <ProgramsSection data={data} venue={venue} onCreate={onCreate} resourceId={resourceId} />;
+  if (section === "programs") return <ProgramsSection data={data} venue={venue} onCreate={onCreate} refresh={refresh} resourceId={resourceId} />;
   if (section === "competitions") return <CompetitionsSection data={data} venue={venue} onCreate={onCreate} resourceId={resourceId} subview={subview} />;
   if (section === "memberships") return <MembershipsSection data={data} venue={venue} onCreate={onCreate} resourceId={resourceId} />;
   if (section === "analytics") return <AnalyticsSection data={data} />;
   if (section === "earnings") return <EarningsSection data={data} venue={venue} />;
   if (section === "staff") return <StaffSection data={data} venue={venue} refresh={refresh} subview={subview} />;
   if (section === "support") return <SupportSection />;
+  if (section === "notifications") return <NotificationsSection />;
   return <SettingsSection data={data} subview={subview} refresh={refresh} />;
 }

@@ -1,5 +1,5 @@
 import React, { useEffect, useRef } from 'react';
-import { Animated, Easing, StyleSheet, Text, View } from 'react-native';
+import { Animated, Easing, Platform, StyleSheet, Text, View } from 'react-native';
 
 const BALL_IMAGE = require('../../public/images/ball_green.png');
 const colors = { ink: '#0E2321', optic: '#D6E94A' };
@@ -10,10 +10,10 @@ export default function PeakleLoadingScreen({ status = 'GETTING THE COURT READY'
   useEffect(() => {
     const bounceAnimation = Animated.loop(
       Animated.sequence([
-        Animated.timing(bounce, { toValue: 1, duration: 420, easing: Easing.out(Easing.cubic), useNativeDriver: true }),
-        Animated.timing(bounce, { toValue: 0, duration: 310, easing: Easing.in(Easing.quad), useNativeDriver: true }),
-        Animated.timing(bounce, { toValue: 0.32, duration: 170, easing: Easing.out(Easing.quad), useNativeDriver: true }),
-        Animated.timing(bounce, { toValue: 0, duration: 140, easing: Easing.in(Easing.quad), useNativeDriver: true }),
+        Animated.timing(bounce, { toValue: 1, duration: 420, easing: Easing.out(Easing.cubic), useNativeDriver: Platform.OS !== 'web' }),
+        Animated.timing(bounce, { toValue: 0, duration: 310, easing: Easing.in(Easing.quad), useNativeDriver: Platform.OS !== 'web' }),
+        Animated.timing(bounce, { toValue: 0.32, duration: 170, easing: Easing.out(Easing.quad), useNativeDriver: Platform.OS !== 'web' }),
+        Animated.timing(bounce, { toValue: 0, duration: 140, easing: Easing.in(Easing.quad), useNativeDriver: Platform.OS !== 'web' }),
         Animated.delay(100),
       ]),
     );

@@ -14,6 +14,7 @@ import {
   unfollowPlayer,
 } from '../services/directMessages';
 import { supabase } from '../lib/supabase';
+import { PRIVATE_MESSAGES_ENABLED } from '../config/features';
 
 const LIGHT_C = {
   ink: '#0E2321',
@@ -64,7 +65,7 @@ export default function PublicProfileScreen({ navigation, route }) {
   const { isDark } = useTheme();
   C = isDark ? { ...LIGHT_C, ...DARK_CONTENT_COLORS } : LIGHT_C;
   const currentStyles = isDark ? darkStyles : lightStyles;
-  const player = route.params?.player || {};
+  const player = typeof route.params?.player === 'object' ? route.params.player : { id: route.params?.userId };
 
   const [following, setFollowing] = useState(player.isFollowing || false);
   const [followRequestPending, setFollowRequestPending] = useState(player.followRequestPending || false);
@@ -224,7 +225,7 @@ export default function PublicProfileScreen({ navigation, route }) {
     navigation.navigate('DirectChat', { player, ownerTab: route.params?.ownerTab || 'Home' });
   };
 
-  const playerName = player.name || 'Peakle player';
+  const playerName = profileDetails.name || player.name || 'Peakle player';
   const area = profileDetails.area || player.area || 'Location not shared';
   const numericRating = Number(profileDetails.rating);
   const hasRating = profileDetails.rating != null && profileDetails.rating !== '' && Number.isFinite(numericRating);
@@ -274,7 +275,7 @@ export default function PublicProfileScreen({ navigation, route }) {
 
             <View style={currentStyles.heroBody}>
               <View style={currentStyles.avatarRing}>
-                <ProfilePhoto photo={player.avatar} name={playerName} size={96} />
+                <ProfilePhoto photo={profileDetails.avatar || player.avatar} name={playerName} size={96} />
               </View>
 
               <Text numberOfLines={2} style={currentStyles.playerName}>{playerName}</Text>
@@ -333,7 +334,7 @@ export default function PublicProfileScreen({ navigation, route }) {
                     </>
                   )}
                 </Pressable>
-                <Pressable
+                {PRIVATE_MESSAGES_ENABLED ? <Pressable
                   accessibilityRole="button"
                   accessibilityLabel={`Message ${playerName}`}
                   onPress={openChat}
@@ -341,7 +342,7 @@ export default function PublicProfileScreen({ navigation, route }) {
                 >
                   <Icon name="chatbubble-ellipses" size={17} color={C.ink} />
                   <Text style={[currentStyles.actionButtonText, currentStyles.secondaryButtonText]}>Message</Text>
-                </Pressable>
+                </Pressable> : null}
               </View>
             </View>
           </View>

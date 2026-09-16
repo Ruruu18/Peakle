@@ -1,6 +1,7 @@
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.45.4';
+import { CORS_HEADERS, handleCorsPreflight } from '../_shared/cors.ts';
 
-const JSON_HEADERS = { 'Content-Type': 'application/json' };
+const JSON_HEADERS = { 'Content-Type': 'application/json', ...CORS_HEADERS };
 
 function json(body: Record<string, unknown>, status = 200) {
   return new Response(JSON.stringify(body), { status, headers: JSON_HEADERS });
@@ -50,6 +51,8 @@ async function removeChatMedia(admin: ReturnType<typeof createClient>, userId: s
 }
 
 Deno.serve(async (request) => {
+  const preflight = handleCorsPreflight(request);
+  if (preflight) return preflight;
   if (!['POST', 'DELETE'].includes(request.method)) return json({ error: 'Method not allowed' }, 405);
 
   const supabaseUrl = Deno.env.get('SUPABASE_URL');

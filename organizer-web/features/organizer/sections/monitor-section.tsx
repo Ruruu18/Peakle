@@ -2,16 +2,18 @@
 
 import Link from "next/link";
 import { useSearchParams } from "next/navigation";
-import { Check, ChevronLeft, ChevronRight, Clock3, Eye, History, Maximize2, Minimize2, Play, Radio, RotateCcw, Settings2, Trophy, Users } from "lucide-react";
+import { Check, ChevronLeft, ChevronRight, Eye, History, Maximize2, Minimize2, Play, Radio, RotateCcw, Settings2, Trophy, Users } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
 import { requireSupabase } from "@/lib/supabase";
 import type { Competition, OpenPlayMatch, OpenPlaySession, OrganizerData, Registration } from "@/lib/types";
 import { isLiveOpenPlaySession, registrationsForSession } from "@/lib/open-play";
-import { activeMatch, Empty, isCourtScoring, Person, SectionTitle, SelectControl, Status, titleCase } from "../components/portal-ui";
+import { activeMatch, Empty, isCourtScoring, Person, ProfileAvatar, SectionTitle, SelectControl, Status, titleCase } from "../components/portal-ui";
 import { MatchHistoryDialog } from "../dialogs/match-history-dialog";
 import { SessionLifecycleDialog } from "../dialogs/session-lifecycle-dialog";
 import { CompetitionMonitor } from "./competition-monitor";
+import { DisplaySettingsButton } from "../dialogs/display-settings-dialog";
+import { MonitorCourt } from "../components/monitor-court";
 
 const playerName = (lineup: NonNullable<OpenPlayMatch["open_play_match_players"]>[number]) =>
   lineup.open_play_players?.profiles?.display_name || lineup.open_play_players?.guest_name || "Guest player";
@@ -20,6 +22,21 @@ const sortQueue = (players: Registration[]) => [...players].sort((a, b) =>
   Number(a.queue_position ?? Number.MAX_SAFE_INTEGER) - Number(b.queue_position ?? Number.MAX_SAFE_INTEGER)
   || new Date(a.waiting_since || a.checked_in_at || a.joined_at || 0).getTime() - new Date(b.waiting_since || b.checked_in_at || b.joined_at || 0).getTime()
 );
+
+function NextLineupPlayers({ players }: { players: Registration[] }) {
+  return <ol className="lineup-chips" aria-label="Next players in queue order">
+    {players.map((player, index) => {
+      const name = player.profiles?.display_name || player.guest_name || "Guest player";
+      return <li className="lineup-chip" key={player.id}>
+        <span className="lineup-player-photo">
+          <ProfileAvatar name={name} photo={player.profiles?.avatar_url} />
+          <b className="lineup-player-position" aria-hidden="true">{index + 1}</b>
+        </span>
+        <span className="lineup-player-name" title={name}>{name}</span>
+      </li>;
+    })}
+  </ol>;
+}
 
 function OpenCourtCard({ court, queue, sessionId, refresh }: {
   court: OrganizerData["liveCourts"][number];
@@ -61,9 +78,10 @@ function OpenCourtCard({ court, queue, sessionId, refresh }: {
 
   return <article className="card court-card court-operation-card">
     <div className="court-card-head"><span className="court-number">{court.court_number || "–"}</span><div><h3>{court.venue_court?.name || `Court ${court.court_number}`}</h3><p>{titleCase(court.match_format || "doubles")}</p></div><Status value="open" /></div>
+    <MonitorCourt format={court.match_format} />
     <div className="next-lineup">
       <div className="next-lineup-head"><span>NEXT FAIR LINEUP</span><strong>{recommended.length}/{expectedPlayers}</strong></div>
-      {recommended.length ? <div className="lineup-chips">{recommended.map((player, index) => <span key={player.id}><b>{index + 1}</b>{player.profiles?.display_name || player.guest_name || "Guest player"}</span>)}</div> : <p>No checked-in players are waiting yet.</p>}
+      {recommended.length ? <NextLineupPlayers players={recommended} /> : <p>No checked-in players are waiting yet.</p>}
     </div>
     {missing > 0 ? <div className="court-action-note"><Users size={15} /><span>Check in {missing} more player{missing === 1 ? "" : "s"} to start this {court.match_format === "singles" ? "singles" : "doubles"} match.</span></div> : !scorer ? <div className="court-action-note"><Users size={15} /><span>Add at least one signed-in Peakle player so the match has a player scorer.</span></div> : <div className="court-action-note ready"><Check size={15} /><span>{scorer.profiles?.display_name || scorer.guest_name || "The first signed-in player"} will score from the player app.</span></div>}
     <button className="button button-accent court-primary-action" type="button" disabled={busy || missing > 0 || !scorer} onClick={() => void assign()}><Play size={15} />{busy ? "Starting match…" : "Assign & send to court"}</button>
@@ -85,8 +103,7 @@ function LiveCourtCard({ court, match, onViewHistory }: {
 
   return <article className={`card court-card court-operation-card ${scoring ? "live-court-card" : "starting-court-card"}`}>
     <div className="court-card-head"><span className="court-number">{court.court_number || "–"}</span><div><h3>{court.venue_court?.name || `Court ${court.court_number}`}</h3><p>{titleCase(court.match_format || "doubles")} · {scoring ? "live now" : "starting"}</p></div><Status value={scoring ? "playing" : "starting"} /></div>
-    <div className="live-lineup"><div><span>HOME</span><strong>{homeName}</strong></div><div><span>AWAY</span><strong>{awayName}</strong></div></div>
-    <div className="organizer-live-score"><div><span>HOME</span><strong>{scores[0]}</strong></div><i>—</i><div><span>AWAY</span><strong>{scores[1]}</strong></div></div>
+    <MonitorCourt match={match} format={court.match_format} />
     <div className="player-scoring-note"><Eye size={15} /><span><strong>{scorer ? playerName(scorer) : "Assigned player"}</strong> is scoring from the player app. This monitor updates automatically.</span></div>
     <button className="mini-button inline-action match-history-trigger" type="button" onClick={() => onViewHistory(match, homeName, awayName)}><History size={14} /> View match history</button>
   </article>;
@@ -103,19 +120,19 @@ const elapsedTime = (startedAt: string | null | undefined, now: number) => {
 
 function ZoomCourtCard({ court, now, queue }: { court: OrganizerData["liveCourts"][number]; now: number; queue: Registration[] }) {
   const match = activeMatch(court);
-  const lineup = [...(match?.open_play_match_players || [])].sort((a, b) => a.side - b.side || a.position - b.position);
-  const home = lineup.filter((player) => player.side === 0).map(playerName).join(" + ") || "Waiting for lineup";
-  const away = lineup.filter((player) => player.side === 1).map(playerName).join(" + ") || "Waiting for lineup";
   const needed = court.match_format === "singles" ? 2 : 4;
-  const nextNames = queue.slice(0, needed).map((player) => player.profiles?.display_name || player.guest_name || "Guest player");
+  const nextPlayers = queue.slice(0, needed);
+  const missing = needed - nextPlayers.length;
   const scoring = Boolean(match) && (Number(match?.home_score || 0) > 0 || Number(match?.away_score || 0) > 0);
 
   return <article className={`zoom-court-card ${scoring ? "is-live" : match ? "is-starting" : "is-open"}`}>
     <div className="zoom-court-head"><div><span>COURT {court.court_number || "–"}</span><h3>{court.venue_court?.name || `Court ${court.court_number}`}</h3></div><span className={`zoom-court-state ${scoring ? "live" : ""}`}>{scoring ? <><i className="live-dot" />LIVE</> : match ? "STARTING" : "OPEN"}</span></div>
-    {match ? <>
-      <div className="zoom-match-time"><Clock3 size={15} /><span>Match time</span><strong>{elapsedTime(match.started_at, now)}</strong></div>
-      <div className="zoom-score"><div><small>HOME</small><strong>{Number(match.home_score || 0)}</strong><span>{home}</span></div><b>—</b><div><small>AWAY</small><strong>{Number(match.away_score || 0)}</strong><span>{away}</span></div></div>
-    </> : <div className="zoom-open-court"><span><RotateCcw size={22} /></span><div><small>NEXT FAIR LINEUP</small><strong>{nextNames.length === needed ? nextNames.join(" · ") : `Waiting for ${needed - nextNames.length} more player${needed - nextNames.length === 1 ? "" : "s"}`}</strong></div></div>}
+    <MonitorCourt match={match} format={court.match_format} elapsed={match ? elapsedTime(match.started_at, now) : undefined} />
+    {!match && <div className="zoom-next-lineup">
+      <small><RotateCcw size={11} />NEXT FAIR LINEUP</small>
+      {nextPlayers.length > 0 && <NextLineupPlayers players={nextPlayers} />}
+      {missing > 0 && <strong>Waiting for {missing} more player{missing === 1 ? "" : "s"}</strong>}
+    </div>}
     <div className="zoom-court-foot"><span>{titleCase(court.match_format || "doubles")}</span><small>{match ? "Scores update automatically" : "Ready for the next rotation"}</small></div>
   </article>;
 }
@@ -150,7 +167,7 @@ function ZoomMonitor({ data, session, queue, venueId, onVenueChange, onClose, on
     <div className="monitor-zoom-body">
       <section className="monitor-zoom-courts" aria-label="Court scoreboards"><div className="monitor-zoom-section-head"><div><p>COURT SCOREBOARDS</p><h2>{format === "all" ? "All courts" : `${titleCase(format)} courts`}</h2></div><div className="monitor-court-pager"><span>{courts.length ? `${safePage * 4 + 1}–${Math.min(safePage * 4 + 4, courts.length)} of ${courts.length}` : "No courts"}</span>{pageCount > 1 ? <><button type="button" aria-label="Previous courts" disabled={safePage === 0} onClick={() => setPage((current) => Math.max(0, current - 1))}><ChevronLeft size={17} /></button><button type="button" aria-label="Next courts" disabled={safePage >= pageCount - 1} onClick={() => setPage((current) => Math.min(pageCount - 1, current + 1))}><ChevronRight size={17} /></button></> : null}</div></div><div className="monitor-zoom-court-grid">{visibleCourts.map((court) => <ZoomCourtCard key={court.id} court={court} now={now} queue={queue} />)}{!visibleCourts.length ? <div className="monitor-zoom-no-courts"><Trophy size={27} /><strong>No {format === "all" ? "" : format} courts in this session</strong><span>Choose a different format to see the court board.</span></div> : null}</div></section>
       <aside className="monitor-zoom-side"><div className="monitor-side-tabs" role="tablist" aria-label="Monitor details"><button className={tab === "status" ? "active" : ""} type="button" role="tab" aria-selected={tab === "status"} onClick={() => setTab("status")}>Status</button><button className={tab === "matchups" ? "active" : ""} type="button" role="tab" aria-selected={tab === "matchups"} onClick={() => setTab("matchups")}>Head-to-head</button><button className={tab === "controls" ? "active" : ""} type="button" role="tab" aria-selected={tab === "controls"} aria-label="Monitor settings" onClick={() => setTab("controls")}><Settings2 size={15} /></button></div>
-        <div className="monitor-side-content">{tab === "status" ? <><div className="monitor-side-summary"><div><strong>{liveCourts.length}</strong><span>IN PLAY</span></div><div><strong>{courts.length - liveCourts.length}</strong><span>OPEN</span></div><div><strong>{queue.length}</strong><span>WAITING</span></div></div><div className="monitor-status-list">{courts.map((court) => { const match = activeMatch(court); const scoring = isCourtScoring(court); return <div key={court.id}><span className={scoring ? "live" : "open"}>{court.court_number || "–"}</span><div><strong>{court.venue_court?.name || `Court ${court.court_number}`}</strong><small>{scoring ? `${match?.home_score || 0}–${match?.away_score || 0} · ${elapsedTime(match?.started_at, now)}` : match ? "Starting · about to begin" : "Open for next rotation"}</small></div><b>{scoring ? "LIVE" : match ? "STARTING" : "OPEN"}</b></div>; })}</div></> : tab === "matchups" ? <div className="monitor-matchups">{liveCourts.map((court) => { const match = activeMatch(court)!; const lineup = [...(match.open_play_match_players || [])].sort((a, b) => a.side - b.side || a.position - b.position); return <article key={court.id}><p>COURT {court.court_number || "–"}</p><div><span>{lineup.filter((player) => player.side === 0).map(playerName).join(" + ") || "Home team"}</span><strong>{match.home_score || 0}</strong></div><i>VS</i><div><span>{lineup.filter((player) => player.side === 1).map(playerName).join(" + ") || "Away team"}</span><strong>{match.away_score || 0}</strong></div></article>; })}{!liveCourts.length ? <div className="monitor-side-empty"><Trophy size={24} /><strong>No head-to-head matches yet</strong><span>Matchups appear as courts go live.</span></div> : null}</div> : <div className="monitor-controls"><p className="eyebrow">SESSION CONTROL</p><h3>{session.name}</h3><div><span>Session code</span><strong>{session.session_code || "—"}</strong></div><div><span>Checked in</span><strong>{data.registrations.filter((player) => Boolean(player.checked_in_at) && !player.departed_at).length}</strong></div><div><span>Match format</span><strong>{titleCase(session.match_format)}</strong></div><Link className="button button-accent" href={`/open-play/${session.id}/players`}>Manage check-in</Link><button className="button button-danger" type="button" onClick={onEnd}>End live session</button></div>}</div>
+        <div className="monitor-side-content">{tab === "status" ? <><div className="monitor-side-summary"><div><strong>{liveCourts.length}</strong><span>IN PLAY</span></div><div><strong>{courts.length - liveCourts.length}</strong><span>OPEN</span></div><div><strong>{queue.length}</strong><span>WAITING</span></div></div><div className="monitor-status-list">{courts.map((court) => { const match = activeMatch(court); const scoring = isCourtScoring(court); return <div key={court.id}><span className={scoring ? "live" : "open"}>{court.court_number || "–"}</span><div><strong>{court.venue_court?.name || `Court ${court.court_number}`}</strong><small>{scoring ? `${match?.home_score || 0}–${match?.away_score || 0} · ${elapsedTime(match?.started_at, now)}` : match ? "Starting · about to begin" : "Open for next rotation"}</small></div><b>{scoring ? "LIVE" : match ? "STARTING" : "OPEN"}</b></div>; })}</div></> : tab === "matchups" ? <div className="monitor-matchups">{liveCourts.map((court) => { const match = activeMatch(court)!; const lineup = [...(match.open_play_match_players || [])].sort((a, b) => a.side - b.side || a.position - b.position); return <article key={court.id}><p>COURT {court.court_number || "–"}</p><div><span>{lineup.filter((player) => player.side === 0).map(playerName).join(" + ") || "Home team"}</span><strong>{match.home_score || 0}</strong></div><i>VS</i><div><span>{lineup.filter((player) => player.side === 1).map(playerName).join(" + ") || "Away team"}</span><strong>{match.away_score || 0}</strong></div></article>; })}{!liveCourts.length ? <div className="monitor-side-empty"><Trophy size={24} /><strong>No head-to-head matches yet</strong><span>Matchups appear as courts go live.</span></div> : null}</div> : <div className="monitor-controls"><p className="eyebrow">SESSION CONTROL</p><h3>{session.name}</h3><div><span>Session code</span><strong>{session.session_code || "—"}</strong></div><div><span>Checked in</span><strong>{data.registrations.filter((player) => Boolean(player.checked_in_at) && !player.departed_at).length}</strong></div><div><span>Match format</span><strong>{titleCase(session.match_format)}</strong></div><DisplaySettingsButton panel data={data} venueId={session.venue_id || venueId} source={`session:${session.id}`} /><Link className="button button-accent" href={`/open-play/${session.id}/players`}>Manage check-in</Link><button className="button button-danger" type="button" onClick={onEnd}>End live session</button></div>}</div>
       </aside>
       <section className="monitor-live-feed" aria-label="Live updates"><div className="monitor-feed-title"><span><Radio size={16} /></span><div><p>LIVE UPDATES</p><h3>Court activity</h3></div></div><div className="monitor-feed-items">{updates.map((update) => <div key={update.id}><i className={update.tone} /><span><strong>{update.title}</strong><small>{update.detail}</small></span><time>{update.time}</time></div>)}</div></section>
     </div>
@@ -210,7 +227,7 @@ function OpenPlayMonitorSection({ data, sessionId, venueId, onVenueChange, refre
   </>;
 }
 
-function CompetitionMonitorLaunch({ competitions, competitionId }: { competitions: Competition[]; competitionId: string }) {
+function CompetitionMonitorLaunch({ competitions, competitionId, displaySettings }: { competitions: Competition[]; competitionId: string; displaySettings: React.ReactNode }) {
   const [presenting, setPresenting] = useState(false);
   const hostRef = useRef<HTMLDivElement>(null);
   const competition = competitions.find((item) => item.id === competitionId);
@@ -241,7 +258,7 @@ function CompetitionMonitorLaunch({ competitions, competitionId }: { competition
   };
 
   return <div ref={hostRef} className="competition-presentation-host">
-    {presenting ? <CompetitionMonitor competitions={competitions} competitionId={competitionId} presentationFullscreen /> : <>
+    {presenting ? <CompetitionMonitor competitions={competitions} competitionId={competitionId} presentationFullscreen displaySettings={displaySettings} /> : <>
       <div className="live-banner monitor-banner"><span className="live-dot" /><div><strong>{competition.name}</strong><span>{titleCase(competition.kind || "competition")} · {divisions} divisions · {entries} entries</span></div><button className="mini-button monitor-expand-button" type="button" onClick={openPresentation}><Maximize2 size={14} /> Full-screen monitor</button><Link className="mini-button inline-action" href={`/competitions/${competition.id}`}>Manage competition</Link></div>
       <section className="card monitor-next-step"><span className="monitor-next-icon"><Trophy size={20} /></span><div><p className="eyebrow">COMPETITION PRESENTATION</p><h2>Ready for the venue display.</h2><p>The bracket, live score, next match, and update feed stay hidden here until you launch the full-screen monitor.</p></div><div className="monitor-next-metrics"><span><strong>{divisions}</strong><small>DIVISIONS</small></span><span><strong>{entries}</strong><small>ENTRIES</small></span></div></section>
     </>}
@@ -269,7 +286,8 @@ export function MonitorSection({ data, venueId, onVenueChange, refresh }: { data
     ? selectedSource
     : requestedSource || options[0]?.value || "";
 
-  if (!source) return <Empty title="Nothing is live" detail="Start an open-play session or activate a competition to show it in the Live Monitor." />;
+  const displaySettings = <DisplaySettingsButton data={data} venueId={venueId} source={source} />;
+  if (!source) return <>{displaySettings}<Empty title="Nothing is live" detail="Start an open-play session or activate a competition to show it in the Live Monitor." /></>;
 
   const picker = options.length > 1 ? <div className="competition-monitor-switchers monitor-activity-switcher">
     <SelectControl value={source} options={options} onChange={setSelectedSource} ariaLabel="Live activity" className="competition-switch" />
@@ -277,7 +295,7 @@ export function MonitorSection({ data, venueId, onVenueChange, refresh }: { data
 
   if (source.startsWith("competition:")) {
     const competitionId = source.slice("competition:".length);
-    return <>{picker}<CompetitionMonitorLaunch competitions={competitions} competitionId={competitionId} /></>;
+    return <>{displaySettings}{picker}<CompetitionMonitorLaunch competitions={competitions} competitionId={competitionId} displaySettings={displaySettings} /></>;
   }
 
   const sessionId = source.slice("session:".length);

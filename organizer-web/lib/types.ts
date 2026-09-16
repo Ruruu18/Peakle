@@ -1,5 +1,17 @@
 export type VenueRole = "owner" | "manager" | "front_desk" | "court_monitor" | "scorer" | "viewer" | "admin";
 
+// A single rally/point announcement, shown as an on-court overlay the way
+// the player app announces "who scored" on the match screen. `id` changes
+// with every point so the UI can restart its fade animation.
+export type PointAnnouncement = {
+  id: string;
+  player: string;
+  team: string;
+  action: string;
+  score: string;
+  note: string;
+};
+
 export type Court = {
   id: string;
   venue_id: string;
@@ -84,9 +96,12 @@ export type OpenPlayMatch = {
   status?: string | null;
   home_score?: number | null;
   away_score?: number | null;
+  server_side?: number | null;
+  serving_position?: number | null;
   started_at?: string | null;
   scorer_player_id?: string | null;
   open_play_match_players?: OpenPlayMatchPlayer[];
+  last_point?: PointAnnouncement | null;
 };
 
 export type OpenPlayScoreEvent = {
@@ -108,16 +123,32 @@ export type StaffMember = {
   profiles?: { display_name?: string | null; avatar_url?: string | null } | null;
 };
 
+export type ProgramRegistrationStatus = "registered" | "waitlisted" | "attended" | "cancelled" | "no_show";
+
+export type ProgramRegistration = {
+  program_id: string;
+  user_id: string;
+  status: ProgramRegistrationStatus;
+  checked_in_at?: string | null;
+  created_at?: string | null;
+  profiles?: { display_name?: string | null; avatar_url?: string | null } | null;
+};
+
 export type Program = {
   id: string;
   venue_id: string;
   name: string;
   kind?: string | null;
   starts_at?: string | null;
+  ends_at?: string | null;
+  skill_division?: string | null;
+  description?: string | null;
+  recurrence_rule?: Record<string, unknown> | null;
+  updated_at?: string | null;
   capacity?: number | null;
   price?: number | null;
   registration_status?: string | null;
-  program_registrations?: { status?: string | null }[];
+  program_registrations?: ProgramRegistration[];
 };
 
 export type CompetitionEntry = {
@@ -169,6 +200,7 @@ export type CompetitionBracketMatch = {
   status: string;
   scheduled_at?: string | null;
   matches?: CompetitionMatch | null;
+  last_point?: PointAnnouncement | null;
 };
 
 export type CompetitionDivision = {

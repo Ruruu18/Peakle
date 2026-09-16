@@ -80,6 +80,13 @@ export default function UserDetailDrawer({
     day: "numeric",
   });
 
+  const trialDaysLeft = user.trial_ends_at
+    ? Math.ceil((new Date(user.trial_ends_at).getTime() - Date.now()) / 86400000)
+    : null;
+  const trialEndDate = user.trial_ends_at
+    ? new Date(user.trial_ends_at).toLocaleDateString("en-AU", { year: "numeric", month: "long", day: "numeric" })
+    : null;
+
   return (
     <>
       <Drawer open={!!user} onClose={onClose} title="User Details">
@@ -113,6 +120,17 @@ export default function UserDetailDrawer({
             <div className="drawer-field">
               <span className="drawer-field-label">MEMBERSHIP</span>
               <span className="drawer-field-value">{user.membership_tier}</span>
+            </div>
+          )}
+
+          {trialEndDate && trialDaysLeft !== null && (
+            <div className="drawer-field">
+              <span className="drawer-field-label">TRIAL</span>
+              <span className="drawer-field-value">
+                {trialDaysLeft > 0
+                  ? `Ends ${trialEndDate} · ${trialDaysLeft} day${trialDaysLeft === 1 ? "" : "s"} left`
+                  : `Ended ${trialEndDate}`}
+              </span>
             </div>
           )}
 

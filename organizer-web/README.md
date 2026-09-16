@@ -7,6 +7,7 @@ Responsive organizer operations portal for desktop, tablet, and mobile browsers.
 - Organizer overview and live operational metrics
 - Open-play session publishing and session history
 - Court monitor, scores, open courts, and fair-play queue
+- Managed court scoreboard links for independent venue displays
 - Registration approval and player check-in
 - Venue and court availability management
 - Programs, competitions, and membership products
@@ -16,6 +17,31 @@ Responsive organizer operations portal for desktop, tablet, and mobile browsers.
 - Responsive mobile navigation and installable web-app manifest
 
 ## Local development
+
+### Temporary pilot offer
+
+The public landing page, sign-in/sign-up copy, and search/social metadata use
+pilot messaging by default. **Join the pilot** goes directly to `/register`;
+existing users sign in. There is no separate application or approval step for
+account creation. Organizers invite players through their session links/codes;
+players use their own player-app accounts. Existing venue permissions still
+control who can manage courts and sessions.
+
+Feedback follows testing. `NEXT_PUBLIC_PILOT_FEEDBACK_URL` can point to a hosted
+survey for organizers and players. Without it, **Share pilot feedback** opens
+an email draft with a short questionnaire for `support@peakle.app`. Testers
+must send the email themselves; opening the draft does not save a response.
+
+At release, set `NEXT_PUBLIC_ORGANIZER_TRIAL_ENABLED=true` and **rebuild/redeploy**
+to restore the existing 14-day offer, pricing, FAQs, metadata, and email-signup
+trial request. Pilot email signups omit the trial request so they do not start
+a new 14-day countdown. Existing trial records, their expiry, booking fees, and
+venue permissions are unchanged. This switch is presentation/signup configuration,
+not an access-control or fee-waiver mechanism. It does not give existing pilot
+accounts a new trial when enabled; any launch offer for those accounts must be
+arranged separately. The existing Google sign-in flow is unchanged.
+
+### Environment
 
 The Next.js config can reuse the public Supabase values from the parent Expo `.env` file. A standalone deployment should use the names in `.env.example`.
 
@@ -47,9 +73,96 @@ npm run lint
 npm run typecheck
 npm run build
 node scripts/visual-qa.mjs
+node scripts/navigation-qa.mjs
 ```
 
 The visual QA script expects the development server on `localhost:3000` by default and writes desktop/mobile screenshots to `/private/tmp`. Set `PORTAL_BASE_URL` to test another local port.
+
+The navigation QA script uses an isolated demo session to check desktop tabs, mobile tabs and More, direct profile access, settings tabs, keyboard controls, viewport changes, and browser Back/Forward.
+
+Program management includes editing, opening/closing registration, cancellation with preserved history, waitlist admissions, attendance corrections, and roster export. Apply `supabase/migrations/202609070001_program_management.sql` before using these controls with live data. Its database functions enforce owner/manager/admin access, reject stale edits, and serialize capacity changes with player registrations. Program cancellation does not send notifications; organizers should contact participants separately.
+
+Program checks: `node --test scripts/program-utils.test.mjs` (Node 22.18+), and `node scripts/programs-qa.mjs` with the development server running. The browser checks use only demo data and cover desktop/mobile layouts, editing, registration changes, attendance, export, and creation.
+
+## Court scoreboard displays
+
+Apply `supabase/migrations/202609120001_court_scoreboard_displays.sql` through the
+normal migration process before using displays with live data. The migration
+adds display settings, read-only scoreboard snapshots, and competition court
+assignment. The web build does not apply it automatically.
+
+Venue owners, managers, and platform admins can open **Live Monitor → Full-screen
+monitor → Settings tab → Manage displays**, add a named display, and select its
+event and court. Competition monitors also provide a Manage displays action.
+Each display
+has a separate **Copy link / Open display** action. Open the link on a court
+computer and press **Full screen**; no organizer login is needed on that device.
+For monitors attached to one computer, use extended-display mode and move a
+separate browser window onto each monitor. Browsers require a user action to
+enter fullscreen; monitor placement is controlled by the operating system.
+
+Displays can show one court, all courts, a tournament bracket, or a division's
+standings. The all-court board rotates four courts at a time; bracket and
+standings pages rotate every ten seconds. Open-play displays follow the session
+court. Competition displays follow the venue court, optionally filtered to a
+division. In the display editor, expand **Match court assignments** to assign
+existing scheduled/live competition matches. Schedule those matches through
+the competition workflow first. This works for tournaments, leagues, ladders,
+and seasons; brackets are specific to tournaments.
+
+Scoreboards read the existing scoring records. Open play includes live scores
+and serve state. Competitions use saved live match state where present, and the
+latest numbered game otherwise. A scheduled match shows its players with
+“Waiting for match to start”; a court without a match shows “Waiting for next
+match.” This feature does not start matches or grant scoring permission.
+
+Each screen independently fetches a small snapshot every two seconds from the
+shared Supabase backend. The main organizer computer need not remain open.
+Settings changes appear on the next successful refresh. During a connection
+failure, the screen retains its last score with a reconnecting message and the
+last successful update time; reconnection fetches current data. An invalidated
+link clears its scoreboard on its next successful refresh.
+
+Display tokens are unguessable, revocable links, stored in the URL fragment so
+they are not sent in page requests or referrers. Anyone with the link can read
+its assigned presentation. Tokens are visible only to authorized venue managers
+through RLS; direct writes to display settings are denied. The anonymous
+snapshot function returns names, scores, and presentation information only.
+It accepts no caller-selected court/event and cannot change scores. **New link**
+invalidates the previous link; **Disconnect** invalidates it and disables the
+display while retaining its setup. **Delete** confirms permanent removal of the
+display and invalidates its link, preserving all match, score, and court data.
+Display management rejects stale edits. The public `/display` page
+does not restore an organizer authentication session.
+
+The interactive demo supports these controls locally. Its explicitly marked
+`/display?demo=1#…` links share demo settings between tabs of the same browser
+only; real displays on different computers require the deployed backend.
+
+Verification with a local organizer preview on port 3000:
+
+```sh
+npm run test:displays
+```
+
+This browser check uses demo data and intercepted API fixtures, including two
+independent browser contexts, score changes, reconnects, next-match transitions,
+court reassignment, disconnect, competition views, and TV/mobile layouts.
+Screenshots are written to `/private/tmp/peakle-displays-qa`.
+
+The database check executes the migration against an in-memory PostgreSQL
+engine with a minimal existing schema; it does not access the hosted project:
+
+```sh
+npm install --prefix /private/tmp/peakle-display-db-check --no-audit --no-fund @electric-sql/pglite
+# From the repository root:
+PGLITE_MODULE=/private/tmp/peakle-display-db-check/node_modules/@electric-sql/pglite/dist/index.js node supabase/tests/scoreboard-displays.mjs
+```
+
+It checks permissions, court/venue isolation, token rotation, stale edits,
+match transitions, competition assignments, and current-game score selection.
+After migration and deployment, rehearse with the actual venue computers and
+scorer devices to confirm network connectivity and display legibility.
 
 ## Deployment
 

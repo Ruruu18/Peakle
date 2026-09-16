@@ -3,7 +3,6 @@ import { AppState, Platform } from 'react-native';
 import Constants from 'expo-constants';
 import * as Device from 'expo-device';
 import * as Network from 'expo-network';
-import * as Notifications from 'expo-notifications';
 import { useAuth } from './AuthContext';
 import { isSupabaseConfigured, requireSupabase } from '../lib/supabase';
 import {
@@ -20,10 +19,12 @@ import {
 } from '../services/realtimeOperations';
 import { respondFollowRequest as respondToFollowRequest } from '../services/directMessages';
 import { configureInteractiveNotifications } from '../services/notificationActions';
+import { PRIVATE_MESSAGES_ENABLED } from '../config/features';
 
+const Notifications = Platform.OS === 'web' ? null : require('expo-notifications');
 const OperationsContext = createContext(null);
 
-Notifications.setNotificationHandler({
+if (Platform.OS !== 'web') Notifications.setNotificationHandler({
   handleNotification: async () => ({ shouldShowBanner: true, shouldShowList: true, shouldPlaySound: true, shouldSetBadge: true }),
 });
 
@@ -38,7 +39,7 @@ export function OperationsProvider({ children }) {
 
   const refreshNotifications = useCallback(async () => {
     if (!user?.id || !isSupabaseConfigured) { setNotifications([]); return []; }
-    const rows = await listNotifications();
+    const rows = (await listNotifications()).filter((notice) => PRIVATE_MESSAGES_ENABLED || (!notice.data?.conversationId && !String(notice.data?.notificationKind || '').startsWith('direct_message')));
     setNotifications(rows);
     return rows;
   }, [user?.id]);

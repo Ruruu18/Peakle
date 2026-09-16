@@ -14,6 +14,7 @@ type AuthContextValue = {
   configured: boolean;
   issue: string | null;
   signIn: (email: string, password: string) => Promise<void>;
+  signInWithGoogle: () => Promise<void>;
   signOut: () => Promise<void>;
 };
 type AdminContextValue = { isAdmin: boolean; adminLoading: boolean };
@@ -124,6 +125,21 @@ function AuthProvider({ children }: { children: React.ReactNode }) {
     if (error) throw error;
   }, []);
 
+  const signInWithGoogle = useCallback(async () => {
+    const client = getSupabase();
+    if (!client) throw new Error("Add the Supabase environment values before signing in.");
+    setIssue(null);
+    const { error } = await withTimeout(
+      client.auth.signInWithOAuth({
+        provider: "google",
+        options: { redirectTo: `${window.location.origin}/dashboard` },
+      }),
+      15000,
+      "Google sign in took too long. Check your connection and try again.",
+    );
+    if (error) throw error;
+  }, []);
+
   const signOut = useCallback(async () => {
     await getSupabase()?.auth.signOut();
   }, []);
@@ -134,8 +150,9 @@ function AuthProvider({ children }: { children: React.ReactNode }) {
     configured,
     issue,
     signIn,
+    signInWithGoogle,
     signOut,
-  }), [configured, issue, loading, signIn, signOut, user]);
+  }), [configured, issue, loading, signIn, signInWithGoogle, signOut, user]);
 
   const adminValue = useMemo<AdminContextValue>(() => ({
     isAdmin,

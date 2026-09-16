@@ -33,7 +33,6 @@ import {
   requestHumanSupport,
   sendSupportMessage,
   startSupportConversation,
-  triggerSupportAiReply,
   uploadSupportChatMedia,
 } from '../services/supportChat';
 
@@ -55,8 +54,7 @@ function Icon({ name, size = 20, color }) {
 }
 
 const STATUS_COPY = {
-  bot: 'Peakle AI is answering',
-  botNeedsHuman: "Couldn't find an answer — talk to a teammate?",
+  bot: 'Answered by Peakle AI',
   open: 'Waiting for a teammate',
   assigned: (agentName) => `Chatting with ${agentName || 'Peakle support'}`,
   closed: 'Conversation closed',
@@ -66,8 +64,8 @@ function AnimatedTypingDots({ colors }) {
   const values = useRef([0, 1, 2].map(() => new Animated.Value(0.35))).current;
   useEffect(() => {
     const animation = Animated.loop(Animated.stagger(130, values.map((value) => Animated.sequence([
-      Animated.timing(value, { toValue: 1, duration: 220, easing: Easing.out(Easing.quad), useNativeDriver: true }),
-      Animated.timing(value, { toValue: 0.35, duration: 220, easing: Easing.in(Easing.quad), useNativeDriver: true }),
+      Animated.timing(value, { toValue: 1, duration: 220, easing: Easing.out(Easing.quad), useNativeDriver: Platform.OS !== 'web' }),
+      Animated.timing(value, { toValue: 0.35, duration: 220, easing: Easing.in(Easing.quad), useNativeDriver: Platform.OS !== 'web' }),
     ]))));
     animation.start();
     return () => animation.stop();
@@ -82,20 +80,43 @@ function AnimatedTypingDots({ colors }) {
 function SupportMessageBubble({ message, colors, seen }) {
   const fromAi = message.senderType === 'ai';
   const mine = message.mine;
+  const entrance = useRef(new Animated.Value(0)).current;
+  useEffect(() => {
+    Animated.timing(entrance, {
+      toValue: 1,
+      duration: 190,
+      easing: Easing.out(Easing.cubic),
+      useNativeDriver: Platform.OS !== 'web',
+    }).start();
+  }, [entrance]);
   return (
-    <View style={[s.messageRow, mine && s.messageRowMine]}>
+    <Animated.View
+      style={[
+        s.messageRow,
+        mine && s.messageRowMine,
+        { opacity: entrance, transform: [{ translateY: entrance.interpolate({ inputRange: [0, 1], outputRange: [7, 0] }) }] },
+      ]}
+    >
       {!mine ? (
-        <Text style={[s.senderLabel, { color: fromAi ? colors.teal : colors.ink70 }]}>
-          {fromAi ? '✦ Peakle AI' : message.sender}
-        </Text>
+        <View style={s.senderRow}>
+          {fromAi ? <Icon name="sparkles" size={10} color={colors.teal} /> : null}
+          <Text style={[s.senderLabel, { color: fromAi ? colors.teal : colors.ink70 }]}>
+            {fromAi ? 'Peakle AI' : message.sender}
+          </Text>
+        </View>
       ) : null}
-      <View style={[s.bubble, { backgroundColor: colors.surface, borderColor: colors.line }, mine && { backgroundColor: colors.teal, borderColor: colors.teal }]}>
+      <View style={[
+        s.bubble,
+        { backgroundColor: colors.surface, borderColor: colors.line },
+        fromAi && { backgroundColor: colors.tealWash, borderColor: colors.teal },
+        mine && { backgroundColor: colors.teal, borderColor: colors.teal },
+      ]}>
         {message.mediaUrl ? <Image source={{ uri: message.mediaUrl }} style={s.bubbleImage} resizeMode="cover" /> : null}
         {message.text ? <Text style={[s.bubbleText, { color: mine ? '#FFFFFF' : colors.ink }, message.mediaUrl && s.bubbleTextSpacing]}>{message.text}</Text> : null}
         <Text style={[s.bubbleTime, { color: mine ? 'rgba(255,255,255,.7)' : colors.ink40 }]}>{message.time}</Text>
       </View>
       {mine && seen ? <Text style={[s.seenText, { color: colors.ink40 }]}>Seen</Text> : null}
-    </View>
+    </Animated.View>
   );
 }
 
@@ -103,8 +124,30 @@ function QuickReplyChips({ colors, onPick, disabled }) {
   return (
     <View style={s.chipsWrap}>
       {SUPPORT_QUICK_REPLIES.map((item) => (
-        <Pressable key={item.label} disabled={disabled} onPress={() => onPick(item)} style={[s.chip, { backgroundColor: colors.tealWash, borderColor: colors.line }]}>
+        <Pressable
+          key={item.label}
+          disabled={disabled}
+          onPress={() => onPick(item)}
+          style={({ pressed }) => [s.chip, { backgroundColor: colors.tealWash, borderColor: colors.line }, pressed && s.pressed]}
+        >
           <Text style={[s.chipText, { color: colors.teal }]}>{item.label}</Text>
+        </Pressable>
+      ))}
+    </View>
+  );
+}
+
+function SuggestionCards({ colors, onPick, disabled }) {
+  return (
+    <View style={s.suggestionsWrap}>
+      {SUPPORT_QUICK_REPLIES.slice(0, 3).map((item) => (
+        <Pressable
+          key={item.label}
+          disabled={disabled}
+          onPress={() => onPick(item)}
+          style={({ pressed }) => [s.suggestionCard, { backgroundColor: colors.surface, borderColor: colors.line }, pressed && s.pressed]}
+        >
+          <Text style={[s.suggestionText, { color: colors.ink70 }]}>{item.prompt}</Text>
         </Pressable>
       ))}
     </View>
@@ -160,11 +203,21 @@ export function SupportChatBody({ initialConversationId = null, onClose }) {
   const [ratingBusy, setRatingBusy] = useState(false);
   const [ratingDismissed, setRatingDismissed] = useState(false);
   const scrollRef = useRef(null);
+  const scrollFrameRef = useRef(null);
+  const stickToBottomRef = useRef(true);
   const channelRef = useRef(null);
   const typingActiveRef = useRef(false);
   const typingStopTimer = useRef(null);
   const typingHeartbeatTimer = useRef(null);
   const typingExpiryTimer = useRef(null);
+
+  const scrollToLatest = useCallback((animated = true) => {
+    if (scrollFrameRef.current) cancelAnimationFrame(scrollFrameRef.current);
+    scrollFrameRef.current = requestAnimationFrame(() => {
+      scrollRef.current?.scrollToEnd({ animated });
+      scrollFrameRef.current = null;
+    });
+  }, []);
 
   const upsertMessage = useCallback((message) => {
     if (!message) return;
@@ -278,9 +331,11 @@ export function SupportChatBody({ initialConversationId = null, onClose }) {
   useEffect(() => () => stopTyping(), [stopTyping]);
 
   useEffect(() => {
-    const frame = requestAnimationFrame(() => scrollRef.current?.scrollToEnd({ animated: true }));
-    return () => cancelAnimationFrame(frame);
-  }, [messages.length, remoteTyping]);
+    if (stickToBottomRef.current) scrollToLatest(true);
+  }, [messages.length, remoteTyping, scrollToLatest]);
+  useEffect(() => () => {
+    if (scrollFrameRef.current) cancelAnimationFrame(scrollFrameRef.current);
+  }, []);
 
   useEffect(() => { setRatingDismissed(false); }, [conversationId]);
 
@@ -293,6 +348,7 @@ export function SupportChatBody({ initialConversationId = null, onClose }) {
   const startWith = async (text, category = null) => {
     const clean = text.trim();
     if ((!clean && !pendingImage) || sending) return;
+    stickToBottomRef.current = true;
     setSending(true);
     let uploadedMedia = null;
     try {
@@ -301,7 +357,6 @@ export function SupportChatBody({ initialConversationId = null, onClose }) {
       setDraft('');
       setPendingImage(null);
       setConversationId(result.conversationId);
-      triggerSupportAiReply(result.conversationId);
     } catch (error) {
       if (uploadedMedia?.path) deleteSupportChatMedia(uploadedMedia.path).catch(() => {});
       Alert.alert('Message not sent', error.message);
@@ -314,6 +369,7 @@ export function SupportChatBody({ initialConversationId = null, onClose }) {
     const clean = draft.trim();
     if (!conversationId) return startWith(clean);
     if ((!clean && !pendingImage) || sending) return;
+    stickToBottomRef.current = true;
     stopTyping();
     setSending(true);
     let uploadedMedia = null;
@@ -323,9 +379,24 @@ export function SupportChatBody({ initialConversationId = null, onClose }) {
       setDraft('');
       setPendingImage(null);
       await refreshConversation();
-      triggerSupportAiReply(conversationId);
     } catch (error) {
       if (uploadedMedia?.path) deleteSupportChatMedia(uploadedMedia.path).catch(() => {});
+      Alert.alert('Message not sent', error.message);
+    } finally {
+      setSending(false);
+    }
+  };
+
+  const sendPrompt = async (text) => {
+    const clean = text.trim();
+    if (!clean || !conversationId || sending) return;
+    stickToBottomRef.current = true;
+    stopTyping();
+    setSending(true);
+    try {
+      await sendSupportMessage(conversationId, clean, null);
+      await refreshConversation();
+    } catch (error) {
       Alert.alert('Message not sent', error.message);
     } finally {
       setSending(false);
@@ -358,15 +429,28 @@ export function SupportChatBody({ initialConversationId = null, onClose }) {
     }
   };
 
+  const beginNewConversation = () => {
+    stopTyping();
+    setConversationId(null);
+    setConversation(null);
+    setMessages([]);
+    setDraft('');
+    setPendingImage(null);
+    setRemoteTyping(false);
+    setRatingDismissed(false);
+  };
+
   const status = conversation?.status || 'bot';
-  const needsHuman = status === 'bot' && Boolean(conversation?.needsHuman);
   const statusText = !conversationId
     ? 'Ask a question or pick a topic below'
     : status === 'assigned'
       ? STATUS_COPY.assigned(conversation?.assignedAgentName)
-      : needsHuman ? STATUS_COPY.botNeedsHuman
       : STATUS_COPY[status] || STATUS_COPY.bot;
-  const canTalkToHuman = needsHuman;
+  // The server now auto-escalates out of "bot" status the instant the AI
+  // can't answer (see 202608280002_builtin_support_responder.sql), so this
+  // button offers proactive escalation during an active AI chat rather than
+  // reacting to a "couldn't answer" state the client would ever observe.
+  const canTalkToHuman = Boolean(conversationId) && status === 'bot';
   const latestMine = [...messages].reverse().find((message) => message.mine);
   const latestMineSeen = latestMine && conversation?.agentLastReadAt && new Date(conversation.agentLastReadAt) >= new Date(latestMine.createdAt);
   const showCsat = conversationId && status === 'closed' && !conversation?.csatRating && !ratingDismissed;
@@ -381,12 +465,17 @@ export function SupportChatBody({ initialConversationId = null, onClose }) {
           </Pressable>
         ) : null}
         <View style={s.flex}>
-          <Text style={[s.title, { color: colors.ink }]}>Peakle Support</Text>
+          <Text style={[s.title, { color: colors.ink }]}>{status === 'bot' ? 'Peakle AI' : 'Peakle Support'}</Text>
           <Text style={[s.subtitle, { color: colors.ink40 }]}>{statusText}</Text>
         </View>
         {canTalkToHuman ? (
           <Pressable accessibilityLabel="Talk to a human" disabled={requestingHuman} onPress={talkToHuman} style={[s.humanButton, { backgroundColor: colors.tealWash }]}>
             {requestingHuman ? <ActivityIndicator size="small" color={colors.teal} /> : <Icon name="person-outline" size={16} color={colors.teal} />}
+          </Pressable>
+        ) : null}
+        {conversationId ? (
+          <Pressable accessibilityLabel="Start a new conversation" onPress={beginNewConversation} style={[s.iconButton, { borderColor: colors.line, backgroundColor: colors.surface }]}>
+            <Icon name="add" size={20} color={colors.ink} />
           </Pressable>
         ) : null}
       </View>
@@ -396,11 +485,34 @@ export function SupportChatBody({ initialConversationId = null, onClose }) {
         <View style={s.loading}><ActivityIndicator color={colors.teal} /></View>
       ) : (
         <KeyboardAvoidingView style={s.flex} behavior={Platform.OS === 'ios' ? 'padding' : undefined} keyboardVerticalOffset={8}>
-          <ScrollView ref={scrollRef} style={s.flex} contentContainerStyle={s.messageContent} keyboardShouldPersistTaps="handled" onContentSizeChange={() => scrollRef.current?.scrollToEnd({ animated: true })}>
+          <ScrollView
+            ref={scrollRef}
+            style={s.flex}
+            contentContainerStyle={s.messageContent}
+            keyboardShouldPersistTaps="handled"
+            keyboardDismissMode={Platform.OS === 'ios' ? 'interactive' : 'on-drag'}
+            scrollEventThrottle={16}
+            onScroll={({ nativeEvent }) => {
+              const distanceFromBottom = nativeEvent.contentSize.height - nativeEvent.layoutMeasurement.height - nativeEvent.contentOffset.y;
+              stickToBottomRef.current = distanceFromBottom < 72;
+            }}
+            onContentSizeChange={() => {
+              if (stickToBottomRef.current) scrollToLatest(true);
+            }}
+          >
             {!conversationId ? (
               <View style={s.startPrompt}>
+                <View style={[s.aiWelcome, { backgroundColor: colors.tealWash, borderColor: colors.line }]}>
+                  <View style={[s.aiMark, { backgroundColor: colors.optic }]}>
+                    <Icon name="sparkles" size={18} color="#0E2321" />
+                  </View>
+                  <View style={s.flex}>
+                    <Text style={[s.aiWelcomeTitle, { color: colors.ink }]}>Hi, I’m Peakle AI.</Text>
+                    <Text style={[s.aiWelcomeCopy, { color: colors.ink70 }]}>Ask me about Peakle, or choose a topic for a quick answer.</Text>
+                  </View>
+                </View>
                 <Text style={[s.startTitle, { color: colors.ink }]}>How can we help?</Text>
-                <QuickReplyChips colors={colors} disabled={sending} onPick={(item) => startWith(item.prompt, item.label)} />
+                <QuickReplyChips colors={colors} disabled={sending} onPick={(item) => startWith(item.prompt, item.category)} />
               </View>
             ) : null}
             {messages.map((message) => (
@@ -409,6 +521,9 @@ export function SupportChatBody({ initialConversationId = null, onClose }) {
             {remoteTyping ? <View style={s.typingRow}><AnimatedTypingDots colors={colors} /></View> : null}
             {showCsat ? <CsatPrompt colors={colors} busy={ratingBusy} onSubmit={submitRating} onDismiss={() => setRatingDismissed(true)} /> : null}
           </ScrollView>
+          {conversationId && status === 'bot' ? (
+            <SuggestionCards colors={colors} disabled={sending} onPick={(item) => sendPrompt(item.prompt)} />
+          ) : null}
           <View style={[s.composer, { backgroundColor: colors.surface, borderColor: colors.line }]}>
             {pendingImage ? (
               <View style={s.pendingImageRow}>
@@ -428,13 +543,19 @@ export function SupportChatBody({ initialConversationId = null, onClose }) {
                 onBlur={stopTyping}
                 onSubmitEditing={send}
                 returnKeyType="send"
+                submitBehavior="submit"
                 multiline
                 maxLength={4000}
-                placeholder="Message Peakle support"
+                placeholder={status === 'bot' ? 'Ask Peakle AI' : 'Message Peakle support'}
                 placeholderTextColor={colors.ink40}
                 style={[s.input, { color: colors.ink }]}
               />
-              <Pressable disabled={(!draft.trim() && !pendingImage) || sending} accessibilityLabel="Send message" onPress={send} style={[s.sendButton, { backgroundColor: colors.optic }, ((!draft.trim() && !pendingImage) || sending) && s.disabled]}>
+              <Pressable
+                disabled={(!draft.trim() && !pendingImage) || sending}
+                accessibilityLabel="Send message"
+                onPress={send}
+                style={({ pressed }) => [s.sendButton, { backgroundColor: colors.optic }, ((!draft.trim() && !pendingImage) || sending) && s.disabled, pressed && s.pressed]}
+              >
                 {sending ? <ActivityIndicator size="small" color="#0E2321" /> : <Icon name="arrow-up" size={18} color="#0E2321" />}
               </Pressable>
             </View>
@@ -461,13 +582,21 @@ const s = createMobileStyleSheet({
   loading: { flex: 1, alignItems: 'center', justifyContent: 'center' },
   messageContent: { paddingHorizontal: 16, paddingVertical: 14, gap: 10 },
   startPrompt: { paddingVertical: 20, alignItems: 'center', gap: 14 },
+  aiWelcome: { width: '100%', padding: 12, flexDirection: 'row', alignItems: 'flex-start', gap: 10, borderWidth: 1, borderRadius: 16 },
+  aiMark: { width: 36, height: 36, alignItems: 'center', justifyContent: 'center', borderRadius: 12 },
+  aiWelcomeTitle: { fontSize: 12, fontWeight: '900' },
+  aiWelcomeCopy: { marginTop: 3, fontSize: 10, lineHeight: 15 },
   startTitle: { fontSize: 15, fontWeight: '900' },
   chipsWrap: { flexDirection: 'row', flexWrap: 'wrap', justifyContent: 'center', gap: 8 },
   chip: { minHeight: 34, paddingHorizontal: 13, alignItems: 'center', justifyContent: 'center', borderWidth: 1, borderRadius: 12 },
   chipText: { fontSize: 10, fontWeight: '800' },
+  suggestionsWrap: { paddingHorizontal: 16, paddingTop: 10, paddingBottom: 2, gap: 8 },
+  suggestionCard: { padding: 12, borderWidth: 1, borderRadius: 14 },
+  suggestionText: { fontSize: 12, fontWeight: '600', lineHeight: 17 },
   messageRow: { alignItems: 'flex-start', maxWidth: '86%' },
   messageRowMine: { alignSelf: 'flex-end', alignItems: 'flex-end' },
-  senderLabel: { marginBottom: 3, marginLeft: 4, fontSize: 8, fontWeight: '900', letterSpacing: .4 },
+  senderRow: { marginBottom: 3, marginLeft: 4, flexDirection: 'row', alignItems: 'center', gap: 3 },
+  senderLabel: { fontSize: 8, fontWeight: '900', letterSpacing: .4 },
   bubble: { paddingHorizontal: 13, paddingVertical: 9, borderWidth: 1, borderRadius: 16, overflow: 'hidden' },
   bubbleImage: { width: 200, height: 150, marginHorizontal: -13, marginTop: -9, marginBottom: 7, borderRadius: 0 },
   bubbleText: { fontSize: 12, lineHeight: 17 },
@@ -490,7 +619,8 @@ const s = createMobileStyleSheet({
   pendingImageRemove: { width: 20, height: 20, marginLeft: -10, marginTop: -6, alignItems: 'center', justifyContent: 'center', borderRadius: 10 },
   composerInput: { minHeight: 44, paddingHorizontal: 8, paddingVertical: 4, flexDirection: 'row', alignItems: 'flex-end', gap: 6, borderRadius: 16 },
   attachButton: { width: 30, height: 34, alignItems: 'center', justifyContent: 'center' },
-  input: { minWidth: 0, flex: 1, maxHeight: 110, paddingVertical: 8, fontSize: 12 },
+  input: { minWidth: 0, flex: 1, maxHeight: 110, paddingVertical: 8, fontSize: 12, lineHeight: 18 },
   sendButton: { width: 34, height: 34, marginBottom: 3, alignItems: 'center', justifyContent: 'center', borderRadius: 12 },
+  pressed: { opacity: .72, transform: [{ scale: .97 }] },
   disabled: { opacity: .5 },
 });

@@ -18,16 +18,22 @@ import AccountDeletionScreen from '../screens/AccountDeletionScreen';
 import PaymentHistoryScreen from '../screens/PaymentHistoryScreen';
 import HelpSupportScreen from '../screens/HelpSupportScreen';
 import SupportChatScreen from '../screens/SupportChatScreen';
-import { DirectChatScreen, InboxScreen } from '../screens/DirectMessagesScreens';
+import CommunityChatScreen from '../screens/CommunityChatScreen';
+import { PRIVATE_MESSAGES_ENABLED } from '../config/features';
+// Inbox now doubles as the community-chats hub on every platform (see its
+// "Community" segment), so it loads everywhere; only the 1:1 DM thread
+// screen stays native-only, matching PRIVATE_MESSAGES_ENABLED.
+const { DirectChatScreen, InboxScreen } = require('../screens/DirectMessagesScreens');
 import PublicProfileScreen from '../screens/PublicProfileScreen';
 import ConnectionsScreen from '../screens/ConnectionsScreen';
 import LeaderboardScreen from '../screens/LeaderboardScreen';
 import CompetitionDivisionScreen from '../screens/CompetitionDivisionScreen';
-import NotificationTestScreen from '../screens/NotificationTestScreen';
 import { useTheme } from '../context/ThemeContext';
 import { useNearbyPlayersContext } from '../context/NearbyPlayersContext';
 import LeaveMatchDialog from '../components/LeaveMatchDialog';
 
+const NotificationTestScreen = Platform.OS === 'web' ? null : require('../screens/NotificationTestScreen').default;
+const { BrowserNavigationLayout, BrowserScene } = Platform.OS === 'web' ? require('../web/BrowserNavigation') : {};
 const Tab = createBottomTabNavigator();
 const colors = { ink: '#0E2321', surface: '#FFFFFF', optic: '#D6E94A', teal: '#1C6B66', ink40: '#7C8983', line: '#DDE3DA' };
 const icons = { Home: 'home-outline', Book: 'compass-outline', Play: 'tennisball-outline', Team: 'people-outline', Profile: 'person-outline' };
@@ -43,7 +49,7 @@ function TabBarItem({ focused, label, onPress, play, routeName, theme, badge = 0
       toValue: focused ? 1 : 0,
       duration: 150,
       easing: Easing.out(Easing.cubic),
-      useNativeDriver: true,
+      useNativeDriver: Platform.OS !== 'web',
     }).start();
   }, [focusProgress, focused]);
 
@@ -52,7 +58,7 @@ function TabBarItem({ focused, label, onPress, play, routeName, theme, badge = 0
       toValue: value,
       speed: 40,
       bounciness: value === 1 ? 2 : 0,
-      useNativeDriver: true,
+      useNativeDriver: Platform.OS !== 'web',
     }).start();
   };
 
@@ -121,7 +127,7 @@ function PeakleTabBar({ state, descriptors, navigation }) {
   const [leavingMatch, setLeavingMatch] = useState(false);
   const [leaveError, setLeaveError] = useState('');
   const [pendingRoute, setPendingRoute] = useState(null);
-  const alwaysHiddenRoutes = new Set(['Pickleball', 'Activities', 'ActivityDetails', 'OpenPlayActivity', 'Privacy', 'LegalDocument', 'AccountDeletion', 'PaymentHistory', 'HelpSupport', 'SupportChat', 'NotificationTest', 'Inbox', 'DirectChat', 'PublicProfile', 'Connections', 'Leaderboard', 'CompetitionDivision']);
+  const alwaysHiddenRoutes = new Set(['Pickleball', 'Activities', 'ActivityDetails', 'OpenPlayActivity', 'Privacy', 'LegalDocument', 'AccountDeletion', 'PaymentHistory', 'HelpSupport', 'SupportChat', 'CommunityChat', 'NotificationTest', 'Inbox', 'DirectChat', 'PublicProfile', 'Connections', 'Leaderboard', 'CompetitionDivision']);
   const currentRoute = state.routes[state.index];
   const theme = isDark
     ? { background: '#0E2321', surface: '#17302D', line: '#304743', activeText: colors.ink, activeLabel: colors.ink, centerActiveLabel: colors.surface, muted: '#9FB3AC', active: colors.optic, kitchenLine: colors.optic }
@@ -132,7 +138,7 @@ function PeakleTabBar({ state, descriptors, navigation }) {
     ? (currentRoute.params?.ownerTab || ({ Ratings: 'Profile', Privacy: 'Profile', 'Find play': 'Play', Compete: 'Book' }[currentRoute.params?.openTab]))
     : currentRoute.name === 'Leaderboard' ? 'Home'
     : ['Privacy', 'HelpSupport', 'SupportChat', 'NotificationTest', 'Connections'].includes(currentRoute.name) ? 'Profile'
-    : ['Inbox', 'DirectChat'].includes(currentRoute.name) ? (currentRoute.params?.ownerTab || 'Team')
+    : ['Inbox', 'DirectChat', 'CommunityChat'].includes(currentRoute.name) ? (currentRoute.params?.ownerTab || 'Team')
     : ['Activities', 'ActivityDetails', 'OpenPlayActivity'].includes(currentRoute.name) ? 'Home'
     : null;
   return (
@@ -195,7 +201,9 @@ function WorkspaceNavigator({ children, initialRouteName, isDark, workspaceKey }
       initialRouteName={initialRouteName}
       backBehavior="history"
       tabBar={(props) => <PeakleTabBar {...props} />}
-      detachInactiveScreens={false}
+      detachInactiveScreens={Platform.OS === 'web'}
+      layout={Platform.OS === 'web' ? (props) => <BrowserNavigationLayout {...props} /> : undefined}
+      screenLayout={Platform.OS === 'web' ? (props) => <BrowserScene {...props} /> : undefined}
       screenOptions={{
         headerShown: false,
         // A lazy screen can miss the first paint on slower devices. Never fade
@@ -218,7 +226,7 @@ function PlayerWorkspace({ isDark }) {
       <Tab.Screen name="Play" component={PlayScreen} options={{ lazy: false }} />
       <Tab.Screen name="Team" component={TeamScreen} options={{ tabBarLabel: 'Teams', lazy: false }} />
       <Tab.Screen name="Profile" component={PlayerProfileScreen} options={{ lazy: false }} />
-      <Tab.Screen name="Pickleball" component={PickleballHubScreen} />
+      <Tab.Screen name="Pickleball" component={PickleballHubScreen} initialParams={Platform.OS === 'web' ? { openTab: 'Compete' } : undefined} />
       <Tab.Screen name="Activities" component={PlayerActivitiesScreen} />
       <Tab.Screen name="ActivityDetails" component={PlayerActivityDetailsScreen} />
       <Tab.Screen name="OpenPlayActivity" component={PlayerOpenPlayRouteScreen} />
@@ -228,9 +236,10 @@ function PlayerWorkspace({ isDark }) {
       <Tab.Screen name="PaymentHistory" component={PaymentHistoryScreen} />
       <Tab.Screen name="HelpSupport" component={HelpSupportScreen} />
       <Tab.Screen name="SupportChat" component={SupportChatScreen} />
-      <Tab.Screen name="NotificationTest" component={NotificationTestScreen} />
+      <Tab.Screen name="CommunityChat" component={CommunityChatScreen} />
+      {Platform.OS !== 'web' ? <Tab.Screen name="NotificationTest" component={NotificationTestScreen} /> : null}
       <Tab.Screen name="Inbox" component={InboxScreen} />
-      <Tab.Screen name="DirectChat" component={DirectChatScreen} />
+      {PRIVATE_MESSAGES_ENABLED ? <Tab.Screen name="DirectChat" component={DirectChatScreen} /> : null}
       <Tab.Screen name="PublicProfile" component={PublicProfileScreen} />
       <Tab.Screen name="Connections" component={ConnectionsScreen} />
       <Tab.Screen name="Leaderboard" component={LeaderboardScreen} />

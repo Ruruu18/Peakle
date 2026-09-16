@@ -8,7 +8,6 @@ import {
   StyleSheet,
   Text,
   TextInput,
-  useWindowDimensions,
   View,
 } from 'react-native';
 import * as Location from 'expo-location';
@@ -24,11 +23,13 @@ import ProfilePhoto from '../components/ProfilePhoto';
 import ProfilePhotoPicker from '../components/ProfilePhotoPicker';
 import NotificationSheet from '../components/NotificationSheet';
 import ScrollView from '../components/FocusResetScrollView';
+import useResponsiveWidth from '../hooks/useResponsiveWidth';
 import { createDarkStyleSheet, DARK_CONTENT_COLORS, useTheme } from '../context/ThemeContext';
 import { useOperations } from '../context/OperationsContext';
 import { useOrganizerPass } from '../context/OrganizerPassContext';
 import { presentNotification } from '../utils/notifications';
 import { createMobileStyleSheet } from '../utils/mobileStyles';
+import { reverseGeocode } from '../utils/geocode';
 import { PH_LOCATIONS, formatLocation, locationMatchesSearch, parseLocation } from '../data/phLocations';
 import { peekCachedData, readCachedData, withTimeout, writeCachedData } from '../lib/asyncData';
 import { profileScreenCacheKey } from '../lib/cacheKeys';
@@ -267,7 +268,7 @@ function Settings({ preferences, setPreference, onAction, lastLogin }) {
     <View>
       <Text style={styles.settingsLabel}>PREFERENCES</Text>
       <View style={styles.settingsCard}>
-        <SettingRow icon="chatbubble-ellipses-outline" title="Message notifications" detail="Lock-screen delivery, quick reply, and device test" onPress={() => onAction('Message notifications')} border={false} />
+        {Platform.OS !== 'web' ? <SettingRow icon="chatbubble-ellipses-outline" title="Message notifications" detail="Lock-screen delivery, quick reply, and device test" onPress={() => onAction('Message notifications')} border={false} /> : <Text style={styles.footText}>Updates appear here while Peakle is open.</Text>}
         <SettingRow icon="notifications-outline" title="Squad notifications" detail="Challenges, invites, and team updates" value={preferences.squad} onToggle={(value) => setPreference('squad', value)} />
         <SettingRow icon="calendar-outline" title="Match reminders" detail="One hour before every match" value={preferences.reminders} onToggle={(value) => setPreference('reminders', value)} />
         <SettingRow icon="sync-outline" title="Calendar sync" detail={preferences.calendar ? 'Syncing with your calendar' : 'Not connected'} value={preferences.calendar} onToggle={(value) => setPreference('calendar', value)} />
@@ -319,7 +320,7 @@ function LocationPicker({ value, onChange }) {
       const { status } = await Location.requestForegroundPermissionsAsync();
       if (status !== 'granted') { setGpsLoading(false); return; }
       const pos = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Balanced });
-      const [geo] = await Location.reverseGeocodeAsync({
+      const geo = await reverseGeocode({
         latitude: pos.coords.latitude,
         longitude: pos.coords.longitude,
       });
@@ -571,7 +572,7 @@ function ProfileScreen({ navigation, route }) {
   styles = isDark ? darkStyles : lightStyles;
   const { user, updateProfile, signOut } = useAuth();
   const { hasOrganizerAccess } = useOrganizerPass();
-  const { width } = useWindowDimensions();
+  const width = useResponsiveWidth();
   const compactPhone = width <= 440;
   const { notifications: operationNotifications, unreadCount, readNotification, readAllNotifications, removeNotification, clearNotifications, respondFollowRequest, enablePushNotifications, disablePushNotifications } = useOperations();
   const dataCacheKey = profileScreenCacheKey(user?.id || 'guest');
@@ -699,12 +700,12 @@ function ProfileScreen({ navigation, route }) {
     return () => { active = false; unsubscribe(); };
   }, [dataCacheKey, navigation, route.params?.openMatchId, user?.id]);
   const setPreference = async (key, value) => {
-    if (value && ['squad', 'reminders'].includes(key)) {
+    if (Platform.OS !== 'web' && value && ['squad', 'reminders'].includes(key)) {
       try { await enablePushNotifications(); } catch (error) { showToast(error.message || 'Push notifications could not be enabled.'); return; }
     }
     const next = { ...preferences, [key]: value };
     setPreferences(next);
-    if (!next.squad && !next.reminders) disablePushNotifications().catch(() => {});
+    if (Platform.OS !== 'web' && !next.squad && !next.reminders) disablePushNotifications().catch(() => {});
     updateProfile({ preferences: next }).catch((error) => showToast(error.message || 'Could not save preference.'));
     showToast(`${key === 'squad' ? 'Squad notifications' : key === 'reminders' ? 'Match reminders' : 'Calendar sync'} ${value ? 'on' : 'off'}.`);
   };

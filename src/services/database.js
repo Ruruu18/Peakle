@@ -34,6 +34,8 @@ async function readLocalUnfinishedMatch(userId) {
 
 async function writeLocalUnfinishedMatch(userId, match) {
   if (!userId) return;
+  const current = await readLocalUnfinishedMatch(userId);
+  if (current?.draftSavedAt > (match.draftSavedAt || 0)) return;
   await AsyncStorage.setItem(unfinishedMatchKey(userId), JSON.stringify(match));
 }
 
@@ -1143,19 +1145,21 @@ export async function deleteTeamChatMedia(path) {
 export async function uploadTeamImage(teamId, uri, kind = 'profile') {
   if (!uri || uri.startsWith('http')) return uri;
   const client = requireSupabase();
-  const extension = uri.split('.').pop()?.split('?')[0]?.toLowerCase() || 'jpg';
-  const response = await fetch(uri);
+  // Browser pickers return blob/data URLs without a reliable file extension.
+  const optimized = await ImageManipulator.manipulateAsync(uri, [{ resize: { width: kind === 'cover' ? 1600 : 720 } }], { compress: 0.82, format: ImageManipulator.SaveFormat.JPEG });
+  const response = await fetch(optimized.uri);
   const file = await response.arrayBuffer();
+  if (file.byteLength > 5 * 1024 * 1024) throw new Error('The team photo is too large. Choose a smaller photo.');
   const safeKind = kind === 'cover' ? 'cover' : 'profile';
-  const path = `${teamId}/${safeKind}-${Date.now()}.${extension}`;
-  const { error } = await client.storage.from('team-images').upload(path, file, { contentType: `image/${extension === 'jpg' ? 'jpeg' : extension}`, upsert: true });
+  const path = `${teamId}/${safeKind}-${Crypto.randomUUID()}.jpg`;
+  const { error } = await client.storage.from('team-images').upload(path, file, { contentType: 'image/jpeg', upsert: false });
   if (error) throw error;
   return client.storage.from('team-images').getPublicUrl(path).data.publicUrl;
 }
 
 export async function saveCompletedMatch(userId, result, userName) {
   const client = requireSupabase();
-  const deterministicMatchId = result.savedMatchId || result.sharedLiveMatchId || null;
+  const deterministicMatchId = result.savedMatchId || result.sharedLiveMatchId || result.clientMatchId || null;
   const endedAtTimestamp = Number.isFinite(result.endedAtTimestamp) ? result.endedAtTimestamp : Date.now();
   const startedAtTimestamp = Number.isFinite(result.matchStartedAt) ? result.matchStartedAt : endedAtTimestamp - ((result.elapsed || 0) * 1000);
   const expectedCompletedGames = Number(result.games?.[0] || 0) + Number(result.games?.[1] || 0);
@@ -1168,6 +1172,9 @@ export async function saveCompletedMatch(userId, result, userName) {
     throw new Error('The completed score is incomplete. Reopen the connected result and retry recording it.');
   }
   if (!scores.length) throw new Error('A 0-0 match cannot be recorded. Add a score or save it as unfinished.');
+  if (deterministicMatchId) {
+    await writeLocalUnfinishedMatch(userId, { ...result, resultPendingSave: true, draftSavedAt: Date.now() }).catch(() => {});
+  }
   const venueId = ['yard', 'rockwell', 'valley'].find((id) => result.court?.id?.startsWith(id));
   const courtNumber = result.court?.id?.match(/(\d+)$/)?.[1];
   const matchValues = {
@@ -1189,7 +1196,7 @@ export async function saveCompletedMatch(userId, result, userName) {
   };
   const persistMatch = (values) => (result.savedMatchId
     ? client.from('matches').update(values).eq('id', result.savedMatchId).eq('created_by', userId)
-    : result.sharedLiveMatchId
+    : deterministicMatchId
       ? client.from('matches').upsert(values, { onConflict: 'id' })
       : client.from('matches').insert(values)).select().single();
   let { data: match, error } = await persistMatch(matchValues);
@@ -1242,7 +1249,8 @@ export async function saveUnfinishedMatch(userId, result, userName) {
   const client = requireSupabase();
   const venueId = ['yard', 'rockwell', 'valley'].find((id) => result.court?.id?.startsWith(id));
   const courtNumber = result.court?.id?.match(/(\d+)$/)?.[1];
-  const resumeState = { ...result, savedMatchId: result.savedMatchId || null };
+  const resumeState = { ...result, draftSavedAt: result.draftSavedAt || Date.now(), savedMatchId: result.savedMatchId || null };
+  await writeLocalUnfinishedMatch(userId, resumeState).catch(() => {});
   const values = {
     created_by: userId,
     scorer_id: userId,
@@ -1255,14 +1263,19 @@ export async function saveUnfinishedMatch(userId, result, userName) {
     best_of: result.bestOf,
     win_by_two: result.winByTwo,
     status: 'live',
-    started_at: new Date(Date.now() - (result.elapsed || 0) * 1000).toISOString(),
+    started_at: new Date(result.matchStartedAt || Date.now() - (result.elapsed || 0) * 1000).toISOString(),
     ended_at: null,
     resume_state: resumeState,
   };
   const query = result.savedMatchId
-    ? client.from('matches').update(values).eq('id', result.savedMatchId).eq('created_by', userId)
-    : client.from('matches').insert(values);
-  const { data, error } = await query.select().single();
+    ? client.from('matches').update(values).eq('id', result.savedMatchId).eq('created_by', userId).eq('status', 'live')
+    : client.from('matches').insert({ ...values, ...(result.clientMatchId ? { id: result.clientMatchId } : {}) });
+  let { data, error } = await query.select().single();
+  // A retry after a lost response must reuse the same row. Never reopen a
+  // completed match if another tab has already finished it.
+  if (error?.code === '23505' && result.clientMatchId) {
+    ({ data, error } = await client.from('matches').update(values).eq('id', result.clientMatchId).eq('created_by', userId).eq('status', 'live').select().single());
+  }
   if (isMissingResumeState(error)) {
     const localMatch = { ...resumeState, savedMatchId: null };
     await writeLocalUnfinishedMatch(userId, localMatch);
@@ -1270,24 +1283,38 @@ export async function saveUnfinishedMatch(userId, result, userName) {
   }
   if (error) throw error;
   const saved = { ...resumeState, savedMatchId: data.id };
-  await writeLocalUnfinishedMatch(userId, saved);
+  await writeLocalUnfinishedMatch(userId, saved).catch(() => {});
   return saved;
 }
 
 export async function loadUnfinishedMatch() {
   const client = requireSupabase();
-  const { data: auth } = await client.auth.getUser();
-  const userId = auth.user?.id;
+  // Local recovery must also work during a network outage. RLS still verifies
+  // the session on every server request.
+  const { data: auth } = await client.auth.getSession();
+  const userId = auth.session?.user?.id;
+  if (!userId) return null;
+  let local = await readLocalUnfinishedMatch(userId);
   const { data, error } = await client.from('matches')
     .select('id, resume_state')
+    .eq('created_by', userId)
     .eq('status', 'live')
     .not('resume_state', 'is', null)
     .order('updated_at', { ascending: false })
     .limit(1)
     .maybeSingle();
   if (isMissingResumeState(error)) return readLocalUnfinishedMatch(userId);
-  if (error) throw error;
-  return data?.resume_state ? { ...data.resume_state, savedMatchId: data.id } : readLocalUnfinishedMatch(userId);
+  if (error && !local) throw error;
+  const localId = local?.savedMatchId || local?.clientMatchId;
+  if (!error && localId && localId !== data?.id && !local.resultPendingSave) {
+    const { data: existing, error: lookupError } = await client.from('matches').select('status').eq('id', localId).eq('created_by', userId).maybeSingle();
+    if (!lookupError && existing && existing.status !== 'live') {
+      await clearLocalUnfinishedMatch(userId);
+      local = null;
+    }
+  }
+  if (local && (!data?.resume_state || local.draftSavedAt > (data.resume_state.draftSavedAt || 0))) return local;
+  return data?.resume_state ? { ...data.resume_state, savedMatchId: data.id } : local;
 }
 
 export async function listPlayers() {

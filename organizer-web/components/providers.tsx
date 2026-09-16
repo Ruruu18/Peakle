@@ -1,10 +1,13 @@
 "use client";
 
 import type { User } from "@supabase/supabase-js";
+import { usePathname } from "next/navigation";
 import { createContext, useCallback, useContext, useEffect, useMemo, useState } from "react";
 import { Toaster } from "sonner";
 import { getSupabase, isSupabaseConfigured } from "@/lib/supabase";
 import { withTimeout } from "@/lib/async";
+import { organizerTrialEnabled } from "@/lib/launch-offer";
+import { createDemoUser, enterDemoMode, exitDemoMode, isDemoUser, restoreDemoModeFromStorage } from "@/lib/demo-mode";
 
 type ColorMode = "light" | "dark";
 type ThemeContextValue = { mode: ColorMode; toggle: () => void };
@@ -13,6 +16,8 @@ type AuthContextValue = {
   loading: boolean;
   configured: boolean;
   issue: string | null;
+  isDemo: boolean;
+  enterDemo: () => void;
   signIn: (email: string, password: string) => Promise<void>;
   signUp: (name: string, email: string, password: string) => Promise<{ needsEmailConfirmation: boolean }>;
   signInWithGoogle: () => Promise<void>;
@@ -55,6 +60,13 @@ function AuthProvider({ children }: { children: React.ReactNode }) {
   const configured = isSupabaseConfigured();
 
   useEffect(() => {
+    if (restoreDemoModeFromStorage()) {
+      const timer = setTimeout(() => {
+        setUser(createDemoUser());
+        setLoading(false);
+      }, 0);
+      return () => clearTimeout(timer);
+    }
     const client = getSupabase();
     if (!client) return;
     let alive = true;
@@ -104,7 +116,11 @@ function AuthProvider({ children }: { children: React.ReactNode }) {
         email: email.trim().toLowerCase(),
         password,
         options: {
-          data: { display_name: name.trim(), account_type: "organizer" },
+          data: {
+            display_name: name.trim(),
+            account_type: "organizer",
+            ...(organizerTrialEnabled ? { trial_requested: true, trial_length_days: 14, trial_platform_fee_rate: 0 } : {}),
+          },
           emailRedirectTo: `${window.location.origin}/overview`,
         },
       }),
@@ -130,7 +146,19 @@ function AuthProvider({ children }: { children: React.ReactNode }) {
     if (error) throw error;
   }, []);
 
+  const enterDemo = useCallback(() => {
+    enterDemoMode();
+    setIssue(null);
+    setUser(createDemoUser());
+    setLoading(false);
+  }, []);
+
   const signOut = useCallback(async () => {
+    if (isDemoUser(user)) {
+      exitDemoMode();
+      setUser(null);
+      return;
+    }
     const client = getSupabase();
     if (!client) {
       setUser(null);
@@ -138,23 +166,28 @@ function AuthProvider({ children }: { children: React.ReactNode }) {
     }
     const { error } = await withTimeout(client.auth.signOut(), 10000, "Log out took too long. Check your connection and try again.");
     if (error) throw error;
-  }, []);
+  }, [user]);
 
   const value = useMemo<AuthContextValue>(() => ({
     user,
     loading,
     configured,
     issue,
+    isDemo: isDemoUser(user),
+    enterDemo,
     signIn,
     signUp,
     signInWithGoogle,
     signOut,
-  }), [configured, issue, loading, signIn, signInWithGoogle, signOut, signUp, user]);
+  }), [configured, enterDemo, issue, loading, signIn, signInWithGoogle, signOut, signUp, user]);
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
 }
 
 export function Providers({ children }: { children: React.ReactNode }) {
+  const pathname = usePathname();
+  // Public court displays use only their read-only link, never an organizer session.
+  if (pathname === "/display") return <>{children}</>;
   return (
     <ThemeProvider>
       <AuthProvider>

@@ -1,2 +1,5 @@
-import { SectionPage } from "@/features/organizer";
-export default function StaffInvitePage() { return <SectionPage section="staff" subview="invite" />; }
+import { redirect } from "next/navigation";
+
+export default function LegacyStaffInvitePage() {
+  redirect("/staff/add");
+}

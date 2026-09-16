@@ -270,6 +270,16 @@ export default function CompetitionDivisionScreen({ navigation, route }) {
           <Text style={[styles.eyebrow, { color: palette.teal }]}>{division?.competitions?.name?.toUpperCase() || 'COMPETITION'}</Text>
           <Text numberOfLines={1} style={[styles.title, { color: palette.ink }]}>{division?.name || 'Standings'}</Text>
         </View>
+        {myEntry && division?.competitions?.id ? (
+          <Pressable
+            accessibilityRole="button"
+            accessibilityLabel="Open community chat"
+            onPress={() => navigation.navigate('CommunityChat', { eventKind: 'competition', eventId: division.competitions.id, title: division.competitions.name, ownerTab: 'Book' })}
+            style={({ pressed }) => [styles.iconButton, { backgroundColor: palette.surface, borderColor: palette.line }, pressed && styles.pressed]}
+          >
+            <Ionicons name="chatbubble-ellipses-outline" size={19} color={palette.ink} />
+          </Pressable>
+        ) : null}
         <Pressable accessibilityRole="button" accessibilityLabel="Refresh" onPress={refresh} style={({ pressed }) => [styles.iconButton, { backgroundColor: palette.surface, borderColor: palette.line }, pressed && styles.pressed]}>
           {refreshing ? <ActivityIndicator size="small" color={palette.teal} /> : <Ionicons name="refresh" size={19} color={palette.ink} />}
         </Pressable>

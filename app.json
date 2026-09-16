@@ -53,8 +53,18 @@
     },
     "platforms": [
       "ios",
-      "android"
+      "android",
+      "web"
     ],
+    "web": {
+      "bundler": "metro",
+      "output": "single",
+      "name": "Peakle Beta",
+      "shortName": "Peakle",
+      "favicon": "./public/images/web-favicon.png",
+      "themeColor": "#0E2321",
+      "backgroundColor": "#F3F5EF"
+    },
     "plugins": [
       [
         "expo-build-properties",

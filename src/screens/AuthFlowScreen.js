@@ -32,6 +32,7 @@ import ResilientImage from '../components/ResilientImage';
 import { LEGAL_DOCUMENTS } from '../content/legalDocuments';
 import { PH_LOCATIONS, formatLocation, locationMatchesSearch, parseLocation } from '../data/phLocations';
 import { createMobileStyleSheet } from '../utils/mobileStyles';
+import { reverseGeocode } from '../utils/geocode';
 
 WebBrowser.maybeCompleteAuthSession();
 
@@ -276,7 +277,7 @@ function Field({ label, icon, error, dark = false, onFocus, onBlur, secureTextEn
 
 function GoogleButton({ label, onSuccess, onExpoGoSignIn, onError, onBeforeStart, dark = false, lastUsed = false, disabled = false }) {
   const [busy, setBusy] = useState(false);
-  const isExpoGo = Constants.executionEnvironment === ExecutionEnvironment.StoreClient;
+  const isExpoGo = Platform.OS === 'web' || Constants.executionEnvironment === ExecutionEnvironment.StoreClient;
   const iosClientId = process.env.EXPO_PUBLIC_GOOGLE_IOS_CLIENT_ID;
   const androidClientId = process.env.EXPO_PUBLIC_GOOGLE_ANDROID_CLIENT_ID;
   const webClientId = process.env.EXPO_PUBLIC_GOOGLE_WEB_CLIENT_ID;
@@ -614,7 +615,7 @@ function DeviceIntro({ onComplete }) {
   const [error, setError] = useState('');
   const item = features[index];
   const translate = useRef(new Animated.Value(0)).current;
-  useEffect(() => { translate.setValue(12); Animated.spring(translate, { toValue: 0, useNativeDriver: true, tension: 80, friction: 10 }).start(); }, [index, translate]);
+  useEffect(() => { translate.setValue(12); Animated.spring(translate, { toValue: 0, useNativeDriver: Platform.OS !== 'web', tension: 80, friction: 10 }).start(); }, [index, translate]);
   const finish = async () => {
     if (busy) return;
     setBusy(true); setError('');
@@ -669,7 +670,7 @@ function LocationPicker({ value, onChange }) {
       const { status } = await Location.requestForegroundPermissionsAsync();
       if (status !== 'granted') { setGpsLoading(false); return; }
       const pos = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Balanced });
-      const [geo] = await Location.reverseGeocodeAsync({ latitude: pos.coords.latitude, longitude: pos.coords.longitude });
+      const geo = await reverseGeocode({ latitude: pos.coords.latitude, longitude: pos.coords.longitude });
       if (geo) {
         const detectedCity = geo.city || geo.subregion || '';
         const match = PH_LOCATIONS.find((loc) => loc.city.toLowerCase() === detectedCity.toLowerCase());
@@ -874,10 +875,10 @@ export default function AuthFlowScreen({ initialScreen = 'welcome' }) {
 
   const fade = useRef(new Animated.Value(1)).current;
   const goTo = (next) => {
-    Animated.timing(fade, { toValue: 0, duration: 140, easing: Easing.out(Easing.cubic), useNativeDriver: true }).start(() => {
+    Animated.timing(fade, { toValue: 0, duration: 140, easing: Easing.out(Easing.cubic), useNativeDriver: Platform.OS !== 'web' }).start(() => {
       setScreen(next);
       fade.setValue(0);
-      Animated.timing(fade, { toValue: 1, duration: 240, easing: Easing.out(Easing.cubic), useNativeDriver: true }).start();
+      Animated.timing(fade, { toValue: 1, duration: 240, easing: Easing.out(Easing.cubic), useNativeDriver: Platform.OS !== 'web' }).start();
     });
   };
 
@@ -886,7 +887,7 @@ export default function AuthFlowScreen({ initialScreen = 'welcome' }) {
   else if (screen === 'new-user-overview') content = <DeviceIntro onComplete={() => goTo('complete-profile')} />;
   else if (user && !user.onboardingCompleted) content = <Personalize profile={profile || { name: user.name || '', email: user.email, picture: user.picture, location: user.location, skill: user.skill, preference: user.preference }} />;
   else if (screen === 'welcome') content = <Welcome onLogin={() => goTo('login')} onCreate={() => goTo('create')} />;
-  else if (screen === 'login') content = <AccountForm kind="login" onAlternate={() => goTo('create')} onForgot={() => goTo('forgot-password')} onNeedsVerification={(email) => { setVerificationEmail(email); goTo('verify-email'); }} />;
+  else if (screen === 'login') content = <AccountForm kind="login" onBack={() => goTo('welcome')} onAlternate={() => goTo('create')} onForgot={() => goTo('forgot-password')} onNeedsVerification={(email) => { setVerificationEmail(email); goTo('verify-email'); }} />;
   else if (screen === 'forgot-password') content = <ForgotPassword onBack={() => goTo('login')} onLogin={() => goTo('login')} />;
   else if (screen === 'verify-email') content = <VerifyEmail email={verificationEmail || pendingVerificationEmail} onLogin={() => goTo('login')} onUseDifferentEmail={async () => { await clearPendingVerification(); setVerificationEmail(''); setProfile(null); goTo('create'); }} />;
   else if (screen === 'create') content = <AccountForm kind="create" onBack={() => goTo('login')} onAlternate={() => goTo('login')} onNewAccount={(value) => { setProfile({ name: value.name, email: value.email }); if (value.needsEmailConfirmation) { setVerificationEmail(value.email); goTo('verify-email'); } else { goTo('personalize'); } }} />;

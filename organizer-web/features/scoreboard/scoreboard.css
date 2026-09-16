@@ -1,0 +1,64 @@
+.scoreboard-screen { min-height: 100dvh; height: 100dvh; box-sizing: border-box; display: flex; flex-direction: column; gap: clamp(12px, 2vh, 24px); padding: clamp(16px, 2.5vw, 40px); background: #091d1b; color: #f3f5ef; font-family: var(--font-pp-mori), sans-serif; overflow: auto; color-scheme: dark; }
+.scoreboard-screen:fullscreen { width: 100%; }
+.scoreboard-header { display: flex; align-items: center; gap: 24px; flex-shrink: 0; }
+.scoreboard-brand { display: flex; flex-direction: column; gap: 5px; }
+.scoreboard-brand > span { color: #d6e94a; font-weight: 600; letter-spacing: .1em; font-size: clamp(20px, 2vw, 32px); }
+.scoreboard-brand small { text-transform: uppercase; color: #98b5ae; font-size: 11px; letter-spacing: .08em; }
+.scoreboard-event { min-width: 0; flex: 1; text-align: center; }
+.scoreboard-event h1 { margin: 0; font-size: clamp(17px, 2.1vw, 34px); font-weight: 600; overflow-wrap: anywhere; }
+.scoreboard-event p { margin: 6px 0 0; color: #a9c4bb; font-size: clamp(12px, 1.4vw, 20px); }
+.scoreboard-fullscreen { display: flex; align-items: center; gap: 8px; flex-shrink: 0; border: 1px solid #41605a; border-radius: 10px; padding: 12px; background: transparent; color: #a9c4bb; font: inherit; font-size: 12px; cursor: pointer; }
+.scoreboard-screen:fullscreen .scoreboard-fullscreen { opacity: 0; }
+.scoreboard-screen:fullscreen .scoreboard-fullscreen:hover, .scoreboard-screen:fullscreen .scoreboard-fullscreen:focus-visible { opacity: 1; }
+.scoreboard-main { flex: 1; min-height: 0; display: flex; flex-direction: column; gap: 14px; }
+.scoreboard-courts { flex: 1; min-height: 0; display: grid; gap: 16px; }
+.scoreboard-courts.single-court { grid-template-columns: minmax(0, 1fr); }
+.scoreboard-courts.multiple-courts { grid-template-columns: repeat(2, minmax(0, 1fr)); grid-auto-rows: minmax(0, 1fr); }
+.scoreboard-court { container-type: inline-size; background: #123430; border: 1px solid #37564f; border-radius: 24px; overflow: hidden; display: flex; flex-direction: column; min-height: 0; }
+.scoreboard-court-head { display: flex; justify-content: space-between; align-items: center; gap: 16px; padding: clamp(12px, 2vh, 28px) 3%; border-bottom: 1px solid #37564f; }
+.scoreboard-court-head h2 { margin: 0; font-size: clamp(18px, 2.5vw, 40px); font-weight: 600; overflow-wrap: anywhere; }
+.scoreboard-court-head > span { font-size: clamp(12px, 1.3vw, 20px); flex-shrink: 0; color: #d6e94a; }
+.scoreboard-sides { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); flex: 1; min-height: 0; }
+.scoreboard-side { display: flex; flex-direction: column; justify-content: space-evenly; align-items: center; padding: 2vh 4%; min-width: 0; }
+.scoreboard-side.side-1 { background: #0c2825; border-left: 1px solid #37564f; }
+.scoreboard-player-name { font-size: clamp(18px, 3.2cqw, 58px); font-weight: 600; text-align: center; line-height: 1.15; overflow-wrap: anywhere; }
+.scoreboard-score { font-size: min(25cqw, 38vh); color: #d6e94a; line-height: 1; letter-spacing: -.06em; font-variant-numeric: tabular-nums; font-weight: 600; }
+.multiple-courts .scoreboard-score { font-size: min(23cqw, 17vh); }
+.scoreboard-serve { min-height: 1.3em; margin-top: 4px; color: #d6e94a; font-size: clamp(12px, 1.5cqw, 25px); }
+.scoreboard-idle { flex: 1; min-height: 160px; display: flex; flex-direction: column; align-items: center; justify-content: center; text-align: center; padding: 24px; color: #a9c4bb; }
+.scoreboard-idle h2, .scoreboard-idle h3 { color: #f3f5ef; font-size: clamp(22px, 3vw, 48px); margin: 18px 0 8px; }
+.scoreboard-idle p { max-width: 620px; line-height: 1.6; margin: 0; }
+.scoreboard-game-history { display: flex; justify-content: center; gap: 24px; padding: 12px; flex-wrap: wrap; font-size: 14px; color: #a9c4bb; }
+.scoreboard-game-history b { color: #f3f5ef; margin-left: 6px; }
+.scoreboard-waiting-note { text-align: center; color: #a9c4bb; font-size: 14px; margin: 0; padding: 12px; }
+.scoreboard-footer { display: flex; justify-content: space-between; gap: 16px; flex-shrink: 0; color: #98b5ae; font-size: clamp(11px, 1vw, 15px); }
+.scoreboard-footer > span { display: inline-flex; align-items: center; gap: 8px; }
+.scoreboard-footer i { width: 6px; height: 6px; border-radius: 50%; background: #d6e94a; }
+.scoreboard-footer.is-reconnecting { color: #ffc19b; }
+.scoreboard-notice { margin: 0; color: #ffc19b; font-size: 13px; }
+.scoreboard-pagination { text-align: center; color: #98b5ae; font-size: 12px; }
+.scoreboard-standings { flex: 1; overflow: auto; border: 1px solid #37564f; border-radius: 18px; }
+.scoreboard-standings table { width: 100%; border-collapse: collapse; font-size: clamp(14px, 2vw, 30px); }
+.scoreboard-standings th, .scoreboard-standings td { padding: clamp(10px, 1.6vh, 22px) 18px; border-bottom: 1px solid #37564f; text-align: right; }
+.scoreboard-standings th:first-child, .scoreboard-standings td:first-child { text-align: center; color: #d6e94a; }
+.scoreboard-standings th:nth-child(2), .scoreboard-standings tbody th { text-align: left; }
+.scoreboard-standings thead th { font-size: 12px; text-transform: uppercase; letter-spacing: .1em; color: #98b5ae; }
+.scoreboard-bracket { flex: 1; display: grid; gap: 16px; grid-template-columns: repeat(3, minmax(0, 1fr)); align-content: center; }
+.scoreboard-bracket-match { border: 1px solid #37564f; border-radius: 16px; background: #123430; overflow: hidden; }
+.scoreboard-bracket-match header { display: flex; justify-content: space-between; padding: 14px; gap: 8px; color: #a9c4bb; font-size: 12px; }
+.scoreboard-bracket-match header b { color: #d6e94a; font-size: 10px; }
+.scoreboard-bracket-match > div { display: flex; align-items: center; gap: 12px; padding: 18px; border-top: 1px solid #37564f; font-size: clamp(14px, 1.6vw, 26px); }
+.scoreboard-bracket-match > div > span { flex: 1; overflow-wrap: anywhere; }
+.scoreboard-bracket-match .winner { color: #d6e94a; background: #203c2a; }
+@media (orientation: portrait), (max-width: 700px) {
+  .scoreboard-courts.multiple-courts { grid-template-columns: minmax(0, 1fr); overflow: auto; grid-auto-rows: minmax(220px, 1fr); }
+  .scoreboard-header { gap: 12px; flex-wrap: wrap; }
+  .scoreboard-brand small { display: none; }
+  .scoreboard-event { text-align: left; }
+  .scoreboard-fullscreen { padding: 10px; }
+  .scoreboard-fullscreen span { display: none; }
+  .scoreboard-bracket { grid-template-columns: repeat(2, minmax(0, 1fr)); overflow: auto; align-content: start; }
+  .scoreboard-footer { flex-wrap: wrap; font-size: 11px; }
+  .single-court .scoreboard-player-name { font-size: clamp(18px, 4.5cqw, 40px); }
+}
+@media (max-height: 540px) { .scoreboard-screen { height: auto; min-height: 100dvh; } .scoreboard-main { min-height: 350px; } }

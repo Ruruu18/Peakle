@@ -20,6 +20,7 @@ import Ionicons from '@expo/vector-icons/Ionicons';
 import { useFocusEffect } from '@react-navigation/native';
 import { DEMO_MODE } from '../config/demoMode';
 import { DEMO_CONVERSATION_ID, DEMO_DIRECT_MESSAGE_DRIP } from '../config/demoData';
+import { PRIVATE_MESSAGES_ENABLED } from '../config/features';
 import ScrollView from '../components/FocusResetScrollView';
 import ProfilePhoto from '../components/ProfilePhoto';
 import { useAuth } from '../context/AuthContext';
@@ -32,6 +33,7 @@ import {
   listTeamConversationSummaries,
   listTeams,
 } from '../services/database';
+import { listMyCommunityChats } from '../services/communityChat';
 import {
   findDirectConversation,
   followPlayer,
@@ -62,6 +64,7 @@ const LIGHT_C = {
   ink40: '#7C8983',
   line: '#DDE3DA',
   tealWash: '#E5F0ED',
+  gold: '#D5A928',
 };
 const DARK_C = {
   ...LIGHT_C,
@@ -125,8 +128,8 @@ function useSkeletonPulse() {
   const pulse = useRef(new Animated.Value(0.42)).current;
   useEffect(() => {
     const animation = Animated.loop(Animated.sequence([
-      Animated.timing(pulse, { toValue: 0.9, duration: 720, easing: Easing.inOut(Easing.quad), useNativeDriver: true }),
-      Animated.timing(pulse, { toValue: 0.42, duration: 720, easing: Easing.inOut(Easing.quad), useNativeDriver: true }),
+      Animated.timing(pulse, { toValue: 0.9, duration: 720, easing: Easing.inOut(Easing.quad), useNativeDriver: Platform.OS !== 'web' }),
+      Animated.timing(pulse, { toValue: 0.42, duration: 720, easing: Easing.inOut(Easing.quad), useNativeDriver: Platform.OS !== 'web' }),
     ]));
     animation.start();
     return () => animation.stop();
@@ -241,6 +244,27 @@ function TeamConversationRow({ team, summary, onPress, colors, isLast = false })
       <View style={styles.conversationCopy}>
         <View style={styles.conversationNameRow}><Text numberOfLines={1} style={[styles.conversationName, { color: colors.ink }]}>{team.name}</Text><Text style={[styles.conversationTime, { color: colors.ink40 }]}>{formatConversationTime(summary?.last_created_at)}</Text></View>
         <View style={styles.conversationPreviewRow}><Text numberOfLines={1} style={[styles.conversationPreview, { color: colors.ink40 }]}>{preview}</Text>{summary?.unread_count > 0 ? <View style={[styles.unreadBadge, { backgroundColor: colors.brick }]}><Text style={styles.unreadText}>{summary.unread_count > 99 ? '99+' : summary.unread_count}</Text></View> : null}</View>
+      </View>
+    </Pressable>
+  );
+}
+
+function CommunityConversationRow({ chat, onPress, colors, isLast = false }) {
+  const preview = chat.lastBody ? `${chat.lastSenderName ? `${chat.lastSenderName}: ` : ''}${chat.lastBody}` : chat.subtitle || 'No messages yet';
+  return (
+    <Pressable onPress={onPress} style={({ pressed }) => [styles.conversationRow, { borderColor: colors.line }, isLast && styles.conversationRowLast, pressed && styles.pressed]}>
+      <View style={[styles.teamAvatar, { backgroundColor: colors.tealWash }]}><Icon name={chat.eventKind === 'competition' ? 'trophy' : 'tennisball'} size={18} color={colors.teal} /></View>
+      <View style={styles.conversationCopy}>
+        <View style={styles.conversationNameRow}>
+          <Text numberOfLines={1} style={[styles.conversationName, { color: colors.ink }]}>{chat.title || 'Community chat'}</Text>
+          {chat.isHost ? <View style={[styles.hostPill, { backgroundColor: colors.tealWash }]}><Text style={[styles.hostPillText, { color: colors.teal }]}>HOST</Text></View> : null}
+          <Text style={[styles.conversationTime, { color: colors.ink40 }]}>{formatConversationTime(chat.lastMessageAt)}</Text>
+        </View>
+        <View style={styles.conversationPreviewRow}>
+          {chat.lastIsAnnouncement ? <Icon name="megaphone" size={11} color={colors.gold} /> : null}
+          <Text numberOfLines={1} style={[styles.conversationPreview, { color: chat.unreadCount ? colors.ink : colors.ink40 }]}>{preview}</Text>
+          {chat.unreadCount > 0 ? <View style={[styles.unreadBadge, { backgroundColor: colors.brick }]}><Text style={styles.unreadText}>{chat.unreadCount > 99 ? '99+' : chat.unreadCount}</Text></View> : null}
+        </View>
       </View>
     </Pressable>
   );
@@ -385,17 +409,45 @@ export function InboxScreen({ navigation }) {
   const colors = isDark ? DARK_C : LIGHT_C;
   const { user } = useAuth();
   const cachedInbox = user?.id ? inboxCache.get(user.id) : null;
+  const [segment, setSegment] = useState(PRIVATE_MESSAGES_ENABLED ? 'messages' : 'community');
   const [filter, setFilter] = useState('All');
   const [inbox, setInbox] = useState(() => cachedInbox || EMPTY_INBOX_SNAPSHOT);
-  const [loading, setLoading] = useState(() => !cachedInbox);
+  const [loading, setLoading] = useState(() => PRIVATE_MESSAGES_ENABLED && !cachedInbox);
   const [composeOpen, setComposeOpen] = useState(false);
+  const [communityChats, setCommunityChats] = useState([]);
+  const [communityLoading, setCommunityLoading] = useState(true);
   const hasLoadedRef = useRef(Boolean(cachedInbox));
   const requestIdRef = useRef(0);
   const activeUserIdRef = useRef(user?.id);
   activeUserIdRef.current = user?.id;
   const { directConversations, privateConnections, followingPlayers, teams, teamSummaries } = inbox;
 
+  const loadCommunityChats = useCallback(async () => {
+    try {
+      const rows = await listMyCommunityChats();
+      setCommunityChats(rows);
+    } catch {
+      // keep whatever was previously loaded
+    } finally {
+      setCommunityLoading(false);
+    }
+  }, []);
+  useFocusEffect(useCallback(() => { loadCommunityChats(); }, [loadCommunityChats]));
   useEffect(() => {
+    if (!supabase || !user?.id) return undefined;
+    let refreshTimer;
+    const refresh = () => { clearTimeout(refreshTimer); refreshTimer = setTimeout(loadCommunityChats, 150); };
+    const channel = supabase.channel(`community-chats-${user.id}`)
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'community_messages' }, refresh)
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'community_conversations' }, refresh)
+      .subscribe();
+    return () => { clearTimeout(refreshTimer); supabase.removeChannel(channel); };
+  }, [loadCommunityChats, user?.id]);
+  const communityUnreadCount = communityChats.reduce((total, chat) => total + Number(chat.unreadCount || 0), 0);
+  const openCommunityChat = (chat) => navigation.navigate('CommunityChat', { eventKind: chat.eventKind, eventId: chat.eventId, title: chat.title, ownerTab: 'Team' });
+
+  useEffect(() => {
+    if (!PRIVATE_MESSAGES_ENABLED) return;
     requestIdRef.current += 1;
     const nextCachedInbox = user?.id ? inboxCache.get(user.id) : null;
     setInbox(nextCachedInbox || EMPTY_INBOX_SNAPSHOT);
@@ -404,6 +456,7 @@ export function InboxScreen({ navigation }) {
   }, [user?.id]);
 
   const loadInbox = useCallback(async ({ showSkeleton = false } = {}) => {
+    if (!PRIVATE_MESSAGES_ENABLED) return;
     const userId = user?.id;
     if (!userId) {
       setLoading(false);
@@ -443,7 +496,7 @@ export function InboxScreen({ navigation }) {
     loadInbox({ showSkeleton: true });
   }, [loadInbox]));
   useEffect(() => {
-    if (!supabase || !user?.id) return undefined;
+    if (!PRIVATE_MESSAGES_ENABLED || !supabase || !user?.id) return undefined;
     let refreshTimer;
     const refresh = () => {
       clearTimeout(refreshTimer);
@@ -509,59 +562,102 @@ export function InboxScreen({ navigation }) {
       : ['Your inbox is ready', 'Private and team conversations will appear here.'];
 
   const showStrip = followingPlayers.length > 0;
+  const onMessages = segment === 'messages';
 
   return (
     <SafeAreaView style={[styles.safe, { backgroundColor: colors.paper }]}>
       <StatusBar style={isDark ? 'light' : 'dark'} backgroundColor={colors.paper} />
-      <ScreenHeader eyebrow="CONVERSATIONS" title="Messages" onBack={() => navigation.goBack()} colors={colors} action={<Pressable accessibilityLabel="New private message" hitSlop={8} onPress={() => setComposeOpen(true)} style={[styles.composeButton, { backgroundColor: colors.optic }]}><Icon name="create-outline" size={21} color="#0E2321" /></Pressable>} />
-      <ScrollView contentContainerStyle={styles.inboxContent} showsVerticalScrollIndicator={false}>
-        {!loading && showStrip ? (
-          <>
-            <View style={styles.sectionHead}><Text style={[styles.sectionLabel, { color: colors.teal }]}>FOLLOWING</Text></View>
-            <FollowingStrip players={followingPlayers} onPress={openConnection} colors={colors} />
-          </>
-        ) : null}
-        <View style={[styles.filters, { backgroundColor: colors.surface, borderColor: colors.line }]}>
-          {['All', 'Private', 'Teams'].map((item) => {
-            const selected = filter === item;
-            return (
-              <Pressable
-                key={item}
-                accessibilityRole="tab"
-                accessibilityState={{ selected }}
-                onPress={() => setFilter(item)}
-                style={({ pressed }) => [styles.filter, selected && { backgroundColor: colors.tealWash }, pressed && styles.filterPressed]}
-              >
-                <Text style={[styles.filterText, { color: selected ? colors.teal : colors.ink70 }]}>{item}</Text>
-                <Text style={[styles.filterCount, { color: selected ? colors.teal : colors.ink40 }]}>{loading ? '—' : filterCounts[item]}</Text>
-              </Pressable>
-            );
-          })}
+      <ScreenHeader
+        eyebrow="CONVERSATIONS"
+        title="Chats"
+        onBack={() => navigation.goBack()}
+        colors={colors}
+        action={onMessages ? <Pressable accessibilityLabel="New private message" hitSlop={8} onPress={() => setComposeOpen(true)} style={[styles.composeButton, { backgroundColor: colors.optic }]}><Icon name="create-outline" size={21} color="#0E2321" /></Pressable> : null}
+      />
+      {PRIVATE_MESSAGES_ENABLED ? (
+        <View style={styles.segmentRow}>
+          <Pressable accessibilityRole="tab" accessibilityState={{ selected: onMessages }} onPress={() => setSegment('messages')} style={[styles.segmentButton, { borderColor: colors.line, backgroundColor: onMessages ? colors.tealWash : colors.surface }]}>
+            <Text style={[styles.segmentText, { color: onMessages ? colors.teal : colors.ink70 }]}>Messages</Text>
+          </Pressable>
+          <Pressable accessibilityRole="tab" accessibilityState={{ selected: !onMessages }} onPress={() => setSegment('community')} style={[styles.segmentButton, { borderColor: colors.line, backgroundColor: !onMessages ? colors.tealWash : colors.surface }]}>
+            <Text style={[styles.segmentText, { color: !onMessages ? colors.teal : colors.ink70 }]}>Community{communityUnreadCount ? ` (${communityUnreadCount})` : ''}</Text>
+          </Pressable>
         </View>
-        {loading ? <InboxLoadingSkeleton colors={colors} /> : null}
-        {!loading && showRequests ? (
-          <>
-            <View style={styles.sectionHead}><Text style={[styles.sectionLabel, { color: colors.brick }]}>MESSAGE REQUESTS</Text><Text style={[styles.sectionMeta, { color: colors.brick }]}>{incomingRequests.length}</Text></View>
-            <View style={[styles.conversationList, { backgroundColor: colors.surface, borderColor: colors.line }]}>
-              {incomingRequests.map((item, index) => <ConversationRow key={item.id} conversation={item} currentUserId={user?.id} onPress={() => openPrivate(item)} colors={colors} isLast={index === incomingRequests.length - 1} />)}
+      ) : null}
+      {onMessages ? (
+        <ScrollView contentContainerStyle={styles.inboxContent} showsVerticalScrollIndicator={false}>
+          {!loading && showStrip ? (
+            <>
+              <View style={styles.sectionHead}><Text style={[styles.sectionLabel, { color: colors.teal }]}>FOLLOWING</Text></View>
+              <FollowingStrip players={followingPlayers} onPress={openConnection} colors={colors} />
+            </>
+          ) : null}
+          <View style={[styles.filters, { backgroundColor: colors.surface, borderColor: colors.line }]}>
+            {['All', 'Private', 'Teams'].map((item) => {
+              const selected = filter === item;
+              return (
+                <Pressable
+                  key={item}
+                  accessibilityRole="tab"
+                  accessibilityState={{ selected }}
+                  onPress={() => setFilter(item)}
+                  style={({ pressed }) => [styles.filter, selected && { backgroundColor: colors.tealWash }, pressed && styles.filterPressed]}
+                >
+                  <Text style={[styles.filterText, { color: selected ? colors.teal : colors.ink70 }]}>{item}</Text>
+                  <Text style={[styles.filterCount, { color: selected ? colors.teal : colors.ink40 }]}>{loading ? '—' : filterCounts[item]}</Text>
+                </Pressable>
+              );
+            })}
+          </View>
+          {loading ? <InboxLoadingSkeleton colors={colors} /> : null}
+          {!loading && showRequests ? (
+            <>
+              <View style={styles.sectionHead}><Text style={[styles.sectionLabel, { color: colors.brick }]}>MESSAGE REQUESTS</Text><Text style={[styles.sectionMeta, { color: colors.brick }]}>{incomingRequests.length}</Text></View>
+              <View style={[styles.conversationList, { backgroundColor: colors.surface, borderColor: colors.line }]}>
+                {incomingRequests.map((item, index) => <ConversationRow key={item.id} conversation={item} currentUserId={user?.id} onPress={() => openPrivate(item)} colors={colors} isLast={index === incomingRequests.length - 1} />)}
+              </View>
+            </>
+          ) : null}
+          {!loading && threads.length ? (
+            <>
+              <View style={styles.sectionHead}>
+                <Text style={[styles.sectionLabel, { color: colors.teal }]}>{sectionTitle}</Text>
+                <Text style={[styles.sectionMeta, { color: colors.ink40 }]}>{threads.length} {threads.length === 1 ? 'conversation' : 'conversations'}</Text>
+              </View>
+              <View style={[styles.conversationList, { backgroundColor: colors.surface, borderColor: colors.line }]}>
+                {threads.map((item, index) => item.kind === 'private'
+                  ? <ConversationRow key={item.key} conversation={item.conversation} currentUserId={user?.id} onPress={() => openPrivate(item.conversation)} colors={colors} isLast={index === threads.length - 1} />
+                  : <TeamConversationRow key={item.key} team={item.team} summary={item.summary} colors={colors} onPress={() => openTeam(item.team)} isLast={index === threads.length - 1} />)}
+              </View>
+            </>
+          ) : null}
+          {!loading && !threads.length && !showRequests ? <View style={styles.empty}><View style={[styles.emptyIcon, { backgroundColor: colors.surface, borderColor: colors.line }]}><Icon name={filter === 'Private' ? 'chatbubble-outline' : filter === 'Teams' ? 'people-outline' : 'chatbubbles-outline'} size={26} color={colors.teal} /></View><Text style={[styles.emptyTitle, { color: colors.ink }]}>{emptyCopy[0]}</Text><Text style={[styles.emptyText, { color: colors.ink40 }]}>{emptyCopy[1]}</Text></View> : null}
+        </ScrollView>
+      ) : (
+        <ScrollView contentContainerStyle={styles.inboxContent} showsVerticalScrollIndicator={false}>
+          {communityLoading ? <InboxLoadingSkeleton colors={colors} /> : null}
+          {!communityLoading && communityChats.length ? (
+            <>
+              <View style={styles.sectionHead}>
+                <Text style={[styles.sectionLabel, { color: colors.teal }]}>OPEN PLAY & TOURNAMENTS</Text>
+                <Text style={[styles.sectionMeta, { color: colors.ink40 }]}>{communityChats.length} {communityChats.length === 1 ? 'chat' : 'chats'}</Text>
+              </View>
+              <View style={[styles.conversationList, { backgroundColor: colors.surface, borderColor: colors.line }]}>
+                {communityChats.map((chat, index) => (
+                  <CommunityConversationRow key={chat.conversationId || `${chat.eventKind}:${chat.eventId}`} chat={chat} colors={colors} onPress={() => openCommunityChat(chat)} isLast={index === communityChats.length - 1} />
+                ))}
+              </View>
+            </>
+          ) : null}
+          {!communityLoading && !communityChats.length ? (
+            <View style={styles.empty}>
+              <View style={[styles.emptyIcon, { backgroundColor: colors.surface, borderColor: colors.line }]}><Icon name="people-circle-outline" size={26} color={colors.teal} /></View>
+              <Text style={[styles.emptyTitle, { color: colors.ink }]}>No community chats yet</Text>
+              <Text style={[styles.emptyText, { color: colors.ink40 }]}>Join an open-play session or enter a tournament to unlock its group chat and announcements.</Text>
             </View>
-          </>
-        ) : null}
-        {!loading && threads.length ? (
-          <>
-            <View style={styles.sectionHead}>
-              <Text style={[styles.sectionLabel, { color: colors.teal }]}>{sectionTitle}</Text>
-              <Text style={[styles.sectionMeta, { color: colors.ink40 }]}>{threads.length} {threads.length === 1 ? 'conversation' : 'conversations'}</Text>
-            </View>
-            <View style={[styles.conversationList, { backgroundColor: colors.surface, borderColor: colors.line }]}>
-              {threads.map((item, index) => item.kind === 'private'
-                ? <ConversationRow key={item.key} conversation={item.conversation} currentUserId={user?.id} onPress={() => openPrivate(item.conversation)} colors={colors} isLast={index === threads.length - 1} />
-                : <TeamConversationRow key={item.key} team={item.team} summary={item.summary} colors={colors} onPress={() => openTeam(item.team)} isLast={index === threads.length - 1} />)}
-            </View>
-          </>
-        ) : null}
-        {!loading && !threads.length && !showRequests ? <View style={styles.empty}><View style={[styles.emptyIcon, { backgroundColor: colors.surface, borderColor: colors.line }]}><Icon name={filter === 'Private' ? 'chatbubble-outline' : filter === 'Teams' ? 'people-outline' : 'chatbubbles-outline'} size={26} color={colors.teal} /></View><Text style={[styles.emptyTitle, { color: colors.ink }]}>{emptyCopy[0]}</Text><Text style={[styles.emptyText, { color: colors.ink40 }]}>{emptyCopy[1]}</Text></View> : null}
-      </ScrollView>
+          ) : null}
+        </ScrollView>
+      )}
       <NewMessageModal visible={composeOpen} onClose={() => setComposeOpen(false)} onSelect={choosePlayer} colors={colors} />
     </SafeAreaView>
   );
@@ -571,8 +667,8 @@ function AnimatedTypingDots({ colors }) {
   const values = useRef([0, 1, 2].map(() => new Animated.Value(0.35))).current;
   useEffect(() => {
     const animation = Animated.loop(Animated.stagger(130, values.map((value) => Animated.sequence([
-      Animated.timing(value, { toValue: 1, duration: 220, easing: Easing.out(Easing.quad), useNativeDriver: true }),
-      Animated.timing(value, { toValue: 0.35, duration: 220, easing: Easing.in(Easing.quad), useNativeDriver: true }),
+      Animated.timing(value, { toValue: 1, duration: 220, easing: Easing.out(Easing.quad), useNativeDriver: Platform.OS !== 'web' }),
+      Animated.timing(value, { toValue: 0.35, duration: 220, easing: Easing.in(Easing.quad), useNativeDriver: Platform.OS !== 'web' }),
     ]))));
     animation.start();
     return () => animation.stop();
@@ -1046,6 +1142,11 @@ const styles = StyleSheet.create({
   requestPreview: { fontWeight: '800' },
   unreadBadge: { minWidth: 20, height: 20, paddingHorizontal: 5, alignItems: 'center', justifyContent: 'center', borderRadius: 10 },
   unreadText: { color: '#FFFFFF', fontSize: 10, fontWeight: '900' },
+  hostPill: { minHeight: 18, paddingHorizontal: 7, alignItems: 'center', justifyContent: 'center', borderRadius: 7 },
+  hostPillText: { fontSize: 8, fontWeight: '900', letterSpacing: 0.4 },
+  segmentRow: { flexDirection: 'row', gap: 8, paddingHorizontal: 20, paddingTop: 12, paddingBottom: 4 },
+  segmentButton: { flex: 1, minHeight: 40, alignItems: 'center', justifyContent: 'center', borderWidth: 1, borderRadius: 13 },
+  segmentText: { fontSize: 12, fontWeight: '900' },
   teamAvatar: { width: 52, height: 52, alignItems: 'center', justifyContent: 'center', borderRadius: 18, borderBottomLeftRadius: 8, borderBottomRightRadius: 8 },
   teamAvatarText: { color: '#FFFFFF', fontSize: 13, fontWeight: '900', letterSpacing: 0.3 },
   followingStrip: { borderBottomWidth: 1 },

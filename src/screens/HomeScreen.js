@@ -7,7 +7,6 @@ import {
   Platform,
   Pressable,
   Text,
-  useWindowDimensions,
   View,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
@@ -18,6 +17,7 @@ import LocationPicker from '../components/LocationPicker';
 import NotificationSheet from '../components/NotificationSheet';
 import ProfilePhoto from '../components/ProfilePhoto';
 import ScrollView from '../components/FocusResetScrollView';
+import useResponsiveWidth from '../hooks/useResponsiveWidth';
 import { useAuth } from '../context/AuthContext';
 import { distanceInKm, formatDistance, useUserLocation } from '../context/LocationContext';
 import { useOperations } from '../context/OperationsContext';
@@ -47,7 +47,7 @@ function MotionPressable({ children, onPress, onPressIn, onPressOut, style, ...p
       toValue: value,
       speed: 34,
       bounciness: value === 1 ? 5 : 0,
-      useNativeDriver: true,
+      useNativeDriver: Platform.OS !== 'web',
     }).start();
   };
 
@@ -429,7 +429,7 @@ export default function HomeScreen() {
   const { notifications: operationNotifications, unreadCount, readNotification, readAllNotifications, removeNotification, clearNotifications, respondFollowRequest, reportRealtime, online } = useOperations();
   const { isDark, toggleColorMode } = useTheme();
   const { userLocation } = useUserLocation();
-  const { width } = useWindowDimensions();
+  const width = useResponsiveWidth();
   const tablet = width >= 840;
   const compactHeader = width <= 440;
   const [notifications, setNotifications] = useState(false);
@@ -600,9 +600,9 @@ export default function HomeScreen() {
   const showToast = (message) => {
     setToast(message);
     Animated.sequence([
-      Animated.spring(toastAnim, { toValue: 1, useNativeDriver: true, bounciness: 3 }),
+      Animated.spring(toastAnim, { toValue: 1, useNativeDriver: Platform.OS !== 'web', bounciness: 3 }),
       Animated.delay(2200),
-      Animated.timing(toastAnim, { toValue: 0, duration: 160, useNativeDriver: true }),
+      Animated.timing(toastAnim, { toValue: 0, duration: 160, useNativeDriver: Platform.OS !== 'web' }),
     ]).start(() => setToast(''));
   };
 
@@ -779,7 +779,7 @@ export default function HomeScreen() {
         <KitchenLine style={[styles.headerLine, compactHeader && styles.headerLineCompact]} />
         {tablet ? <View style={styles.tabletGrid}><View style={styles.primaryColumn}>{schedule}{discovery}{peopleYouMayKnow}{nearby}</View><View style={styles.secondaryColumn}>{gameOverview}{feed}</View></View> : <>{schedule}{discovery}{peopleYouMayKnow}{gameOverview}{nearby}{feed}</>}
       </ScrollView>
-      <NotificationSheet visible={notifications} onClose={() => setNotifications(false)} items={notices} unreadCount={unreadCount} onRead={(id) => readNotification(id).catch((error) => Alert.alert('Notifications', error.message || 'This notification could not be marked as read.'))} onReadAll={() => readAllNotifications().catch((error) => Alert.alert('Notifications', error.message || 'Notifications could not be marked as read.'))} onDelete={removeNotification} onClearRead={clearNotifications} onFollowResponse={(item, accept) => respondFollowRequest(item.data?.requesterId, accept, item.id)} onOpen={(item) => { if (!item.read_at) readNotification(item.id).catch(() => {}); setNotifications(false); if (item.data?.conversationId) navigation.navigate('DirectChat', { conversationId: item.data.conversationId, player: item.data?.playerId ? { id: item.data.playerId } : undefined, ownerTab: 'Team' }); else if (item.data?.sessionId) navigation.navigate('OpenPlayActivity', { token: Date.now(), sessionId: item.data.sessionId, direct: true, returnTo: 'Home' }); }} />
+      <NotificationSheet visible={notifications} onClose={() => setNotifications(false)} items={notices} unreadCount={unreadCount} onRead={(id) => readNotification(id).catch((error) => Alert.alert('Notifications', error.message || 'This notification could not be marked as read.'))} onReadAll={() => readAllNotifications().catch((error) => Alert.alert('Notifications', error.message || 'Notifications could not be marked as read.'))} onDelete={removeNotification} onClearRead={clearNotifications} onFollowResponse={(item, accept) => respondFollowRequest(item.data?.requesterId, accept, item.id)} onOpen={(item) => { if (!item.read_at) readNotification(item.id).catch(() => {}); setNotifications(false); if (item.kind === 'community_announcement' && item.data?.eventKind && item.data?.eventId) navigation.navigate('CommunityChat', { eventKind: item.data.eventKind, eventId: item.data.eventId, ownerTab: 'Home' }); else if (item.data?.conversationId) navigation.navigate('DirectChat', { conversationId: item.data.conversationId, player: item.data?.playerId ? { id: item.data.playerId } : undefined, ownerTab: 'Team' }); else if (item.data?.sessionId) navigation.navigate('OpenPlayActivity', { token: Date.now(), sessionId: item.data.sessionId, direct: true, returnTo: 'Home' }); }} />
       <LocationPicker visible={locationOpen} onClose={() => setLocationOpen(false)} />
       {!!toast && <Animated.View style={[styles.toast, { opacity: toastAnim, transform: [{ translateY: toastAnim.interpolate({ inputRange: [0, 1], outputRange: [18, 0] }) }] }]}><Text style={styles.toastText}>{toast}</Text></Animated.View>}
     </SafeAreaView>

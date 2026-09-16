@@ -2,6 +2,8 @@ import type { User } from "@supabase/supabase-js";
 import { requireSupabase } from "./supabase";
 import type { Analytics, Earnings, OpenPlaySession, OrganizerData, Venue } from "./types";
 import { isLiveOpenPlaySession } from "./open-play";
+import { isDemoUser } from "./demo-mode";
+import { buildDemoOrganizerData } from "./demo-data";
 
 function unwrap<T>(result: { data: T | null; error: { message: string } | null }): T {
   if (result.error) throw new Error(result.error.message);
@@ -10,6 +12,7 @@ function unwrap<T>(result: { data: T | null; error: { message: string } | null }
 
 export async function loadOrganizerData(user: User | null, venueId?: string | null): Promise<OrganizerData> {
   if (!user) throw new Error("Sign in to load the organizer workspace.");
+  if (isDemoUser(user)) return buildDemoOrganizerData();
   const client = requireSupabase();
 
   const [profileResult, adminResult, membershipsResult] = await Promise.all([
@@ -49,13 +52,13 @@ export async function loadOrganizerData(user: User | null, venueId?: string | nu
       ? client.from("open_play_players").select("*,profiles!open_play_players_user_id_fkey(display_name,avatar_url)").in("session_id", visibleSessionIds).order("joined_at", { ascending: false })
       : Promise.resolve({ data: [], error: null }),
     activeSessionIds.length
-      ? client.from("open_play_courts").select("id,session_id,court_number,match_format,venue_court:courts(name),open_play_matches(id,status,home_score,away_score,started_at,scorer_player_id,open_play_match_players(player_id,side,position,open_play_players(id,guest_name,profiles!open_play_players_user_id_fkey(display_name,avatar_url))))").in("session_id", activeSessionIds).order("session_id").order("court_number")
+      ? client.from("open_play_courts").select("id,session_id,court_number,match_format,venue_court:courts(name),open_play_matches(id,status,home_score,away_score,server_side,serving_position,started_at,scorer_player_id,open_play_match_players(player_id,side,position,open_play_players(id,guest_name,profiles!open_play_players_user_id_fkey(display_name,avatar_url))))").in("session_id", activeSessionIds).order("session_id").order("court_number")
       : Promise.resolve({ data: [], error: null }),
     activeVenueId
       ? client.from("venue_members").select("venue_id,user_id,role,created_at,profiles!venue_members_user_id_fkey(display_name,avatar_url)").eq("venue_id", activeVenueId).order("created_at")
       : Promise.resolve({ data: [], error: null }),
     activeVenueId
-      ? client.from("venue_programs").select("*,program_registrations(status)").eq("venue_id", activeVenueId).order("starts_at")
+      ? client.from("venue_programs").select("*,program_registrations(program_id,user_id,status,checked_in_at,created_at,profiles!program_registrations_user_id_fkey(display_name,avatar_url))").eq("venue_id", activeVenueId).order("starts_at")
       : Promise.resolve({ data: [], error: null }),
     activeVenueId
       ? client.from("competitions").select("*,competition_divisions(id,name,competition_entries(id,status))").eq("venue_id", activeVenueId).order("starts_on")
@@ -79,6 +82,7 @@ export async function loadOrganizerData(user: User | null, venueId?: string | nu
   ]);
 
   if (registrationsResult.error) throw new Error(`Open Play registrations could not be loaded: ${registrationsResult.error.message}`);
+  if (programsResult.error) throw new Error(`Programs could not be loaded: ${programsResult.error.message}`);
 
   const soft = <T,>(result: { data: T | null; error: unknown }) => result.error ? null : result.data;
   const profile = profileResult.data;

@@ -18,7 +18,7 @@ function setupNotificationActions({
 } = {}) {
   jest.resetModules();
 
-  jest.doMock('expo-notifications', () => ({
+  const loadNotifications = jest.fn(() => ({
     setNotificationChannelAsync: jest.fn(async () => {}),
     setNotificationCategoryAsync: jest.fn(categoryImpl || (async () => {})),
     getPermissionsAsync: jest.fn(async () => ({ status: 'granted' })),
@@ -31,6 +31,7 @@ function setupNotificationActions({
     SchedulableTriggerInputTypes: { TIME_INTERVAL: 'timeInterval' },
     DEFAULT_ACTION_IDENTIFIER,
   }));
+  jest.doMock('expo-notifications', loadNotifications);
 
   jest.doMock('expo-modules-core', () => ({
     ...jest.requireActual('expo-modules-core'),
@@ -52,12 +53,13 @@ function setupNotificationActions({
   RN.Platform.OS = platformOS;
 
   const notificationActions = require('../notificationActions');
+  const notificationImportsOnLoad = loadNotifications.mock.calls.length;
   const Notifications = require('expo-notifications');
   const AsyncStorage = require('@react-native-async-storage/async-storage');
   const { requireSupabase } = require('../../lib/supabase');
   const TaskManager = withTaskManager ? require('expo-task-manager') : null;
 
-  return { notificationActions, Notifications, AsyncStorage, requireSupabase, Platform: RN.Platform, TaskManager };
+  return { notificationActions, Notifications, AsyncStorage, requireSupabase, Platform: RN.Platform, TaskManager, notificationImportsOnLoad };
 }
 
 beforeEach(() => {
@@ -66,10 +68,23 @@ beforeEach(() => {
 
 describe('configureInteractiveNotifications', () => {
   it('is a no-op on web: resolves immediately without touching Notifications', async () => {
-    const { notificationActions, Notifications } = setupNotificationActions({ platformOS: 'web' });
+    const { notificationActions, Notifications, notificationImportsOnLoad } = setupNotificationActions({ platformOS: 'web' });
     await notificationActions.configureInteractiveNotifications();
+    expect(notificationImportsOnLoad).toBe(0);
     expect(Notifications.setNotificationCategoryAsync).not.toHaveBeenCalled();
     expect(Notifications.setNotificationChannelAsync).not.toHaveBeenCalled();
+  });
+
+  it('rejects native notification tests and ignores native responses on web', async () => {
+    const { notificationActions, Notifications } = setupNotificationActions({ platformOS: 'web' });
+    await expect(notificationActions.scheduleClosedAppNotificationTest()).rejects.toThrow('only available in the iOS and Android app');
+    await expect(notificationActions.handleInteractiveNotificationResponse({
+      actionIdentifier: notificationActions.READ_NOTIFICATION_ACTION,
+      notification: { request: { identifier: 'web-notice', content: { data: { notificationId: 'notice-1' } } } },
+    })).resolves.toBe(false);
+    expect(Notifications.scheduleNotificationAsync).not.toHaveBeenCalled();
+    expect(Notifications.getPermissionsAsync).not.toHaveBeenCalled();
+    expect(Notifications.dismissNotificationAsync).not.toHaveBeenCalled();
   });
 
   it('registers the chat category with reply and mark-as-read actions on iOS, without touching Android channels', async () => {

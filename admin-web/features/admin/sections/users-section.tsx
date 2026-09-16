@@ -137,7 +137,15 @@ export default function UsersSection() {
                       <td>{formatDate(user.created_at)}</td>
                       <td>{user.rating !== null ? user.rating.toFixed(1) : "—"}</td>
                       <td>
-                        <Badge status={user.is_banned ? "banned" : "active"} />
+                        <Badge
+                          status={
+                            user.is_banned
+                              ? "banned"
+                              : user.trial_ends_at && new Date(user.trial_ends_at) > new Date()
+                                ? "trialing"
+                                : "active"
+                          }
+                        />
                       </td>
                     </tr>
                   ))

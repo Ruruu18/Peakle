@@ -20,7 +20,7 @@ import Ionicons from '@expo/vector-icons/Ionicons';
 import { useAuth } from '../context/AuthContext';
 import { DARK_CONTENT_COLORS, useTheme } from '../context/ThemeContext';
 import { createMobileStyleSheet } from '../utils/mobileStyles';
-import { startSupportConversation, triggerSupportAiReply } from '../services/supportChat';
+import { startSupportConversation } from '../services/supportChat';
 
 const LIGHT = {
   ink: '#0E2321', paper: '#F3F5EF', surface: '#FFFFFF', optic: '#D6E94A',
@@ -150,7 +150,6 @@ function ContactModal({ visible, onClose, user, C, onStarted }) {
       setDetails('');
       onClose();
       onStarted(conversationId);
-      triggerSupportAiReply(conversationId);
     } catch (err) {
       setError(err.message || 'Could not start a conversation. Please try again.');
     } finally {

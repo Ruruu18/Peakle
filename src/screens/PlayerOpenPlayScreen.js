@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { ActivityIndicator, Alert, Animated, Easing, Pressable, RefreshControl, StyleSheet, Text, TextInput, View } from 'react-native';
+import { ActivityIndicator, Alert, Animated, Easing, Platform, Pressable, RefreshControl, StyleSheet, Text, TextInput, View } from 'react-native';
 import Ionicons from '@expo/vector-icons/Ionicons';
 import { distanceInKm, formatDistance, useUserLocation } from '../context/LocationContext';
 import { createDarkStyleSheet, DARK_CONTENT_COLORS, useTheme } from '../context/ThemeContext';
@@ -20,6 +20,8 @@ import { useAuth } from '../context/AuthContext';
 import { useOperations } from '../context/OperationsContext';
 import ConnectionStatus from '../components/ConnectionStatus';
 import ScrollView from '../components/FocusResetScrollView';
+import RallyBall from '../components/RallyBall';
+import useRallyBallAnimation from '../hooks/useRallyBallAnimation';
 import { peekCachedData, readCachedData, withTimeout, writeCachedData } from '../lib/asyncData';
 import { openPlaySessionsCacheKey } from '../lib/cacheKeys';
 import { skillRangeLabel } from '../utils/skillCategories';
@@ -82,36 +84,10 @@ function LiveRotationCard({ session }) {
 }
 
 function AnimatedOpenPlayCourt({ teams, matchFormat, scores, serverSide, servingPosition, serviceNumber, scorerName, scorerMessage, canScore, paused, pointAnnouncement, celebration, rallyTravel, ballBounce }) {
-  const doubles = matchFormat === 'doubles';
-  const rallyStops = doubles
-    ? [0, .06, .23, .25, .29, .48, .5, .54, .73, .75, .79, .98, 1]
-    : [0, .08, .46, .5, .54, .92, 1];
-  const rallyX = rallyTravel.interpolate({
-    inputRange: rallyStops,
-    outputRange: doubles
-      ? [-70, -64, 64, 70, 64, 70, 70, 64, -64, -70, -64, -70, -70]
-      : [0, -7, 7, 0, 7, -7, 0],
-  });
-  const rallyY = rallyTravel.interpolate({
-    inputRange: rallyStops,
-    outputRange: doubles
-      ? [-60, -51, 47, 58, 47, -51, -60, -51, 47, 58, 47, -51, -60]
-      : [-60, -51, 47, 58, 47, -51, -60],
-  });
-  const ballSquash = ballBounce.interpolate({ inputRange: [0, .78, 1], outputRange: [1, 1.05, .9] });
-  const ballScaleY = Animated.multiply(rallyTravel.interpolate({
-    inputRange: rallyStops,
-    outputRange: doubles
-      ? [.72, 1, 1, .72, 1, 1, .72, 1, 1, .72, 1, 1, .72]
-      : [.72, 1, 1, .72, 1, 1, .72],
-  }), ballSquash);
-  const shadowScale = ballBounce.interpolate({ inputRange: [0, 1], outputRange: [1, .45] });
-  const shadowOpacity = ballBounce.interpolate({ inputRange: [0, 1], outputRange: [.24, .08] });
   const playerOpacity = celebration.interpolate({ inputRange: [0, .1, .88, 1], outputRange: [1, 0, 0, 1] });
-  const liveShadowOpacity = Animated.multiply(shadowOpacity, playerOpacity);
   const announcementOpacity = celebration.interpolate({ inputRange: [0, .1, .88, 1], outputRange: [0, 1, 1, 0] });
   const announcementScale = celebration.interpolate({ inputRange: [0, .18, .82, 1], outputRange: [.86, 1, 1, .94] });
-  const rallyRotation = rallyTravel.interpolate({ inputRange: [0, 1], outputRange: ['0deg', '360deg'] });
+  const doubles = matchFormat === 'doubles';
   const servingPlayer = teams[serverSide]?.find((player) => player.position === servingPosition);
   const playerLabel = (player) => player?.isMe ? 'You' : player?.name || 'Player';
   const scorerInitials = (scorerName || 'Player').split(/\s+/).map((part) => part[0]).join('').slice(0, 2).toUpperCase();
@@ -123,8 +99,7 @@ function AnimatedOpenPlayCourt({ teams, matchFormat, scores, serverSide, serving
       <View style={styles.openPlayCourtScoreBar}><View style={styles.openPlayCourtScoreTeam}><Text style={styles.openPlayCourtScoreTag}>T1</Text><Text style={styles.openPlayCourtScoreNumber}>{scores[0]}</Text></View><View style={styles.openPlayCourtGamePill}><Text style={styles.openPlayCourtGameText}>LIVE SCORE</Text></View><View style={styles.openPlayCourtScoreTeam}><Text style={styles.openPlayCourtScoreNumber}>{scores[1]}</Text><Text style={[styles.openPlayCourtScoreTag, styles.openPlayCourtScoreTagAway]}>T2</Text></View></View>
       {[0, 1].map((side) => <Animated.View key={side} style={[styles.openPlayPlayCourtTeam, side === 1 && styles.openPlayPlayCourtTeamAway, { opacity: playerOpacity }]}>{teams[side].map((player) => <View key={player.id} style={styles.openPlayPlayCourtPlayer}><View style={[styles.openPlayPlayPlayerMarker, side === 1 && styles.openPlayPlayPlayerMarkerAway, serverSide === side && servingPosition === player.position && styles.openPlayPlayPlayerServing]}><Text style={styles.openPlayPlayPlayerInitials}>{player.isMe ? 'YOU' : player.name.split(/\s+/).map((part) => part[0]).join('').slice(0, 2).toUpperCase()}</Text></View><Text numberOfLines={1} style={styles.openPlayPlayPlayerName}>{playerLabel(player)}</Text></View>)}</Animated.View>)}
       {pointAnnouncement ? <Animated.View accessibilityRole="alert" accessibilityLiveRegion="assertive" pointerEvents="none" style={[styles.openPlayPlayAnnouncement, { opacity: announcementOpacity, transform: [{ scale: announcementScale }] }]}><Text style={styles.openPlayPlayAnnouncementPlayer}>{pointAnnouncement.player}</Text><Text numberOfLines={1} style={styles.openPlayPlayAnnouncementTeam}>{pointAnnouncement.team}</Text><Text style={styles.openPlayPlayAnnouncementText}>{pointAnnouncement.action}</Text><Text style={styles.openPlayPlayAnnouncementScore}>{pointAnnouncement.score}</Text><Text numberOfLines={2} style={styles.openPlayPlayAnnouncementServe}>{pointAnnouncement.note}</Text></Animated.View> : null}
-      <Animated.View pointerEvents="none" style={[styles.openPlayPlayBallShadow, { opacity: liveShadowOpacity, transform: [{ translateX: rallyX }, { translateY: rallyY }, { scaleX: shadowScale }] }]} />
-      <Animated.View accessibilityLabel="Pickleball rallying from player to player" pointerEvents="none" style={[styles.openPlayPlayBall, { opacity: playerOpacity, transform: [{ translateX: rallyX }, { translateY: rallyY }, { rotate: rallyRotation }, { scaleY: ballScaleY }] }]}><View style={styles.openPlayPlayBallHoleOne} /><View style={styles.openPlayPlayBallHoleTwo} /><View style={styles.openPlayPlayBallHoleThree} /></Animated.View>
+      <RallyBall travel={rallyTravel} bounce={ballBounce} doubles={doubles} opacity={playerOpacity} />
     </View>
     <View style={styles.openPlayScorerBooth}><View style={styles.openPlayScorerBoothAvatar}><Text style={styles.openPlayScorerBoothInitials}>{scorerInitials}</Text><View style={styles.openPlayScorerOnline} /></View><View style={styles.openPlayScorerBoothCopy}><Text style={styles.openPlayScorerBoothLabel}>PLAYER SCORER</Text><Text style={styles.openPlayScorerBoothName}>{scorerName}</Text><Text accessibilityLiveRegion="polite" numberOfLines={1} style={styles.openPlayScorerMessage}>{scorerMessage}</Text><Text style={styles.openPlayScorerServing}>{playerLabel(servingPlayer)} serving{doubles ? ` · Server ${serviceNumber}` : ''}</Text></View><View style={styles.openPlayScorerControlBadge}><Icon name={canScore ? 'create-outline' : 'eye-outline'} size={14} color={C.teal} /><Text style={styles.openPlayScorerControlText}>{canScore ? 'SCORING' : 'WATCHING'}</Text></View></View>
   </View>;
@@ -144,8 +119,7 @@ function OpenPlayLiveMatch({ session, onRefresh, onBack }) {
   const [pointAnnouncement, setPointAnnouncement] = useState(null);
   const [paused, setPaused] = useState(false);
   const [scorerMessage, setScorerMessage] = useState('Match started · scoring is live for every player.');
-  const ballBounce = useRef(new Animated.Value(0)).current;
-  const rallyTravel = useRef(new Animated.Value(0)).current;
+  const { ballBounce, rallyTravel, bounceBall } = useRallyBallAnimation({ doubles: match?.matchFormat === 'doubles', paused: paused || Boolean(pointAnnouncement) });
   const celebration = useRef(new Animated.Value(0)).current;
   const announcedEventRef = useRef(match?.lastEvent?.id || null);
   const appliedEventIdRef = useRef(Number(match?.lastEvent?.id || 0));
@@ -163,14 +137,6 @@ function OpenPlayLiveMatch({ session, onRefresh, onBack }) {
     if (typeof event.can_undo === 'boolean') setCanUndo(event.can_undo);
   }, []);
 
-  const bounceBall = useCallback(() => {
-    ballBounce.stopAnimation();
-    ballBounce.setValue(0);
-    Animated.sequence([
-      Animated.timing(ballBounce, { toValue: 1, duration: 160, easing: Easing.in(Easing.cubic), useNativeDriver: true }),
-      Animated.timing(ballBounce, { toValue: 0, duration: 260, easing: Easing.out(Easing.cubic), useNativeDriver: true }),
-    ]).start();
-  }, [ballBounce]);
 
   const announceRally = useCallback((event, onComplete = null) => {
     if (!event) return;
@@ -194,29 +160,17 @@ function OpenPlayLiveMatch({ session, onRefresh, onBack }) {
     bounceBall();
     celebration.stopAnimation();
     celebration.setValue(0);
-    Animated.timing(celebration, { toValue: 1, duration: 1900, easing: Easing.inOut(Easing.quad), useNativeDriver: true }).start(() => {
+    Animated.timing(celebration, { toValue: 1, duration: 1900, easing: Easing.inOut(Easing.quad), useNativeDriver: Platform.OS !== 'web' }).start(() => {
       setPointAnnouncement(null);
       celebration.setValue(0);
       onComplete?.();
     });
   }, [bounceBall, celebration, teamName, teams]);
 
-  useEffect(() => {
-    rallyTravel.stopAnimation();
-    if (paused || pointAnnouncement) return undefined;
-    rallyTravel.setValue(0);
-    const travelStops = match?.matchFormat === 'doubles' ? [.25, .5, .75, 1] : [.5, 1];
-    const legDuration = match?.matchFormat === 'doubles' ? 1150 : 1350;
-    const rally = Animated.loop(Animated.sequence(travelStops.map((toValue) => Animated.timing(rallyTravel, { toValue, duration: legDuration, easing: Easing.inOut(Easing.sin), useNativeDriver: true }))));
-    rally.start();
-    bounceBall();
-    return () => rally.stop();
-  }, [bounceBall, match?.matchFormat, paused, pointAnnouncement, rallyTravel]);
 
   useEffect(() => () => {
-    ballBounce.stopAnimation();
     celebration.stopAnimation();
-  }, [ballBounce, celebration]);
+  }, [celebration]);
 
   useEffect(() => {
     if (!match) return;
@@ -387,7 +341,7 @@ function SessionCard({ session, userLocation, onPress }) {
   </Pressable>;
 }
 
-export default function PlayerOpenPlayScreen({ onBack, onDetailBack = null, initialCode = '', initialSession = null, initialSessionId = null, navigationToken = null }) {
+export default function PlayerOpenPlayScreen({ onBack, onDetailBack = null, onOpenChat = null, initialCode = '', initialSession = null, initialSessionId = null, navigationToken = null }) {
   const { isDark } = useTheme();
   C = isDark ? { ...LIGHT_C, ...DARK_CONTENT_COLORS } : LIGHT_C;
   styles = isDark ? darkStyles : lightStyles;
@@ -595,9 +549,10 @@ export default function PlayerOpenPlayScreen({ onBack, onDetailBack = null, init
     const canJoin = !registration || ['cancelled', 'rejected'].includes(registration.status);
     const canCancel = registration && ['requested', 'waitlisted', 'approved'].includes(registration.status) && registration.playStatus !== 'playing' && !registration.departedAt;
     const canCheckIn = registration?.status === 'approved' && !registration.checkedInAt;
+    const canOpenChat = Boolean(onOpenChat) && ['approved', 'waitlisted'].includes(registration?.status);
     if (registration?.playStatus === 'playing' && selected.liveState?.activeMatch) return <OpenPlayLiveMatch session={selected} onRefresh={refreshSelected} onBack={() => { if (onDetailBack) { onDetailBack(); return; } setSelected(null); }} />;
     return <ScrollView contentContainerStyle={styles.content} showsVerticalScrollIndicator={false} refreshControl={<RefreshControl refreshing={busy} onRefresh={() => run(async () => {})} tintColor={C.teal} />}>
-      <View style={styles.header}><Pressable accessibilityLabel={onDetailBack ? 'Back' : 'Back to open play'} onPress={() => { if (onDetailBack) { onDetailBack(); return; } setSelected(null); setError(''); }} style={styles.backButton}><Icon name="arrow-back" /></Pressable><View style={styles.flex}><Text style={styles.eyebrow}>OPEN PLAY</Text><Text style={styles.h1}>Session details</Text></View></View>
+      <View style={styles.header}><Pressable accessibilityLabel={onDetailBack ? 'Back' : 'Back to open play'} onPress={() => { if (onDetailBack) { onDetailBack(); return; } setSelected(null); setError(''); }} style={styles.backButton}><Icon name="arrow-back" /></Pressable><View style={styles.flex}><Text style={styles.eyebrow}>OPEN PLAY</Text><Text style={styles.h1}>Session details</Text></View>{canOpenChat ? <Pressable accessibilityLabel="Open community chat" onPress={() => onOpenChat(selected)} style={styles.backButton}><Icon name="chatbubble-ellipses-outline" /></Pressable> : null}</View>
       <ConnectionStatus />
       <View style={styles.detailHero}><View style={styles.verifiedPill}><Icon name="shield-checkmark" size={12} color={C.teal} /><Text style={styles.verifiedText}>VERIFIED VENUE</Text></View><Text style={styles.detailTitle}>{selected.name}</Text><Text style={styles.detailVenue}>{selected.venue?.name}</Text><Text style={styles.detailAddress}>{selected.venue?.address}</Text></View>
       <StatusCard registration={registration} liveState={selected.liveState} />
@@ -656,7 +611,6 @@ const lightStyles = createMobileStyleSheet({
   openPlayPlayCourtTeam: { position: 'absolute', zIndex: 3, top: 20, left: 24, right: 24, height: 52, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-around' }, openPlayPlayCourtTeamAway: { top: 148 }, openPlayPlayCourtPlayer: { maxWidth: '46%', alignItems: 'center' }, openPlayPlayPlayerMarker: { width: 34, height: 34, alignItems: 'center', justifyContent: 'center', borderRadius: 17, borderWidth: 2, borderColor: LIGHT_C.surface, backgroundColor: LIGHT_C.ink }, openPlayPlayPlayerMarkerAway: { backgroundColor: LIGHT_C.brick }, openPlayPlayPlayerServing: { borderWidth: 4, borderColor: LIGHT_C.optic }, openPlayPlayPlayerInitials: { color: LIGHT_C.surface, fontSize: 8, fontWeight: '900' }, openPlayPlayPlayerName: { maxWidth: 105, marginTop: 3, paddingHorizontal: 6, paddingVertical: 2, overflow: 'hidden', borderRadius: 7, color: LIGHT_C.surface, backgroundColor: 'rgba(14,35,33,.78)', fontSize: 6, fontWeight: '800' },
   openPlayCourtScoreBar: { position: 'absolute', zIndex: 8, top: 90, alignSelf: 'center', minWidth: 150, height: 40, paddingHorizontal: 8, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', borderRadius: 20, borderWidth: 2, borderColor: 'rgba(255,255,255,.35)', backgroundColor: 'rgba(14,35,33,.9)' }, openPlayCourtScoreTeam: { flexDirection: 'row', alignItems: 'center', gap: 6 }, openPlayCourtScoreTag: { color: LIGHT_C.optic, fontSize: 7, fontWeight: '900' }, openPlayCourtScoreTagAway: { color: '#F5A58F' }, openPlayCourtScoreNumber: { minWidth: 25, color: LIGHT_C.surface, textAlign: 'center', fontSize: 21, fontWeight: '900' }, openPlayCourtGamePill: { marginHorizontal: 6, paddingHorizontal: 6, paddingVertical: 4, borderRadius: 6, backgroundColor: 'rgba(255,255,255,.1)' }, openPlayCourtGameText: { color: 'rgba(255,255,255,.62)', fontSize: 5, fontWeight: '900', letterSpacing: .4 },
   openPlayPlayAnnouncement: { position: 'absolute', zIndex: 12, left: 22, right: 22, top: 35, bottom: 35, alignItems: 'center', justifyContent: 'center', borderRadius: 18, backgroundColor: 'rgba(14,35,33,.92)' }, openPlayPlayAnnouncementPlayer: { color: LIGHT_C.optic, fontSize: 16, fontWeight: '900', textAlign: 'center' }, openPlayPlayAnnouncementTeam: { maxWidth: '90%', marginTop: 3, color: LIGHT_C.surface, fontSize: 10, fontWeight: '800', textAlign: 'center' }, openPlayPlayAnnouncementText: { marginTop: 6, color: 'rgba(255,255,255,.58)', fontSize: 8, fontWeight: '900', letterSpacing: 1.2 }, openPlayPlayAnnouncementScore: { marginTop: 3, color: LIGHT_C.surface, fontSize: 25, fontWeight: '900' }, openPlayPlayAnnouncementServe: { maxWidth: '92%', marginTop: 5, color: LIGHT_C.optic, textAlign: 'center', fontSize: 8, fontWeight: '800' },
-  openPlayPlayBall: { position: 'absolute', zIndex: 6, top: 98, left: '50%', marginLeft: -12, width: 25, height: 25, borderRadius: 13, borderWidth: 2, borderColor: 'rgba(14,35,33,.18)', backgroundColor: LIGHT_C.optic }, openPlayPlayBallShadow: { position: 'absolute', zIndex: 5, top: 119, left: '50%', marginLeft: -13, width: 26, height: 7, borderRadius: 13, backgroundColor: LIGHT_C.ink }, openPlayPlayBallHoleOne: { position: 'absolute', top: 5, left: 6, width: 3, height: 3, borderRadius: 2, backgroundColor: 'rgba(14,35,33,.36)' }, openPlayPlayBallHoleTwo: { position: 'absolute', top: 12, right: 5, width: 3, height: 3, borderRadius: 2, backgroundColor: 'rgba(14,35,33,.36)' }, openPlayPlayBallHoleThree: { position: 'absolute', bottom: 4, left: 8, width: 3, height: 3, borderRadius: 2, backgroundColor: 'rgba(14,35,33,.36)' },
   openPlayScorerBooth: { minHeight: 86, padding: 12, flexDirection: 'row', alignItems: 'center', gap: 10 }, openPlayScorerBoothAvatar: { width: 46, height: 46, alignItems: 'center', justifyContent: 'center', borderRadius: 15, backgroundColor: LIGHT_C.ink }, openPlayScorerBoothInitials: { color: LIGHT_C.surface, fontSize: 11, fontWeight: '900' }, openPlayScorerOnline: { position: 'absolute', right: -2, bottom: -2, width: 13, height: 13, borderRadius: 7, borderWidth: 3, borderColor: LIGHT_C.surface, backgroundColor: LIGHT_C.optic }, openPlayScorerBoothCopy: { flex: 1, minWidth: 0 }, openPlayScorerBoothLabel: { color: LIGHT_C.teal, fontSize: 6, fontWeight: '900', letterSpacing: .7 }, openPlayScorerBoothName: { marginTop: 2, color: LIGHT_C.ink, fontSize: 11, fontWeight: '900' }, openPlayScorerMessage: { marginTop: 3, color: LIGHT_C.ink40, fontSize: 7 }, openPlayScorerServing: { marginTop: 3, color: LIGHT_C.teal, fontSize: 7, fontWeight: '800' }, openPlayScorerControlBadge: { paddingHorizontal: 7, minHeight: 27, flexDirection: 'row', alignItems: 'center', gap: 3, borderRadius: 9, backgroundColor: LIGHT_C.tealWash }, openPlayScorerControlText: { color: LIGHT_C.teal, fontSize: 5, fontWeight: '900', letterSpacing: .4 },
   openPlayPlayScorerActions: { marginHorizontal: 20, marginTop: 14, padding: 14, borderRadius: 18, borderWidth: 1, borderColor: LIGHT_C.line, backgroundColor: LIGHT_C.surface }, openPlayPlayScorerActionHead: { marginBottom: 11, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }, openPlayPlayScorerActionTitle: { color: LIGHT_C.ink, fontSize: 14, fontWeight: '900' }, openPlayPlayScorerActionMeta: { marginTop: 3, color: LIGHT_C.teal, fontSize: 8, fontWeight: '800' }, openPlayPlayTeamBadge: { width: 31, height: 31, borderRadius: 9, alignItems: 'center', justifyContent: 'center', backgroundColor: LIGHT_C.teal }, openPlayPlayTeamBadgeAway: { backgroundColor: LIGHT_C.brick }, openPlayPlayTeamBadgeText: { color: LIGHT_C.surface, fontSize: 8, fontWeight: '900' }, openPlayPlayRallyButtons: { flexDirection: 'row', gap: 8 }, openPlayPlayRallyButton: { minHeight: 82, flex: 1, paddingHorizontal: 8, alignItems: 'center', justifyContent: 'center', borderRadius: 13, backgroundColor: LIGHT_C.teal }, openPlayPlayRallyButtonAway: { backgroundColor: LIGHT_C.brick }, openPlayPlayRallyTag: { color: 'rgba(255,255,255,.58)', fontSize: 6, fontWeight: '900', letterSpacing: .7 }, openPlayPlayRallyName: { minHeight: 27, marginTop: 3, color: LIGHT_C.surface, textAlign: 'center', fontSize: 9, lineHeight: 13, fontWeight: '900' }, openPlayPlayRallyAction: { marginTop: 3, color: LIGHT_C.surface, fontSize: 7, fontWeight: '900', letterSpacing: .7 }, openPlayPlayAutoServeHint: { marginTop: 10, color: LIGHT_C.teal, textAlign: 'center', fontSize: 8, fontWeight: '800' }, openPlayPlayPointDisabled: { opacity: .4 },
   openPlayPlayControls: { marginHorizontal: 20, marginTop: 12, flexDirection: 'row', gap: 8 }, openPlayPlayControlButton: { flex: 1, minHeight: 48, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 5, borderRadius: 12, borderWidth: 1, borderColor: LIGHT_C.line, backgroundColor: LIGHT_C.surface }, openPlayPlayControlText: { color: LIGHT_C.teal, fontSize: 8, fontWeight: '800' }, openPlayPlayControlDisabled: { opacity: .48 }, openPlayPlayControlTextDisabled: { color: LIGHT_C.ink40 }, openPlayPlayFinishButton: { borderColor: LIGHT_C.optic, backgroundColor: LIGHT_C.optic }, openPlayPlayFinishPending: { borderColor: LIGHT_C.line, backgroundColor: LIGHT_C.tealWash }, openPlayPlayFinishText: { color: '#0E2321', fontSize: 8, fontWeight: '900' }, openPlayPlayFinishTextPending: { color: LIGHT_C.ink70 },

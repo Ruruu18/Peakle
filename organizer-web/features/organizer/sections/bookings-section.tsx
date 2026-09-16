@@ -48,7 +48,7 @@ export function BookingsSection({ data, venue, resourceId }: { data: OrganizerDa
   const [query, setQuery] = useState("");
   const [now] = useState(() => Date.now());
 
-  if (!venue) return <div className="card venue-onboarding"><p>Add a venue to start tracking bookings.</p></div>;
+  if (!venue) return <div className="card venue-onboarding" style={{ gridTemplateColumns: "1fr", textAlign: "center" }}><p style={{ margin: "auto" }}>Add a venue to start tracking bookings.</p></div>;
 
   if (resourceId) {
     const booking = bookings.find((item) => item.id === resourceId);

@@ -1,6 +1,9 @@
+import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.45.4';
+import { CORS_HEADERS, handleCorsPreflight } from '../_shared/cors.ts';
+
 const OPENROUTESERVICE_MATRIX_URL = 'https://api.heigit.org/openrouteservice/v2/matrix/driving-car';
 const MAX_DESTINATIONS = 25;
-const responseHeaders = { 'Content-Type': 'application/json', 'Cache-Control': 'private, max-age=60' };
+const responseHeaders = { 'Content-Type': 'application/json', 'Cache-Control': 'private, max-age=60', ...CORS_HEADERS };
 
 type Coordinates = { latitude: number; longitude: number };
 type Destination = Coordinates & { id: string };
@@ -24,7 +27,20 @@ function location(value: Coordinates) {
 }
 
 Deno.serve(async (request) => {
+  const preflight = handleCorsPreflight(request);
+  if (preflight) return preflight;
   if (request.method !== 'POST') return json({ error: 'Method not allowed.' }, 405);
+
+  const supabaseUrl = Deno.env.get('SUPABASE_URL');
+  const anonKey = Deno.env.get('SUPABASE_ANON_KEY');
+  if (!supabaseUrl || !anonKey) return json({ error: 'Missing server configuration.' }, 500);
+  const userClient = createClient(supabaseUrl, anonKey, {
+    global: { headers: { Authorization: request.headers.get('Authorization') || '' } },
+    auth: { persistSession: false },
+  });
+  const { data: userData, error: userError } = await userClient.auth.getUser();
+  if (userError || !userData?.user) return json({ error: 'Authentication required.' }, 401);
+
   const apiKey = Deno.env.get('OPENROUTESERVICE_API_KEY');
   if (!apiKey) return json({ error: 'Driving routes are not configured.' }, 503);
 

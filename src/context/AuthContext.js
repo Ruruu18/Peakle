@@ -1,11 +1,12 @@
 import React, { createContext, useContext, useEffect, useMemo, useRef, useState } from 'react';
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import { AppState, Linking } from 'react-native';
+import { AppState, Linking, Platform } from 'react-native';
 import { makeRedirectUri } from 'expo-auth-session';
 import * as WebBrowser from 'expo-web-browser';
 import { isSupabaseConfigured, requireSupabase, supabase } from '../lib/supabase';
 import { readCachedData, withTimeout, writeCachedData } from '../lib/asyncData';
 import { DEMO_MODE } from '../config/demoMode';
+import { cleanAuthUrl, readAuthParams } from '../lib/authLinks';
 import { DEMO_USER } from '../config/demoData';
 import { disablePushToken } from '../services/realtimeOperations';
 import { deleteManagedProfilePhoto, isLocalPhotoUri, normalizeProfilePhoto, uploadProfilePhoto } from '../services/profilePhotos';
@@ -27,7 +28,7 @@ const ONBOARDING_SAVE_TIMEOUT_MS = 15000;
 const AUTH_STARTUP_TIMEOUT_MS = 8000;
 const userCacheKey = (userId) => `@peakle/cache/auth-user/${userId}`;
 
-function mapUser(authUser, profile, isAdmin = false) {
+export function mapUser(authUser, profile, isAdmin = false) {
   if (!authUser) return null;
   const metadata = authUser.user_metadata || {};
   return {
@@ -63,7 +64,7 @@ async function recordLogin(authUserId, method) {
   }
 }
 
-async function readCurrentUser(authUser) {
+export async function readCurrentUser(authUser) {
   if (!authUser) return null;
   const client = requireSupabase();
   const [{ data: profile, error: profileError }, { data: adminAccess, error: adminError }] = await Promise.all([
@@ -76,14 +77,7 @@ async function readCurrentUser(authUser) {
   return mapUser(authUser, profile, !adminError && Boolean(adminAccess));
 }
 
-function readAuthParams(url) {
-  if (!url) return new URLSearchParams();
-  const query = url.includes('?') ? url.split('?')[1].split('#')[0] : '';
-  const fragment = url.includes('#') ? url.split('#')[1] : '';
-  return new URLSearchParams([query, fragment].filter(Boolean).join('&'));
-}
-
-async function restoreSessionFromUrl(url) {
+export async function restoreSessionFromUrl(url) {
   const client = requireSupabase();
   const params = readAuthParams(url);
   const errorDescription = params.get('error_description');
@@ -104,7 +98,7 @@ async function restoreSessionFromUrl(url) {
   return params.get('type') === 'recovery' || url.includes('reset-password');
 }
 
-async function getExpoGoOAuthRedirectUrl() {
+export async function getExpoGoOAuthRedirectUrl() {
   const generatedUrl = makeRedirectUri({ path: 'oauth/callback' });
   const launchUrl = await Linking.getInitialURL().catch(() => null);
   if (!launchUrl?.startsWith('exp://')) return generatedUrl;
@@ -233,7 +227,10 @@ export function AuthProvider({ children }) {
       setAuthLinkError('');
       restoreSessionFromUrl(url)
         .then((isRecovery) => { if (active && isRecovery) setPasswordRecovery(true); })
-        .catch((error) => { if (active) setAuthLinkError(error.message || 'This sign-in link is invalid or expired.'); });
+        .catch((error) => { if (active) setAuthLinkError(error.message || 'This sign-in link is invalid or expired.'); })
+        .finally(() => {
+          if (Platform.OS === 'web' && active) window.history.replaceState(window.history.state, '', cleanAuthUrl(url));
+        });
     };
     const linkListener = Linking.addEventListener('url', openUrl);
     Linking.getInitialURL().then((url) => { if (url) openUrl({ url }); });
@@ -302,7 +299,7 @@ export function AuthProvider({ children }) {
   };
 
   const signUp = async ({ name, email, password }) => {
-    const emailRedirectTo = Linking.createURL('verify-email');
+    const emailRedirectTo = makeRedirectUri({ scheme: 'peakle', path: 'verify-email' });
     const { data, error } = await requireSupabase().auth.signUp({
       email,
       password,
@@ -327,7 +324,7 @@ export function AuthProvider({ children }) {
     const { error } = await requireSupabase().auth.resend({
       type: 'signup',
       email,
-      options: { emailRedirectTo: Linking.createURL('verify-email') },
+      options: { emailRedirectTo: makeRedirectUri({ scheme: 'peakle', path: 'verify-email' }) },
     });
     if (error) throw error;
   };
@@ -356,6 +353,19 @@ export function AuthProvider({ children }) {
   // then restore the returned Supabase session from the Expo deep link.
   const signInWithGoogleOAuth = async () => {
     const client = requireSupabase();
+    if (Platform.OS === 'web') {
+      // Redirect in this tab so Safari does not depend on a popup or a second
+      // browser's PKCE verifier. The normal startup handler restores the session.
+      await rememberSignInMethod('google');
+      const { data, error } = await client.auth.signInWithOAuth({
+        provider: 'google',
+        options: { redirectTo: `${window.location.origin}/oauth/callback`, skipBrowserRedirect: true, queryParams: { prompt: 'select_account' } },
+      });
+      if (error) throw error;
+      if (!data?.url) throw new Error('Google sign-in could not be started.');
+      window.location.assign(data.url);
+      return { cancelled: false };
+    }
     const redirectTo = await getExpoGoOAuthRedirectUrl();
     if (__DEV__) console.info(`[Peakle Google OAuth] Add this Supabase redirect URL: ${redirectTo}`);
     const { data, error } = await client.auth.signInWithOAuth({
@@ -387,7 +397,7 @@ export function AuthProvider({ children }) {
   };
 
   const requestPasswordReset = async (email) => {
-    const redirectTo = Linking.createURL('reset-password');
+    const redirectTo = makeRedirectUri({ scheme: 'peakle', path: 'reset-password' });
     const { error } = await requireSupabase().auth.resetPasswordForEmail(email, { redirectTo });
     if (error) throw error;
   };
