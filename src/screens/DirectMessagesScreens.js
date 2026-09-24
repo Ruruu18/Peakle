@@ -741,12 +741,14 @@ function DirectMessageInteractionModal({ message, mode, peer, seen, colors, onMo
         <Pressable accessibilityLabel="Close message actions" onPress={onClose} style={StyleSheet.absoluteFillObject} />
         {mode === 'reactions' ? (
           <View {...webDialog('surface')} style={[styles.messageInteractionCard, message.mine && styles.messageInteractionCardMine]}>
-            <View style={[styles.directReactionPicker, { backgroundColor: colors.surface }]}>
-              {DIRECT_REACTION_OPTIONS.map((emoji) => <Pressable key={emoji} accessibilityLabel={`React ${emoji}`} onPress={() => { onReact(message.id, emoji); onClose(); }} style={({ pressed }) => [styles.directReactionOption, pressed && { backgroundColor: colors.tealWash }]}><Text style={styles.directReactionOptionText}>{emoji}</Text></Pressable>)}
-            </View>
             <View style={[styles.messageInteractionPreviewRow, message.mine && styles.messageInteractionPreviewRowMine]}>
               <View style={[styles.messageInteractionPreview, { backgroundColor: colors.surface, borderColor: colors.line }, message.mine && styles.messageInteractionPreviewMine, message.mine && { backgroundColor: colors.teal, borderColor: colors.teal }]}>
                 <Text numberOfLines={5} style={[styles.messageInteractionPreviewText, { color: message.mine ? '#FFFFFF' : colors.ink }]}>{preview}</Text>
+              </View>
+            </View>
+            <View style={[styles.messageInteractionBottomRow, message.mine && styles.messageInteractionBottomRowMine]}>
+              <View style={[styles.directReactionPicker, { backgroundColor: colors.surface }]}>
+                {DIRECT_REACTION_OPTIONS.map((emoji) => <Pressable key={emoji} accessibilityLabel={`React ${emoji}`} onPress={() => { onReact(message.id, emoji); onClose(); }} style={({ pressed }) => [styles.directReactionOption, pressed && { backgroundColor: colors.tealWash }]}><Text style={styles.directReactionOptionText}>{emoji}</Text></Pressable>)}
               </View>
               <Pressable accessibilityLabel="More message actions" onPress={() => onModeChange('actions')} style={[styles.messageInteractionMore, { backgroundColor: colors.surface }]}><Icon name="ellipsis-horizontal" size={22} color={colors.ink} /></Pressable>
             </View>
@@ -1280,7 +1282,7 @@ const styles = StyleSheet.create({
   messageInteractionBackdropBottom: { paddingHorizontal: 10, justifyContent: 'flex-end' },
   messageInteractionCard: { maxWidth: '92%', alignSelf: 'flex-start' },
   messageInteractionCardMine: { alignSelf: 'flex-end', alignItems: 'flex-end' },
-  directReactionPicker: { minHeight: 54, marginBottom: 10, paddingHorizontal: 7, flexDirection: 'row', alignItems: 'center', gap: 1, borderRadius: 28, ...Platform.select({ ios: { shadowColor: '#000000', shadowOpacity: .2, shadowRadius: 18, shadowOffset: { width: 0, height: 8 } }, android: { elevation: 8 } }) },
+  directReactionPicker: { minHeight: 54, paddingHorizontal: 7, flexDirection: 'row', alignItems: 'center', gap: 1, borderRadius: 28, ...Platform.select({ ios: { shadowColor: '#000000', shadowOpacity: .2, shadowRadius: 18, shadowOffset: { width: 0, height: 8 } }, android: { elevation: 8 } }) },
   directReactionOption: { width: 43, height: 46, alignItems: 'center', justifyContent: 'center', borderRadius: 23 },
   directReactionOptionText: { fontSize: 25 },
   messageInteractionPreviewRow: { maxWidth: '100%', flexDirection: 'row', alignItems: 'center', gap: 8 },
@@ -1288,6 +1290,8 @@ const styles = StyleSheet.create({
   messageInteractionPreview: { maxWidth: '82%', paddingHorizontal: 14, paddingVertical: 11, borderRadius: 18, borderBottomLeftRadius: 5 },
   messageInteractionPreviewMine: { borderBottomLeftRadius: 18, borderBottomRightRadius: 5 },
   messageInteractionPreviewText: { fontSize: 12, lineHeight: 18 },
+  messageInteractionBottomRow: { marginTop: 6, flexDirection: 'row', alignItems: 'center', gap: 6 },
+  messageInteractionBottomRowMine: { justifyContent: 'flex-end' },
   messageInteractionMore: { width: 43, height: 43, alignItems: 'center', justifyContent: 'center', borderRadius: 22, ...Platform.select({ ios: { shadowColor: '#000000', shadowOpacity: .18, shadowRadius: 12, shadowOffset: { width: 0, height: 6 } }, android: { elevation: 7 } }) },
   directActionSheet: { marginBottom: 10, paddingHorizontal: 14, paddingTop: 8, paddingBottom: 12, borderRadius: 24, ...Platform.select({ ios: { shadowColor: '#000000', shadowOpacity: .22, shadowRadius: 20, shadowOffset: { width: 0, height: 9 } }, android: { elevation: 10 } }) },
   directActionHandle: { width: 42, height: 4, alignSelf: 'center', borderRadius: 2 },
