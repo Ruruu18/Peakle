@@ -7,7 +7,7 @@ import { isSupabaseConfigured, requireSupabase, supabase } from '../lib/supabase
 import { readCachedData, withTimeout, writeCachedData } from '../lib/asyncData';
 import { DEMO_MODE } from '../config/demoMode';
 import { GOOGLE_HANDOFF_PARAM, cleanAuthUrl, clearAppHandoff, createHandoffId, readAuthParams, rememberAppHandoff, safariHandoffUrl } from '../lib/authLinks';
-import GoogleHandoffPin from '../components/GoogleHandoffPin';
+import GoogleHandoffNotice from '../components/GoogleHandoffNotice';
 import { isAccountAccessError } from '../lib/accountAccess';
 import { DEMO_USER } from '../config/demoData';
 import { disablePushToken } from '../services/realtimeOperations';
@@ -128,7 +128,7 @@ async function beginSafariHandoff(handoffId) {
 }
 
 // Safari, back from Google: do not sign in here. Park the one-time code and
-// PKCE verifier for the Home Screen app and return the PIN to show.
+// PKCE verifier for the Home Screen app, which picks it up by itself.
 async function parkSafariHandoff(handoffId, url) {
   const client = requireSupabase();
   const verifierKey = `${client.auth.storageKey}-code-verifier`;
@@ -139,9 +139,8 @@ async function parkSafariHandoff(handoffId, url) {
     const code = params.get('code');
     const verifier = window.localStorage.getItem(verifierKey);
     if (!code || !verifier) throw new Error('Google sign-in did not finish. Start again from the Peakle app.');
-    const { data: pin, error } = await client.rpc('put_auth_handoff', { p_id: handoffId, p_auth_code: code, p_code_verifier: verifier });
+    const { error } = await client.rpc('put_auth_handoff', { p_id: handoffId, p_auth_code: code, p_code_verifier: verifier });
     if (error) throw error;
-    return pin;
   } finally {
     window.localStorage.removeItem(GOOGLE_HANDOFF_KEY);
     window.localStorage.removeItem(verifierKey);
@@ -316,7 +315,7 @@ export function AuthProvider({ children }) {
           } else {
             setGoogleHandoff({ pending: true });
             parkSafariHandoff(pendingHandoff, url)
-              .then((pin) => { if (active) setGoogleHandoff({ pin }); })
+              .then(() => { if (active) setGoogleHandoff({ done: true }); })
               .catch((error) => { if (active) setGoogleHandoff({ error: error.message || 'Google sign-in could not be completed.' }); });
           }
           return;
@@ -484,8 +483,8 @@ export function AuthProvider({ children }) {
   // Expo Go cannot present itself as Peakle's registered native Google client.
   // Route that environment through Supabase's approved HTTPS OAuth callback,
   // then restore the returned Supabase session from the Expo deep link.
-  // Home Screen app: hand Google sign-in to Safari. The caller then asks for
-  // the PIN Safari shows and passes it to finishSafariGoogleSignIn.
+  // Home Screen app: hand Google sign-in to Safari. The caller then polls
+  // finishSafariGoogleSignIn until Safari has parked the sign-in.
   const startSafariGoogleSignIn = (existingHandoffId) => {
     const handoffId = existingHandoffId || createHandoffId();
     rememberAppHandoff(handoffId);
@@ -493,14 +492,14 @@ export function AuthProvider({ children }) {
     return handoffId;
   };
 
-  const finishSafariGoogleSignIn = async (handoffId, pin) => {
+  // Resolves false while Safari has not finished, true once signed in here.
+  const finishSafariGoogleSignIn = async (handoffId) => {
     const client = requireSupabase();
-    const { data, error } = await client.rpc('take_auth_handoff', { p_id: handoffId, p_pin: pin });
+    const { data, error } = await client.rpc('take_auth_handoff', { p_id: handoffId });
     if (error) throw error;
     const result = Array.isArray(data) ? data[0] : data;
-    if (result?.status === 'wrong_pin') throw new Error('That code does not match. Check the code in Safari.');
+    if (result?.status !== 'ok') return false;
     clearAppHandoff();
-    if (result?.status !== 'ok') throw new Error('This sign-in expired. Tap Sign in with Google to try again.');
     // Safari created the PKCE verifier; restore it here so this app can
     // redeem the one-time code for its own session.
     window.localStorage.setItem(`${client.auth.storageKey}-code-verifier`, result.code_verifier);
@@ -510,7 +509,9 @@ export function AuthProvider({ children }) {
     if (!authUser) throw new Error('Google sign-in completed without an account session.');
     setPendingVerificationEmail('');
     await AsyncStorage.removeItem(PENDING_VERIFICATION_EMAIL_KEY).catch(() => {});
+    await recordLogin(authUser.id, 'google');
     setUser(await readCurrentUser(authUser));
+    return true;
   };
 
   const signInWithGoogleOAuth = async () => {
@@ -714,7 +715,7 @@ export function AuthProvider({ children }) {
     signInWithGoogle: async () => {},
     signInWithGoogleOAuth: async () => ({ cancelled: true }),
     startSafariGoogleSignIn: () => null,
-    finishSafariGoogleSignIn: async () => {},
+    finishSafariGoogleSignIn: async () => false,
     requestPasswordReset: async () => {},
     updatePassword: async () => {},
     completeOnboarding: async () => {},
@@ -750,7 +751,7 @@ export function AuthProvider({ children }) {
   return (
     <AuthContext.Provider value={value}>
       {children}
-      {googleHandoff ? <GoogleHandoffPin {...googleHandoff} onDismiss={() => setGoogleHandoff(null)} /> : null}
+      {googleHandoff ? <GoogleHandoffNotice {...googleHandoff} onDismiss={() => setGoogleHandoff(null)} /> : null}
     </AuthContext.Provider>
   );
 }

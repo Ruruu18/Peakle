@@ -4,18 +4,16 @@ import { ActivityIndicator, Platform, Pressable, StyleSheet, Text, View } from '
 const C = { ink: '#0E2321', surface: '#FFFFFF', optic: '#D6E94A', muted: '#B8C6C1', brick: '#E07A5F' };
 
 // Shown in Safari after a Google sign-in started from the Home Screen app.
-// The player types this PIN into the app to finish signing in there.
-export default function GoogleHandoffPin({ pin, error, onDismiss }) {
+// The app signs itself in as soon as the player switches back to it.
+export default function GoogleHandoffNotice({ done, error, onDismiss }) {
   return (
     <View style={styles.overlay}>
       <View style={styles.card}>
-        {pin ? (
+        {done ? (
           <>
-            <Text style={styles.eyebrow}>ALMOST DONE</Text>
-            <Text style={styles.title}>Enter this code in the Peakle app</Text>
-            <Text accessibilityLabel={`Code ${pin.split('').join(' ')}`} selectable style={styles.pin}>{pin}</Text>
-            <Text style={styles.body}>Go back to Peakle on your Home Screen and type this code. It expires in 10 minutes.</Text>
-            <Text style={styles.warning}>Only enter it in your own Peakle app. Never share it with anyone.</Text>
+            <Text style={styles.eyebrow}>SIGNED IN</Text>
+            <Text style={styles.title}>Go back to Peakle</Text>
+            <Text style={styles.body}>Open Peakle from your Home Screen. You'll be signed in automatically. You can close this Safari tab.</Text>
           </>
         ) : error ? (
           <>
@@ -39,9 +37,7 @@ const styles = StyleSheet.create({
   card: { width: '100%', maxWidth: 380, alignItems: 'center', gap: 12 },
   eyebrow: { color: C.optic, fontSize: 10, fontWeight: '900', letterSpacing: 1.2 },
   title: { color: C.surface, fontSize: 24, lineHeight: 30, fontWeight: '900', textAlign: 'center' },
-  pin: { marginVertical: 8, color: C.optic, fontSize: 44, fontWeight: '900', letterSpacing: 8, fontVariant: ['tabular-nums'] },
   body: { color: C.muted, fontSize: 14, lineHeight: 20, textAlign: 'center' },
-  warning: { color: C.muted, fontSize: 12, lineHeight: 18, textAlign: 'center', opacity: 0.8 },
   error: { color: C.brick, fontSize: 14, lineHeight: 20, textAlign: 'center' },
   button: { marginTop: 8, minHeight: 48, paddingHorizontal: 24, borderRadius: 14, alignItems: 'center', justifyContent: 'center', backgroundColor: C.optic },
   buttonText: { color: C.ink, fontSize: 14, fontWeight: '900' },
