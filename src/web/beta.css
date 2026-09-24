@@ -27,6 +27,13 @@ button, input, textarea, select { font: inherit; }
 .beta-dialog button { min-height: 44px; padding: 10px 16px; cursor: pointer; border: 1px solid #dde3da; border-radius: 10px; font-weight: 700; color: #0e2321; background: #d6e94a; }
 .beta-dialog button.cancel { background: #f3f5ef; }
 .beta-dialog button.destructive { color: #fff; background: #a53f29; border-color: #a53f29; }
+.beta-rotate { display: none; }
+/* Phones held sideways (short, touch-only viewports) get a rotate prompt; tablets and desktops keep landscape. */
+@media (orientation: landscape) and (max-height: 500px) and (hover: none) and (pointer: coarse) {
+  .beta-rotate { position: fixed; inset: 0; z-index: 2147483647; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 14px; padding: 24px; text-align: center; color: #f3f5ef; background: #0e2321; }
+  .beta-rotate p { margin: 0; max-width: 280px; font-size: 16px; font-weight: 600; line-height: 1.4; }
+  .beta-app, .beta-banner { visibility: hidden; }
+}
 :focus-visible { outline: 3px solid #1c6b66; outline-offset: 3px; }
 /* Text fields use their existing container and caret, without an extra focus ring. */
 input:not([type="checkbox"]):not([type="radio"]):focus, textarea:focus { outline: none; }

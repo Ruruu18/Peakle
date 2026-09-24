@@ -23,7 +23,15 @@ function WebAlert() {
   </dialog>;
 }
 
+// Browsers only honour orientation locks for installed or fullscreen apps, so
+// this is best-effort; the CSS rotate prompt covers every other phone.
+const PHONE_QUERY = '(hover: none) and (pointer: coarse) and (max-width: 500px), (hover: none) and (pointer: coarse) and (max-height: 500px)';
+
 export default function WebBetaApp() {
+  useEffect(() => {
+    if (!window.matchMedia?.(PHONE_QUERY).matches) return;
+    screen.orientation?.lock?.('portrait').catch(() => {});
+  }, []);
   const [online, setOnline] = useState(() => typeof navigator === 'undefined' || navigator.onLine);
   useEffect(() => {
     const update = () => setOnline(navigator.onLine);
@@ -49,5 +57,9 @@ export default function WebBetaApp() {
     </header>
     <main className="beta-app" aria-label="Peakle player app"><App /></main>
     <WebAlert />
+    <div className="beta-rotate" role="alert">
+      <Ionicons name="phone-portrait-outline" size={40} color="#d6e94a" />
+      <p>Rotate your phone to portrait to keep playing.</p>
+    </div>
   </div>;
 }
