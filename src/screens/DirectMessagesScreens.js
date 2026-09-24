@@ -695,7 +695,10 @@ function MessageRelationshipGate({ peer, permission, busy, onFollow, colors }) {
   const alreadyFollowing = permission?.isFollowing;
   const followsYou = permission?.followsYou;
   const requestPending = permission?.followRequestPending;
-  const peerUnavailable = permission?.peerChatEligible === false && (permission?.sharesTeam || (alreadyFollowing && followsYou));
+  // Older databases report peer eligibility only for teammates (null otherwise),
+  // so a locked chat between mutual followers also means the peer is ineligible.
+  const peerUnavailable = permission?.peerChatEligible !== true && !permission?.blocked
+    && (permission?.sharesTeam || (alreadyFollowing && followsYou));
   const title = permission?.blocked
     ? 'Private messaging is unavailable.'
     : peerUnavailable
