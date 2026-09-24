@@ -1,4 +1,14 @@
-:root { color-scheme: light; background: #e5ebe5; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
+/* Same PP Mori files and fallback stack as organizer-web/app/layout.tsx. */
+@font-face { font-family: "PP Mori"; src: url("/fonts/pp-mori/ppmori-regular.otf") format("opentype"); font-weight: 400; font-style: normal; font-display: swap; }
+@font-face { font-family: "PP Mori"; src: url("/fonts/pp-mori/ppmori-semibold.otf") format("opentype"); font-weight: 600; font-style: normal; font-display: swap; }
+@font-face { font-family: "PP Mori"; src: url("/fonts/pp-mori/ppmori-extralight.otf") format("opentype"); font-weight: 200; font-style: normal; font-display: swap; }
+@font-face { font-family: "PP Mori"; src: url("/fonts/pp-mori/ppmori-regularitalic.otf") format("opentype"); font-weight: 400; font-style: italic; font-display: swap; }
+@font-face { font-family: "PP Mori"; src: url("/fonts/pp-mori/ppmori-semibolditalic.otf") format("opentype"); font-weight: 600; font-style: italic; font-display: swap; }
+@font-face { font-family: "PP Mori"; src: url("/fonts/pp-mori/ppmori-extralightitalic.otf") format("opentype"); font-weight: 200; font-style: italic; font-display: swap; }
+:root { --font-body: "PP Mori", "Avenir Next", system-ui, sans-serif; color-scheme: light; background: #e5ebe5; font-family: var(--font-body); }
+/* React Native Web gives every Text/TextInput a hard-coded system font through these reset classes.
+   Explicit fontFamily styles (icon fonts) are applied inline, so they still win. */
+[class*="css-text-"], [class*="css-textinput-"] { font-family: var(--font-body); }
 html, body, #root { margin: 0; width: 100%; height: 100%; }
 body { overflow: hidden; overscroll-behavior: none; }
 button, input, textarea, select { font: inherit; }
@@ -18,6 +28,8 @@ button, input, textarea, select { font: inherit; }
 .beta-dialog button.cancel { background: #f3f5ef; }
 .beta-dialog button.destructive { color: #fff; background: #a53f29; border-color: #a53f29; }
 :focus-visible { outline: 3px solid #1c6b66; outline-offset: 3px; }
+/* Text fields use their existing container and caret, without an extra focus ring. */
+input:not([type="checkbox"]):not([type="radio"]):focus, textarea:focus { outline: none; }
 /* Match useDesktopLayout's 1024px breakpoint and 224px sidebar. */
 @media (min-width: 1024px) {
   .beta-shell { max-width: none; box-shadow: none; }
