@@ -7,7 +7,7 @@ import { Toaster } from "sonner";
 import { getSupabase, isSupabaseConfigured } from "@/lib/supabase";
 import { withTimeout } from "@/lib/async";
 import { organizerTrialEnabled } from "@/lib/launch-offer";
-import { createDemoUser, enterDemoMode, exitDemoMode, isDemoUser, restoreDemoModeFromStorage } from "@/lib/demo-mode";
+import { createDemoUser, enterDemoMode, exitDemoMode, isDemoModeActive, isDemoUser, restoreDemoModeFromStorage } from "@/lib/demo-mode";
 
 type ColorMode = "light" | "dark";
 type ThemeContextValue = { mode: ColorMode; toggle: () => void };
@@ -21,6 +21,7 @@ type AuthContextValue = {
   signIn: (email: string, password: string) => Promise<void>;
   signUp: (name: string, email: string, password: string) => Promise<{ needsEmailConfirmation: boolean }>;
   signInWithGoogle: () => Promise<void>;
+  sendPasswordReset: (email: string) => Promise<void>;
   signOut: () => Promise<void>;
 };
 
@@ -57,6 +58,7 @@ function AuthProvider({ children }: { children: React.ReactNode }) {
   const [user, setUser] = useState<User | null>(null);
   const [loading, setLoading] = useState(() => isSupabaseConfigured());
   const [issue, setIssue] = useState<string | null>(null);
+  const [sessionVersion, setSessionVersion] = useState(0);
   const configured = isSupabaseConfigured();
 
   useEffect(() => {
@@ -73,17 +75,17 @@ function AuthProvider({ children }: { children: React.ReactNode }) {
     void withTimeout(client.auth.getSession(), 8000, "Session restore timed out.")
       .then(({ data, error }) => {
         if (error) throw error;
-        if (alive) setUser(data.session?.user ?? null);
+        if (alive && !isDemoModeActive()) setUser(data.session?.user ?? null);
       })
       .catch(() => {
-        if (alive) {
+        if (alive && !isDemoModeActive()) {
           setUser(null);
           setIssue("We couldn’t restore the previous session. You can sign in again below.");
         }
       })
       .finally(() => { if (alive) setLoading(false); });
     const { data } = client.auth.onAuthStateChange((_event, session) => {
-      if (alive) {
+      if (alive && !isDemoModeActive()) {
         setUser(session?.user ?? null);
         setIssue(null);
         setLoading(false);
@@ -93,7 +95,7 @@ function AuthProvider({ children }: { children: React.ReactNode }) {
       alive = false;
       data.subscription.unsubscribe();
     };
-  }, []);
+  }, [sessionVersion]);
 
   const signIn = useCallback(async (email: string, password: string) => {
     const client = getSupabase();
@@ -146,6 +148,19 @@ function AuthProvider({ children }: { children: React.ReactNode }) {
     if (error) throw error;
   }, []);
 
+  const sendPasswordReset = useCallback(async (email: string) => {
+    const client = getSupabase();
+    if (!client) throw new Error("Add the Supabase environment values before requesting a reset.");
+    const { error } = await withTimeout(
+      client.auth.resetPasswordForEmail(email.trim().toLowerCase(), {
+        redirectTo: `${window.location.origin}/reset-password`,
+      }),
+      15000,
+      "The reset request took too long. Check your connection and try again.",
+    );
+    if (error) throw error;
+  }, []);
+
   const enterDemo = useCallback(() => {
     enterDemoMode();
     setIssue(null);
@@ -157,6 +172,11 @@ function AuthProvider({ children }: { children: React.ReactNode }) {
     if (isDemoUser(user)) {
       exitDemoMode();
       setUser(null);
+      setIssue(null);
+      setLoading(configured);
+      // A restored demo skips real auth setup. Reattach its listener before
+      // the next password login, without requiring a full browser refresh.
+      setSessionVersion((version) => version + 1);
       return;
     }
     const client = getSupabase();
@@ -166,7 +186,7 @@ function AuthProvider({ children }: { children: React.ReactNode }) {
     }
     const { error } = await withTimeout(client.auth.signOut(), 10000, "Log out took too long. Check your connection and try again.");
     if (error) throw error;
-  }, [user]);
+  }, [configured, user]);
 
   const value = useMemo<AuthContextValue>(() => ({
     user,
@@ -178,8 +198,9 @@ function AuthProvider({ children }: { children: React.ReactNode }) {
     signIn,
     signUp,
     signInWithGoogle,
+    sendPasswordReset,
     signOut,
-  }), [configured, enterDemo, issue, loading, signIn, signInWithGoogle, signOut, signUp, user]);
+  }), [configured, enterDemo, issue, loading, sendPasswordReset, signIn, signInWithGoogle, signOut, signUp, user]);
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
 }

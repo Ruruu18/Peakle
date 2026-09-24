@@ -9,6 +9,68 @@
 
 The first migration creates the normalized model, automatic user profiles, storage policies, and row-level security. Venues and courts are added by platform administrators rather than seeded with demo records.
 
+### Enforced account bans (24 September 2026)
+
+Apply `migrations/202609240001_enforce_account_bans.sql` before deploying the
+updated caller-authenticated Edge Functions. The existing admin Ban/Unban RPCs
+keep their signatures. The migration makes their changes atomic with Supabase
+Auth's `banned_until`, removes the banned account's sessions and refresh tokens,
+and records a token-revocation watermark. Unban preserves records and requires
+a fresh sign-in; previously issued tokens remain rejected.
+
+The migration registers `public.enforce_account_access` as the PostgREST
+pre-request hook so banned/revoked JWTs cannot use table, view, or privileged RPC
+endpoints. Restrictive RLS policies additionally cover every existing public
+RLS table and `storage.objects`, including private Storage and Realtime reads.
+The policies narrow existing permissions. Anonymous public content remains
+public, and service-role webhook/reconciliation jobs keep working.
+
+Client updates to suspension fields are rejected even on projects with legacy
+table-wide UPDATE grants. Existing banned profiles are synchronized during the
+migration. Future public RLS tables should also receive the `active accounts
+only` restrictive policy, as the migration explains.
+
+This migration narrowly updates Supabase-managed Auth fields/tables; validate
+it on a staging project running the same Supabase version before production.
+It aborts without committing changes if an unrelated PostgREST pre-request hook
+already exists. In that case, compose the existing hook with
+`public.enforce_account_access` instead of replacing its protections.
+
+Deploy in this order using the project's normal authenticated release process:
+
+```sh
+supabase db push
+supabase functions deploy create-checkout-session
+supabase functions deploy process-refund
+supabase functions deploy route-distances
+supabase functions deploy delete-account
+```
+
+Those functions check account access with the caller's JWT before using
+service-role access or calling a paid external API. If the migration is absent
+or the check fails unexpectedly, they fail closed with a temporary-unavailable
+response. Suspended users can contact `support@peakle.app` for support or an
+account-deletion request.
+
+Run the isolated SQL/Edge regression checks without any hosted credentials:
+
+```sh
+npm run test:account-bans
+```
+
+The tests use real PostgreSQL semantics through PGlite with a minimal existing
+schema. They check previous bans, protected fields, admin authorization, Auth
+session removal, old-token REST/RPC denial, RLS/Storage denial, unban/new-token
+recovery, and Edge failure behavior. They do not run a hosted GoTrue/PostgREST
+service. On staging, additionally ban a dedicated signed-in player and verify
+fresh email/Google login is rejected, an already-issued JWT cannot read/write
+or score through RPCs, private uploads fail, and unban allows fresh sign-in.
+Existing downloaded data and already-issued signed media URLs cannot be
+recalled by an account ban.
+
+Implementation references: [Supabase pre-request checks and their RLS scope](https://supabase.com/docs/guides/api/securing-your-api)
+and [Supabase session behavior](https://supabase.com/docs/guides/auth/sessions).
+
 ### Free driving distances
 
 Court discovery uses the free openrouteservice Matrix API through the `route-distances` Edge Function. The API key stays server-side and must never be added to the Expo `.env` file.

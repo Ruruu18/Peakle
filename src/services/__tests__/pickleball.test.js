@@ -473,7 +473,7 @@ describe('startMembershipCheckout', () => {
     const client = makeClient({ invoke: jest.fn(async () => ({ data: { checkout_url: 'https://pay/x' }, error: null })) });
     requireSupabase.mockReturnValue(client);
     const result = await startMembershipCheckout('mem1', 'gcash');
-    expect(client.functions.invoke).toHaveBeenCalledWith('create-checkout-session', { body: { membership_id: 'mem1', payment_method_type: 'gcash' } });
+    expect(client.functions.invoke).toHaveBeenCalledWith('create-checkout-session', { body: { membership_id: 'mem1', payment_method_type: 'gcash', platform: 'ios' } });
     expect(result.checkout_url).toBe('https://pay/x');
   });
 

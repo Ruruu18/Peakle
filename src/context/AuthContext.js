@@ -7,6 +7,7 @@ import { isSupabaseConfigured, requireSupabase, supabase } from '../lib/supabase
 import { readCachedData, withTimeout, writeCachedData } from '../lib/asyncData';
 import { DEMO_MODE } from '../config/demoMode';
 import { cleanAuthUrl, readAuthParams } from '../lib/authLinks';
+import { isAccountAccessError } from '../lib/accountAccess';
 import { DEMO_USER } from '../config/demoData';
 import { disablePushToken } from '../services/realtimeOperations';
 import { deleteManagedProfilePhoto, isLocalPhotoUri, normalizeProfilePhoto, uploadProfilePhoto } from '../services/profilePhotos';
@@ -122,6 +123,18 @@ export function AuthProvider({ children }) {
   const [passwordRecovery, setPasswordRecovery] = useState(false);
   const [authLinkError, setAuthLinkError] = useState('');
 
+  const handleAccessRevocation = (error) => {
+    if (!isAccountAccessError(error)) return;
+    ++authGeneration.current;
+    setUser(null);
+    setPasswordRecovery(false);
+    setHydrated(true);
+    setAuthLinkError('Your account access has been suspended or this session was revoked. Sign in again or contact support@peakle.app.');
+    // Clear this browser/device only. A revoked session must not remain visible
+    // as a cached authenticated profile while requests are denied by the server.
+    void supabase?.auth.signOut({ scope: 'local' }).catch(() => {});
+  };
+
   useEffect(() => {
     if (!supabase) { setHydrated(true); return undefined; }
     let active = true;
@@ -180,7 +193,8 @@ export function AuthProvider({ children }) {
             setLastSignInMethod(currentUser.lastSignInMethod);
             AsyncStorage.setItem(LAST_SIGN_IN_METHOD_KEY, currentUser.lastSignInMethod).catch(() => {});
           }
-        } catch {
+        } catch (error) {
+          if (active && authGeneration.current === startupGeneration) handleAccessRevocation(error);
           // Keep the authenticated cached profile visible while the database reconnects.
         } finally {
           if (active) setHydrated(true);
@@ -217,7 +231,8 @@ export function AuthProvider({ children }) {
           if (!active || authGeneration.current !== eventGeneration) return;
           setUser(value);
           writeCachedData(userCacheKey(authUser.id), value);
-        } catch {
+        } catch (error) {
+          if (active && authGeneration.current === eventGeneration) handleAccessRevocation(error);
           // A temporary fetch failure must not turn an authenticated user into a guest.
         }
       }, 0);
@@ -247,12 +262,17 @@ export function AuthProvider({ children }) {
       syncing = true;
       try {
         const { data, error } = await supabase.auth.getUser();
-        if (error || !data.user || data.user.id !== userId) return;
+        if (error) {
+          if (active) handleAccessRevocation(error);
+          return;
+        }
+        if (!data.user || data.user.id !== userId) return;
         const nextUser = await readCurrentUser(data.user);
         if (!active || !nextUser) return;
         setUser(nextUser);
         writeCachedData(userCacheKey(userId), nextUser);
-      } catch {
+      } catch (error) {
+        if (active) handleAccessRevocation(error);
         // Keep the last usable profile while another device or the network reconnects.
       } finally {
         syncing = false;

@@ -28,7 +28,8 @@ const linking = {
   ...(Platform.OS === 'web' ? { getPathFromState: (state, options) => getPathFromState(webNavigationState(state), options) } : {}),
   config: { screens: {
     ...(Platform.OS === 'web' ? {
-      Home: '', Team: 'teams', Profile: 'profile', Pickleball: 'compete',
+      Home: '', Team: 'teams', Profile: 'profile',
+      Pickleball: { path: 'compete', alias: ['membership/:paymentMembershipId/payment-result'] },
       Activities: 'activities', ActivityDetails: 'activities/:activityType/:activityId',
       OpenPlayActivity: 'sessions/:sessionId?', Privacy: 'privacy', LegalDocument: 'legal/:documentKey',
       AccountDeletion: 'account-deletion', PaymentHistory: 'payment-history',

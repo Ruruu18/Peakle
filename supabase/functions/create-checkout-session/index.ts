@@ -1,5 +1,6 @@
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.45.4';
 import { CORS_HEADERS, handleCorsPreflight } from '../_shared/cors.ts';
+import { checkAccountAccess } from '../_shared/account-access.ts';
 
 const PAYMONGO_API = 'https://api.paymongo.com/v1';
 const APP_SCHEME = 'peakle://';
@@ -7,6 +8,15 @@ const ALLOWED_PAYMENT_METHODS = ['gcash', 'paymaya', 'card', 'dob'];
 
 function json(body: unknown, status = 200) {
   return new Response(JSON.stringify(body), { status, headers: { 'Content-Type': 'application/json', ...CORS_HEADERS } });
+}
+
+// Web customers can't be sent to a `peakle://` link. The client only tells us
+// it wants an HTTPS return URL ("web"); the actual origin always comes from
+// server configuration, never the caller, so this can't become an open redirect.
+function resolveReturnOrigin(requestedPlatform: unknown): string | null {
+  if (requestedPlatform !== 'web') return null;
+  const configured = Deno.env.get('WEB_APP_URL')?.trim().replace(/\/+$/, '');
+  return configured && configured.startsWith('https://') ? configured : null;
 }
 
 Deno.serve(async (request) => {
@@ -27,6 +37,8 @@ Deno.serve(async (request) => {
   });
   const { data: userData, error: userError } = await userClient.auth.getUser();
   if (userError || !userData?.user) return json({ error: 'Authentication required' }, 401);
+  const accessError = await checkAccountAccess(userClient);
+  if (accessError) return json({ error: accessError.error }, accessError.status);
 
   let payload: Record<string, unknown>;
   try {
@@ -43,6 +55,8 @@ Deno.serve(async (request) => {
   const paymentMethodTypes = ALLOWED_PAYMENT_METHODS.includes(requestedMethod)
     ? [requestedMethod]
     : ALLOWED_PAYMENT_METHODS;
+  const returnOrigin = resolveReturnOrigin(payload.platform);
+  if (payload.platform === 'web' && !returnOrigin) return json({ error: 'Web checkout is not configured yet' }, 503);
 
   const admin = createClient(supabaseUrl, serviceKey, { auth: { persistSession: false } });
   let resourceId: string;
@@ -72,8 +86,9 @@ Deno.serve(async (request) => {
     amount = Number(booking.amount);
     referenceNumber = booking.reference || booking.id;
     description = `${venueName} — ${courtName}`.slice(0, 255);
-    successUrl = `${APP_SCHEME}booking/${booking.id}/payment-result?status=success`;
-    cancelUrl = `${APP_SCHEME}booking/${booking.id}/payment-result?status=cancelled`;
+    const bookingBase = returnOrigin ? `${returnOrigin}/` : APP_SCHEME;
+    successUrl = `${bookingBase}booking/${booking.id}/payment-result?status=success`;
+    cancelUrl = `${bookingBase}booking/${booking.id}/payment-result?status=cancelled`;
     metadata = { resource_type: 'booking', booking_id: booking.id };
   } else {
     const { data: membership, error: membershipError } = await admin
@@ -99,8 +114,9 @@ Deno.serve(async (request) => {
     amount = Number(membership.amount_due);
     referenceNumber = `MEM-${membership.id.replaceAll('-', '').slice(0, 12).toUpperCase()}`;
     description = `${venueName} — ${productName}`.slice(0, 255);
-    successUrl = `${APP_SCHEME}membership/${membership.id}/payment-result?status=success`;
-    cancelUrl = `${APP_SCHEME}membership/${membership.id}/payment-result?status=cancelled`;
+    const membershipBase = returnOrigin ? `${returnOrigin}/` : APP_SCHEME;
+    successUrl = `${membershipBase}membership/${membership.id}/payment-result?status=success`;
+    cancelUrl = `${membershipBase}membership/${membership.id}/payment-result?status=cancelled`;
     metadata = { resource_type: 'membership', membership_id: membership.id };
   }
 

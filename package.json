@@ -14,7 +14,9 @@
     "web": "expo start --web",
     "build:web": "node scripts/build-player-web.cjs",
     "preview:web": "node scripts/serve-player-web.cjs",
-    "test:web": "node scripts/player-web-qa.mjs"
+    "test:web": "node scripts/player-web-qa.mjs",
+    "verify:web-host": "node scripts/verify-player-web-host.mjs",
+    "test:account-bans": "node supabase/tests/account-bans.mjs"
   },
   "jest": {
     "preset": "jest-expo",
@@ -80,6 +82,7 @@
     "@babel/plugin-transform-class-properties": "^7.25.9",
     "@babel/plugin-transform-private-methods": "^7.25.9",
     "@babel/plugin-transform-private-property-in-object": "^7.25.9",
+    "@electric-sql/pglite": "0.5.8",
     "@expo/ngrok": "^4.1.3",
     "@types/react": "~19.1.10",
     "babel-preset-expo": "~54.0.11",

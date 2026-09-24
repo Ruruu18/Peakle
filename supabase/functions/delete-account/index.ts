@@ -1,5 +1,6 @@
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.45.4';
 import { CORS_HEADERS, handleCorsPreflight } from '../_shared/cors.ts';
+import { checkAccountAccess } from '../_shared/account-access.ts';
 
 const JSON_HEADERS = { 'Content-Type': 'application/json', ...CORS_HEADERS };
 
@@ -67,6 +68,8 @@ Deno.serve(async (request) => {
   });
   const { data: userData, error: userError } = await userClient.auth.getUser();
   if (userError || !userData.user) return json({ error: 'Authentication required' }, 401);
+  const accessError = await checkAccountAccess(userClient);
+  if (accessError) return json({ error: accessError.error }, accessError.status);
 
   const admin = createClient(supabaseUrl, serviceKey, { auth: { persistSession: false } });
   try {

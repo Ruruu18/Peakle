@@ -35,8 +35,19 @@ async function newPage(context = browser, viewer = false) {
 }
 const click = async (page, text, scope = 'button') => {
   await page.bringToFront();
-  const handle = await page.waitForFunction((text, scope) => [...document.querySelectorAll(scope)].find((element) => element.textContent.trim() === text && !element.disabled), {}, text, scope);
-  await handle.asElement().click(); await handle.dispose();
+  // Reopening the settings dialog can replace its buttons between lookup and
+  // pointer dispatch. Retry only a detached handle, never a completed click.
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    const handle = await page.waitForFunction((text, scope) => [...document.querySelectorAll(scope)].find((element) => element.textContent.trim() === text && !element.disabled), {}, text, scope);
+    try {
+      await handle.asElement().click();
+      return;
+    } catch (error) {
+      if (!/Node is detached from document/.test(error.message) || attempt === 2) throw error;
+    } finally {
+      await handle.dispose();
+    }
+  }
 };
 const waitText = (page, text) => page.waitForFunction((text) => document.body.innerText.includes(text), { polling: 200 }, text);
 const courtName = async (page, name) => page.waitForFunction((name) => document.querySelector('.scoreboard-court h2')?.textContent === name, { polling: 200 }, name);

@@ -74,11 +74,16 @@ npm run typecheck
 npm run build
 node scripts/visual-qa.mjs
 node scripts/navigation-qa.mjs
+node scripts/auth-qa.mjs
 ```
 
 The visual QA script expects the development server on `localhost:3000` by default and writes desktop/mobile screenshots to `/private/tmp`. Set `PORTAL_BASE_URL` to test another local port.
 
 The navigation QA script uses an isolated demo session to check desktop tabs, mobile tabs and More, direct profile access, settings tabs, keyboard controls, viewport changes, and browser Back/Forward.
+
+The auth QA script intercepts external requests and checks fixture password
+sign-in both from a fresh browser and after exiting a restored demo session.
+It never creates users or submits credentials to the hosted backend.
 
 Program management includes editing, opening/closing registration, cancellation with preserved history, waitlist admissions, attendance corrections, and roster export. Apply `supabase/migrations/202609070001_program_management.sql` before using these controls with live data. Its database functions enforce owner/manager/admin access, reject stale edits, and serialize capacity changes with player registrations. Program cancellation does not send notifications; organizers should contact participants separately.
 
@@ -172,8 +177,23 @@ Deploy `organizer-web` as its own Vercel project with the root directory set to 
 NEXT_PUBLIC_SUPABASE_URL
 NEXT_PUBLIC_SUPABASE_ANON_KEY
 NEXT_PUBLIC_SITE_URL
+NEXT_PUBLIC_PLAYER_APP_URL
 ```
 
 Recommended domain: `organizer.peakle.app`.
+
+Set `NEXT_PUBLIC_SITE_URL` to the organizer's actual HTTPS origin. Set
+`NEXT_PUBLIC_PLAYER_APP_URL` to the hosted player app's HTTPS origin; leave it
+empty to hide the player link until that deployment exists. The localhost
+player link is available only during `npm run dev`. Public values are embedded
+at build time, so rebuild after changing them.
+
+Production builds reject missing/placeholder Supabase configuration and keys
+that are not public anon/publishable credentials. Portal environment files take
+precedence over the parent Expo fallback; shell/hosting variables take precedence
+over both. Run `node --test scripts/public-env.test.mjs` to verify these guards.
+
+The public-release assessment and remaining acceptance gates are recorded in
+[`../md/2026-09-23-public-web-release-review.md`](../md/2026-09-23-public-web-release-review.md).
 
 The native app is player-only. Its Profile screen links organizers to this responsive portal for the dashboard, live monitor, and player management.

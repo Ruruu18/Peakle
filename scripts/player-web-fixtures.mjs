@@ -21,7 +21,7 @@ const team = { id: teamId, name: 'Community Clan', tag: 'COM', status: 'active',
 export async function installBackend(page, baseUrl) {
   const requests = [];
   const matches = new Map();
-  const controls = { failMatchWrites: false };
+  const controls = { failMatchWrites: false, denyAccountAccess: false };
   const groupMessages = [];
   const division = { id: divisionId, competition_id: competitionId, name: 'Community Singles', format: 'singles', participant_division: 'open', skill_category: 'open', entry_type: 'player', capacity: 16, fee_amount: 0, status: 'registration', competition_entries: [], competition_bracket_matches: [] };
   const competition = { id: competitionId, venue_id: venueId, name: 'Community Beta Cup', kind: 'tournament', status: 'registration', starts_on: iso(24).slice(0, 10), venues: venue, competition_divisions: [division] };
@@ -37,6 +37,9 @@ export async function installBackend(page, baseUrl) {
       const resource = url.pathname.split('/').at(-1);
       const body = request.postData() ? JSON.parse(request.postData()) : {};
       requests.push({ resource, method: request.method(), body });
+      if (controls.denyAccountAccess && url.pathname.startsWith('/rest/v1/')) {
+        return void reply(request, { code: 'PT403', message: 'Account access is suspended or this session has been revoked. Please sign in again or contact support@peakle.app.' }, 403);
+      }
       if (url.pathname.startsWith('/auth/v1/')) {
         if (resource === 'user') return void reply(request, authUser);
         if (resource === 'token') return void reply(request, session);

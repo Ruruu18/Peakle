@@ -152,6 +152,10 @@ input[type="number"]::-webkit-inner-spin-button, input[type="number"]::-webkit-o
 .login-card label, .form-field label { margin: 16px 0 7px; color: var(--ink-70); font-size: 11px; font-weight: 700; letter-spacing: .11em; }
 .login-card input, .form-field input, .form-field select, .form-field textarea { width: 100%; min-height: 48px; padding: 0 14px; color: var(--ink); border: 1px solid var(--line); border-radius: 12px; outline: 0; background: var(--surface); transition: border .16s ease, box-shadow .16s ease; }
 .login-card input:focus, .form-field input:focus, .form-field select:focus, .form-field textarea:focus { border-color: var(--teal); box-shadow: 0 0 0 3px color-mix(in srgb, var(--teal) 12%, transparent); }
+.password-label-row { margin: 16px 0 7px; display: flex; align-items: baseline; justify-content: space-between; gap: 12px; }
+.password-label-row label { margin: 0; }
+.forgot-password-link { color: var(--teal); font-size: 11px; font-weight: 650; }
+.forgot-password-link:hover { text-decoration: underline; text-underline-offset: 3px; }
 .password-field { position: relative; }
 .password-field input { padding-right: 48px; }
 .password-field button { position: absolute; top: 3px; right: 3px; width: 42px; height: 42px; border: 0; display: grid; place-items: center; color: var(--ink-40); background: transparent; cursor: pointer; }

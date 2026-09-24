@@ -154,7 +154,7 @@ describe('startBookingCheckout / triggerBookingRefund', () => {
   it('starts checkout with the booking id and payment method', async () => {
     const client = mockClient({ invoke: async () => ({ data: { checkout_url: 'https://pay/x' }, error: null }) });
     const result = await startBookingCheckout('b1', 'gcash');
-    expect(client.functions.invoke).toHaveBeenCalledWith('create-checkout-session', { body: { booking_id: 'b1', payment_method_type: 'gcash' } });
+    expect(client.functions.invoke).toHaveBeenCalledWith('create-checkout-session', { body: { booking_id: 'b1', payment_method_type: 'gcash', platform: 'ios' } });
     expect(result.checkout_url).toBe('https://pay/x');
   });
 

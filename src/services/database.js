@@ -1,4 +1,5 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import { Platform } from 'react-native';
 import * as Crypto from 'expo-crypto';
 import * as ImageManipulator from 'expo-image-manipulator';
 import { requireSupabase } from '../lib/supabase';
@@ -128,7 +129,7 @@ export async function cancelUnpaidBooking(bookingId, expectedRevision) {
 
 export async function startBookingCheckout(bookingId, paymentMethodType) {
   const { data, error } = await requireSupabase().functions.invoke('create-checkout-session', {
-    body: { booking_id: bookingId, payment_method_type: paymentMethodType },
+    body: { booking_id: bookingId, payment_method_type: paymentMethodType, platform: Platform.OS === 'web' ? 'web' : Platform.OS },
   });
   if (error) throw new Error(error.message || 'Could not start checkout.');
   if (!data?.checkout_url) throw new Error(data?.error || 'Checkout is unavailable right now.');

@@ -1,3 +1,4 @@
+import { Platform } from 'react-native';
 import { requireSupabase } from '../lib/supabase';
 import { saveCompetitionCover } from './organizerMedia';
 
@@ -188,7 +189,7 @@ export async function requestMembership(productId) {
 
 export async function startMembershipCheckout(membershipId, paymentMethodType) {
   const { data, error } = await requireSupabase().functions.invoke('create-checkout-session', {
-    body: { membership_id: membershipId, payment_method_type: paymentMethodType },
+    body: { membership_id: membershipId, payment_method_type: paymentMethodType, platform: Platform.OS === 'web' ? 'web' : Platform.OS },
   });
   if (error) throw new Error(error.message || 'Could not start membership checkout.');
   if (!data?.checkout_url) throw new Error(data?.error || 'Membership checkout is unavailable right now.');

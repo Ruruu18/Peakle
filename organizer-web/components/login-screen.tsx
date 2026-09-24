@@ -9,10 +9,8 @@ import { toast } from "sonner";
 import { useAuth, useTheme } from "./providers";
 import { organizerCtaLabel, organizerSignupHref } from "@/lib/launch-offer";
 
-// No production beta host is chosen yet (see PLAYER_WEB_BETA.md) — default to
-// the local player-web dev server and override with the real origin via env
-// once the beta is actually hosted somewhere.
-const PLAYER_APP_URL = (process.env.NEXT_PUBLIC_PLAYER_APP_URL || "http://localhost:8081").replace(/\/+$/, "");
+// A public build must never send players to their own computer's localhost.
+const PLAYER_APP_URL = (process.env.NEXT_PUBLIC_PLAYER_APP_URL?.trim() || (process.env.NODE_ENV === "development" ? "http://localhost:8081" : "")).replace(/\/+$/, "");
 
 export default function LoginScreen() {
   const { user, loading, configured, issue, signIn, signInWithGoogle, enterDemo } = useAuth();
@@ -109,7 +107,10 @@ export default function LoginScreen() {
           <form onSubmit={submit}>
             <label htmlFor="email">EMAIL</label>
             <input id="email" type="email" value={email} onChange={(event) => setEmail(event.target.value)} placeholder="you@venue.com" autoComplete="email" required />
-            <label htmlFor="password">PASSWORD</label>
+            <div className="password-label-row">
+              <label htmlFor="password">PASSWORD</label>
+              <Link className="forgot-password-link" href="/forgot-password">Forgot password?</Link>
+            </div>
             <div className="password-field">
               <input id="password" type={showPassword ? "text" : "password"} value={password} onChange={(event) => setPassword(event.target.value)} placeholder="Your password" autoComplete="current-password" required />
               <button type="button" onClick={() => setShowPassword((current) => !current)} aria-label={showPassword ? "Hide password" : "Show password"}>{showPassword ? <EyeOff size={18} /> : <Eye size={18} />}</button>
@@ -130,7 +131,7 @@ export default function LoginScreen() {
           <p className="login-demo-caption">No account needed — explore a fully populated Peakle venue workspace.</p>
 
           <p className="auth-switch">New to Peakle Organizer? <Link href={organizerSignupHref}>{organizerCtaLabel}</Link></p>
-          <p className="auth-switch">Here to play, not manage a venue? <a href={PLAYER_APP_URL} className="player-app-link">Sign in to the player app<span className="beta-tag">BETA</span></a></p>
+          {PLAYER_APP_URL ? <p className="auth-switch">Here to play, not manage a venue? <a href={PLAYER_APP_URL} className="player-app-link">Sign in to the player app<span className="beta-tag">BETA</span></a></p> : null}
 
           <div className="login-trust"><Check size={14} /> Protected by the same Peakle permissions and venue roles.</div>
         </div>

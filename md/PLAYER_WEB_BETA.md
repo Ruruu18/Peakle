@@ -73,6 +73,24 @@ On other hosts configure unknown player paths to serve `/index.html` with a
 uncached and allow immutable caching for hashed `_expo/static` assets; the
 generated `_headers` file provides this for compatible hosts.
 
+For **Vercel**, create the player project with the repository root as its Root
+Directory. The checked-in root `vercel.json` selects the static build and output,
+provides the SPA fallback for direct links/authentication/payment callbacks,
+sets security headers, and gives hashed `_expo/static` assets immutable caching.
+The separate admin project must use `admin-web` as its Root Directory and the
+Next.js framework defaults.
+
+After starting `npm run preview:web`, run `npm run verify:web-host` to check
+direct routes, callbacks, content types, and caching. Run the same read-only
+check against the actual Vercel deployment before opening it to players:
+
+```sh
+PLAYER_WEB_URL=https://YOUR-PLAYER-HOST npm run verify:web-host
+```
+
+This confirms HTTP routing and headers; it does not exchange OAuth codes or
+send emails. Actual sign-in/recovery still needs the Supabase allowlist below.
+
 After choosing the beta's HTTPS origin, add the following exact URLs to the
 existing Supabase project's Auth redirect allowlist, replacing
 `https://YOUR-BETA-HOST` with the real origin:

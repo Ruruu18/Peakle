@@ -1,5 +1,6 @@
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.45.4';
 import { CORS_HEADERS, handleCorsPreflight } from '../_shared/cors.ts';
+import { checkAccountAccess } from '../_shared/account-access.ts';
 
 const OPENROUTESERVICE_MATRIX_URL = 'https://api.heigit.org/openrouteservice/v2/matrix/driving-car';
 const MAX_DESTINATIONS = 25;
@@ -40,6 +41,8 @@ Deno.serve(async (request) => {
   });
   const { data: userData, error: userError } = await userClient.auth.getUser();
   if (userError || !userData?.user) return json({ error: 'Authentication required.' }, 401);
+  const accessError = await checkAccountAccess(userClient);
+  if (accessError) return json({ error: accessError.error }, accessError.status);
 
   const apiKey = Deno.env.get('OPENROUTESERVICE_API_KEY');
   if (!apiKey) return json({ error: 'Driving routes are not configured.' }, 503);

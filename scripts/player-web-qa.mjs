@@ -192,6 +192,12 @@ try {
   await player.waitForSelector('::-p-text(Beta Updated Player)');
   assert.equal(await player.$('[aria-label="Message player"]'), null);
   console.log('Shared event and player links load their records');
+  backend.controls.denyAccountAccess = true;
+  await player.reload({ waitUntil: 'networkidle2' });
+  await player.waitForSelector('input[placeholder="you@example.com"]');
+  assert.equal(await player.$('[aria-label="Play tab"]'), null, 'A revoked session must not retain the cached authenticated workspace');
+  await player.waitForFunction(() => !Object.keys(localStorage).some(key => key.endsWith('-auth-token') && localStorage.getItem(key)?.includes('fixture-refresh-token')));
+  console.log('Revoked session clears authentication and returns to sign-in');
   assert.equal(backend.requests.filter((request) => ['list_direct_conversations', 'send_direct_message', 'start_direct_conversation'].includes(request.resource)).length, 0, 'Private messaging is excluded');
   assert.deepEqual(errors, [], 'No browser exceptions');
   assert.deepEqual([...new Set(compatibilityWarnings)], [], 'No native notification, animation driver, missing-node, or hidden-focus warnings on web');
