@@ -1,6 +1,7 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { Animated, Platform, StyleSheet } from 'react-native';
 import PeakleLoadingScreen from './PeakleLoadingScreen';
+import useDesktopLayout, { DESKTOP_SIDEBAR_WIDTH } from '../hooks/useDesktopLayout';
 
 export default function PeakleLoadingOverlay({ visible, status, minimumVisibleMs = 650 }) {
   const [mounted, setMounted] = useState(Boolean(visible));
@@ -8,6 +9,7 @@ export default function PeakleLoadingOverlay({ visible, status, minimumVisibleMs
   const shownAt = useRef(visible ? Date.now() : 0);
   const exitTimer = useRef(null);
   const transitionId = useRef(0);
+  const desktop = useDesktopLayout();
 
   useEffect(() => {
     const currentTransition = transitionId.current + 1;
@@ -45,7 +47,7 @@ export default function PeakleLoadingOverlay({ visible, status, minimumVisibleMs
       accessibilityElementsHidden={!visible}
       importantForAccessibility={visible ? 'yes' : 'no-hide-descendants'}
       pointerEvents={visible ? 'auto' : 'none'}
-      style={[styles.overlay, { opacity }]}
+      style={[styles.overlay, desktop && styles.desktopOverlay, { opacity }]}
     >
       <PeakleLoadingScreen status={status} />
     </Animated.View>
@@ -54,4 +56,7 @@ export default function PeakleLoadingOverlay({ visible, status, minimumVisibleMs
 
 const styles = StyleSheet.create({
   overlay: { ...StyleSheet.absoluteFillObject, zIndex: 10000, elevation: 10000 },
+  // Desktop web centres each screen in a narrow column; cover the whole area
+  // beside the sidebar instead, and leave the sidebar usable.
+  desktopOverlay: { position: 'fixed', top: 0, right: 0, bottom: 0, left: DESKTOP_SIDEBAR_WIDTH },
 });

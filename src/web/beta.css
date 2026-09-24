@@ -33,6 +33,8 @@ button, input, textarea, select { font: inherit; }
   .beta-rotate { position: fixed; inset: 0; z-index: 2147483647; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 14px; padding: 24px; text-align: center; color: #f3f5ef; background: #0e2321; }
   .beta-rotate p { margin: 0; max-width: 280px; font-size: 16px; font-weight: 600; line-height: 1.4; }
   .beta-app, .beta-banner { visibility: hidden; }
+  /* Modals render outside the app (portals on <body>, or the top-layer alert dialog), so hide those too. */
+  body > :not(:has(.beta-shell)), .beta-dialog, .beta-dialog::backdrop { visibility: hidden !important; }
 }
 :focus-visible { outline: 3px solid #1c6b66; outline-offset: 3px; }
 /* Text fields use their existing container and caret, without an extra focus ring. */

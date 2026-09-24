@@ -25,6 +25,7 @@ import { DEMO_CONVERSATION_ID, DEMO_DIRECT_MESSAGE_DRIP } from '../config/demoDa
 import { PRIVATE_MESSAGES_ENABLED } from '../config/features';
 import ScrollView from '../components/FocusResetScrollView';
 import ProfilePhoto from '../components/ProfilePhoto';
+import ChatFocusOverlay from '../components/ChatFocusOverlay';
 import { useAuth } from '../context/AuthContext';
 import { DARK_CONTENT_COLORS, useTheme } from '../context/ThemeContext';
 import { supabase } from '../lib/supabase';
@@ -772,7 +773,7 @@ function DirectChatMessage({ message, grouped, active, interactive, peer, seen, 
     reactions: (message.reactions || []).filter((reaction) => reaction.emoji === emoji),
   })).filter((group) => group.reactions.length);
   return (
-    <View style={[styles.messageRow, message.mine && styles.messageRowMine, grouped && styles.messageGrouped]}>
+    <View style={[styles.messageRow, message.mine && styles.messageRowMine, grouped && styles.messageGrouped, active && styles.messageRowActive]}>
       <View style={[styles.directMessageBlock, message.mine && styles.directMessageBlockMine]}>
         <View style={[styles.directBubbleActionRow, message.mine && styles.directBubbleActionRowMine]}>
           {!message.mine && !grouped ? <ProfilePhoto photo={message.avatar || peer?.avatar} name={message.sender} size={30} /> : !message.mine ? <View style={styles.avatarSpacer} /> : null}
@@ -1107,6 +1108,7 @@ function DirectChatConversation({ route, navigation }) {
           <ScrollView ref={scrollRef} style={styles.messages} contentContainerStyle={styles.messageContent} keyboardShouldPersistTaps="handled" onScrollBeginDrag={() => setActiveMessageId(null)} onContentSizeChange={() => scrollRef.current?.scrollToEnd({ animated: true })}>
             {!messages.length ? <View style={styles.emptyChat}><ProfilePhoto photo={peer?.avatar} name={peer?.name} size={70} /><Text style={[styles.emptyChatTitle, { color: colors.ink }]}>Message {peer?.name || 'this player'}</Text><Text style={[styles.emptyText, { color: colors.ink40 }]}>You can message because you are teammates or mutual followers. Keep personal and sensitive information private.</Text></View> : null}
             <Pressable accessible={false} onPress={() => setActiveMessageId(null)} style={styles.messageTapArea}>
+            <ChatFocusOverlay visible={Boolean(activeMessageId) && conversation?.status === 'accepted' && !blocked && messages.some((message) => message.id === activeMessageId)} dark={isDark} onPress={() => setActiveMessageId(null)} />
             {messages.map((message, index) => {
               const grouped = messages[index - 1]?.senderId === message.senderId;
               return <DirectChatMessage key={message.id} message={message} grouped={grouped} active={activeMessageId === message.id && conversation?.status === 'accepted' && !blocked} interactive={conversation?.status === 'accepted' && !blocked} peer={peer} seen={message.id === latestMine?.id && Boolean(latestMineSeen)} currentUserId={user?.id} colors={colors} onToggleControls={(messageId) => setActiveMessageId((current) => current === messageId ? null : messageId)} onShowControls={setActiveMessageId} onOpenActions={openMessageActions} onReact={reactToMessage} />;
@@ -1253,6 +1255,7 @@ const styles = StyleSheet.create({
   messageRow: { marginTop: 11, flexDirection: 'row' },
   messageRowMine: { justifyContent: 'flex-end' },
   messageGrouped: { marginTop: 4 },
+  messageRowActive: { zIndex: 2 },
   avatarSpacer: { width: 30 },
   directMessageBlock: { maxWidth: '90%', alignItems: 'flex-start' },
   directMessageBlockMine: { alignItems: 'flex-end' },
