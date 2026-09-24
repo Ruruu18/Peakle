@@ -543,7 +543,7 @@ export function AuthProvider({ children }) {
     const client = requireSupabase();
     if (user?.id) {
       await Promise.all([
-        client.from('player_presence').update({ availability: 'offline', updated_at: new Date().toISOString() }).eq('user_id', user.id).catch(() => {}),
+        client.from('player_presence').update({ availability: 'offline', updated_at: new Date().toISOString() }).eq('user_id', user.id).then(() => {}, () => {}),
         disablePushToken(user.id).catch(() => {}),
       ]);
     }
@@ -557,7 +557,7 @@ export function AuthProvider({ children }) {
     if (!user?.id) throw new Error('Sign in before deleting your account.');
 
     await Promise.all([
-      client.from('player_presence').update({ availability: 'offline', updated_at: new Date().toISOString() }).eq('user_id', user.id).catch(() => {}),
+      client.from('player_presence').update({ availability: 'offline', updated_at: new Date().toISOString() }).eq('user_id', user.id).then(() => {}, () => {}),
       disablePushToken(user.id).catch(() => {}),
     ]);
 
