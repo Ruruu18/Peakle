@@ -5,13 +5,6 @@ const nextConfig: NextConfig = {
   reactStrictMode: true,
   devIndicators: false,
   poweredByHeader: false,
-  // The Vercel project shares the Expo app's Supabase vars; fall back to them.
-  env: {
-    NEXT_PUBLIC_SUPABASE_URL:
-      process.env.NEXT_PUBLIC_SUPABASE_URL || process.env.EXPO_PUBLIC_SUPABASE_URL || "",
-    NEXT_PUBLIC_SUPABASE_ANON_KEY:
-      process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY || "",
-  },
   async headers() {
     return [{
       source: "/:path*",
