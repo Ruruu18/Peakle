@@ -60,20 +60,28 @@ const STATUS_COPY = {
   closed: 'Conversation closed',
 };
 
+// Messenger-style typing bubble: pops in, then the dots rise and darken in a
+// continuous wave with a short rest between cycles.
 function AnimatedTypingDots({ colors }) {
-  const values = useRef([0, 1, 2].map(() => new Animated.Value(0.35))).current;
+  const useNativeDriver = Platform.OS !== 'web';
+  const entrance = useRef(new Animated.Value(0)).current;
+  const values = useRef([0, 1, 2].map(() => new Animated.Value(0))).current;
   useEffect(() => {
-    const animation = Animated.loop(Animated.stagger(130, values.map((value) => Animated.sequence([
-      Animated.timing(value, { toValue: 1, duration: 220, easing: Easing.out(Easing.quad), useNativeDriver: Platform.OS !== 'web' }),
-      Animated.timing(value, { toValue: 0.35, duration: 220, easing: Easing.in(Easing.quad), useNativeDriver: Platform.OS !== 'web' }),
-    ]))));
+    Animated.spring(entrance, { toValue: 1, friction: 6, tension: 140, useNativeDriver }).start();
+    const animation = Animated.loop(Animated.sequence([
+      Animated.stagger(160, values.map((value) => Animated.sequence([
+        Animated.timing(value, { toValue: 1, duration: 280, easing: Easing.out(Easing.quad), useNativeDriver }),
+        Animated.timing(value, { toValue: 0, duration: 280, easing: Easing.in(Easing.quad), useNativeDriver }),
+      ]))),
+      Animated.delay(260),
+    ]));
     animation.start();
     return () => animation.stop();
-  }, [values]);
+  }, [entrance, values, useNativeDriver]);
   return (
-    <View style={[s.typingBubble, { backgroundColor: colors.surface, borderColor: colors.line }]}>
-      {values.map((value, index) => <Animated.View key={index} style={[s.typingDot, { backgroundColor: colors.ink40, opacity: value }]} />)}
-    </View>
+    <Animated.View style={[s.typingBubble, { backgroundColor: colors.surface, borderColor: colors.line, opacity: entrance, transform: [{ scale: entrance.interpolate({ inputRange: [0, 1], outputRange: [0.6, 1] }) }] }]}>
+      {values.map((value, index) => <Animated.View key={index} style={[s.typingDot, { backgroundColor: colors.ink70, opacity: value.interpolate({ inputRange: [0, 1], outputRange: [0.35, 0.9] }), transform: [{ translateY: value.interpolate({ inputRange: [0, 1], outputRange: [0, -4] }) }] }]} />)}
+    </Animated.View>
   );
 }
 
@@ -604,8 +612,8 @@ const s = createMobileStyleSheet({
   bubbleTime: { marginTop: 4, fontSize: 7, fontWeight: '700' },
   seenText: { marginTop: 3, marginRight: 2, fontSize: 7, fontWeight: '700' },
   typingRow: { alignSelf: 'flex-start' },
-  typingBubble: { flexDirection: 'row', alignItems: 'center', gap: 4, paddingHorizontal: 13, paddingVertical: 11, borderWidth: 1, borderRadius: 16 },
-  typingDot: { width: 6, height: 6, borderRadius: 3 },
+  typingBubble: { width: 62, height: 38, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 5, borderWidth: 1, borderRadius: 19, transformOrigin: 'left bottom' },
+  typingDot: { width: 8, height: 8, borderRadius: 4 },
   csatCard: { marginTop: 6, padding: 14, borderWidth: 1, borderRadius: 16, gap: 10 },
   csatHeader: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
   csatTitle: { fontSize: 12, fontWeight: '900' },

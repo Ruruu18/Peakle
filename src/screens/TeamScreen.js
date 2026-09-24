@@ -289,35 +289,43 @@ const peopleSummary = (people = []) => {
   return `${visible.join(', ')}${remaining > 0 ? ` +${remaining}` : ''}`;
 };
 
+// Messenger-style typing bubble: pops in, then the dots rise and darken in a
+// continuous wave with a short rest between cycles.
 function TypingBubble({ people = [] }) {
-  const dotAnimations = useRef([0, 1, 2].map(() => new Animated.Value(0.35))).current;
+  const useNativeDriver = Platform.OS !== 'web';
+  const entrance = useRef(new Animated.Value(0)).current;
+  const dotAnimations = useRef([0, 1, 2].map(() => new Animated.Value(0))).current;
   useEffect(() => {
-    const animation = Animated.loop(Animated.stagger(130, dotAnimations.map((dot) => Animated.sequence([
-      Animated.timing(dot, { toValue: 1, duration: 220, easing: Easing.out(Easing.quad), useNativeDriver: Platform.OS !== 'web' }),
-      Animated.timing(dot, { toValue: 0.35, duration: 220, easing: Easing.in(Easing.quad), useNativeDriver: Platform.OS !== 'web' }),
-    ]))));
+    Animated.spring(entrance, { toValue: 1, friction: 6, tension: 140, useNativeDriver }).start();
+    const animation = Animated.loop(Animated.sequence([
+      Animated.stagger(160, dotAnimations.map((dot) => Animated.sequence([
+        Animated.timing(dot, { toValue: 1, duration: 280, easing: Easing.out(Easing.quad), useNativeDriver }),
+        Animated.timing(dot, { toValue: 0, duration: 280, easing: Easing.in(Easing.quad), useNativeDriver }),
+      ]))),
+      Animated.delay(260),
+    ]));
     animation.start();
     return () => animation.stop();
-  }, [dotAnimations]);
+  }, [dotAnimations, entrance, useNativeDriver]);
   if (!people.length) return null;
   const first = people[0];
   const label = people.length === 1 ? `${first.name} is typing` : `${peopleSummary(people)} are typing`;
   return (
     <View accessibilityLiveRegion="polite" accessibilityLabel={label} style={styles.typingRow}>
-      <ProfilePhoto photo={first.avatar} name={first.name} size={31} style={styles.chatAvatar} />
-      <View>
-        <Text style={styles.sender}>{label}</Text>
-        <View style={[styles.bubble, styles.typingBubble]}>
+      <Text style={[styles.sender, styles.messageIndent]}>{label}</Text>
+      <View style={styles.bubbleActionRow}>
+        <ProfilePhoto photo={first.avatar} name={first.name} size={31} style={styles.chatAvatar} />
+        <Animated.View style={[styles.bubble, styles.typingBubble, { opacity: entrance, transform: [{ scale: entrance.interpolate({ inputRange: [0, 1], outputRange: [0.6, 1] }) }] }]}>
           {dotAnimations.map((dot, index) => (
             <Animated.View
               key={index}
               style={[styles.typingDot, {
-                opacity: dot,
-                transform: [{ translateY: dot.interpolate({ inputRange: [0.35, 1], outputRange: [1.5, -1.5] }) }],
+                opacity: dot.interpolate({ inputRange: [0, 1], outputRange: [0.35, 0.9] }),
+                transform: [{ translateY: dot.interpolate({ inputRange: [0, 1], outputRange: [0, -4] }) }],
               }]}
             />
           ))}
-        </View>
+        </Animated.View>
       </View>
     </View>
   );
@@ -466,8 +474,7 @@ function ChatReportModal({ message, onClose, onSubmit }) {
   );
 }
 
-function MessageInteractionModal({ message, visible, mode, canModerate, onModeChange, onClose, onReact, onPin, onEdit, onDelete, onUnsend, onReport, onBlock, onModerate }) {
-  const reveal = useRef(new Animated.Value(0)).current;
+function MessageInteractionModal({ message, visible, canModerate, onClose, onReact, onPin, onEdit, onDelete, onUnsend, onReport, onBlock, onModerate }) {
   const [hoveredReaction, setHoveredReaction] = useState(-1);
   const hoveredReactionRef = useRef(-1);
   const chooseReactionAt = useCallback((locationX) => {
@@ -493,32 +500,17 @@ function MessageInteractionModal({ message, visible, mode, canModerate, onModeCh
     },
   }), [chooseReactionAt, message, onClose, onReact]);
   useEffect(() => {
-    if (!visible) {
-      reveal.setValue(0);
-      hoveredReactionRef.current = -1;
-      setHoveredReaction(-1);
-      return;
-    }
-    Animated.spring(reveal, { toValue: 1, damping: 17, stiffness: 230, useNativeDriver: Platform.OS !== 'web' }).start();
-  }, [reveal, visible]);
+    if (visible) return;
+    hoveredReactionRef.current = -1;
+    setHoveredReaction(-1);
+  }, [visible]);
   if (!message) return null;
   const editableText = message.text && !/^Shared a (photo|video|GIF|sticker)$/i.test(message.text);
-  const preview = message.deletedAt ? 'Message unsent' : (message.text || (message.video ? 'Video' : 'Photo'));
   return (
     <Modal visible={visible} transparent animationType="fade" onRequestClose={onClose}>
       <View {...webDialog('backdrop')} style={styles.interactionBackdrop}>
         <Pressable accessibilityLabel="Close message actions" onPress={onClose} style={StyleSheet.absoluteFillObject} />
-        {mode === 'reactions' && <Animated.View style={[styles.interactionContent, message.mine && styles.interactionContentMine, {
-          opacity: reveal,
-          transform: [{ scale: reveal.interpolate({ inputRange: [0, 1], outputRange: [.92, 1] }) }],
-        }]}>
-          <View {...reactionPan.panHandlers} style={styles.floatingReactionPicker}>{REACTION_OPTIONS.map((emoji, index) => <Pressable key={emoji} accessibilityLabel={`React ${emoji}`} onPress={() => { onReact(message.id, emoji); onClose(); }} style={[styles.floatingReactionOption, hoveredReaction === index && styles.floatingReactionOptionActive]}><Text style={styles.floatingReactionText}>{emoji}</Text></Pressable>)}</View>
-          <View style={[styles.interactionMessageRow, message.mine && styles.interactionMessageRowMine]}>
-            <View style={[styles.interactionBubble, message.mine && styles.interactionBubbleMine]}><Text numberOfLines={5} style={[styles.interactionPreviewText, message.mine && styles.interactionPreviewTextMine]}>{preview}</Text></View>
-            <Pressable accessibilityLabel="More message actions" onPress={() => onModeChange('actions')} style={styles.moreMessageButton}><Icon name="ellipsis-horizontal" size={22} color={C.ink} /></Pressable>
-          </View>
-        </Animated.View>}
-        {mode === 'actions' && <View {...webDialog('surface')} style={styles.messageActionSheet}>
+        <View {...webDialog('surface')} style={styles.messageActionSheet}>
           <View {...webDialog('handle')} style={styles.actionSheetHandle} />
           <Text style={styles.actionSheetTitle}>Message options</Text>
           <View {...reactionPan.panHandlers} style={[styles.floatingReactionPicker, styles.actionSheetReactionPicker]}>{REACTION_OPTIONS.map((emoji, index) => <Pressable key={emoji} accessibilityLabel={`React ${emoji}`} onPress={() => { onReact(message.id, emoji); onClose(); }} style={[styles.floatingReactionOption, hoveredReaction === index && styles.floatingReactionOptionActive]}><Text style={styles.floatingReactionText}>{emoji}</Text></Pressable>)}</View>
@@ -530,13 +522,13 @@ function MessageInteractionModal({ message, visible, mode, canModerate, onModeCh
           <Pressable onPress={() => { onClose(); onDelete(message); }} style={styles.actionSheetRow}><View style={styles.actionSheetIcon}><Icon name="trash-outline" size={20} color={C.ink70} /></View><View style={styles.actionSheetCopy}><Text style={styles.actionSheetRowTitle}>Delete for you</Text><Text style={styles.actionSheetRowText}>Other people will still see this message</Text></View></Pressable>
           {message.mine && <Pressable onPress={() => { onClose(); onUnsend(message); }} style={styles.actionSheetRow}><View style={[styles.actionSheetIcon, styles.actionSheetIconDanger]}><Icon name="return-up-back-outline" size={20} color={C.brick} /></View><View style={styles.actionSheetCopy}><Text style={[styles.actionSheetRowTitle, styles.actionSheetDangerText]}>Delete for everyone</Text><Text style={styles.actionSheetRowText}>Remove the message for everyone in the chat</Text></View></Pressable>}
           <Pressable onPress={onClose} style={styles.actionSheetCancel}><Text style={styles.actionSheetCancelText}>Cancel</Text></Pressable>
-        </View>}
+        </View>
       </View>
     </Modal>
   );
 }
 
-function ChatMessage({ message, grouped, active, highlighted, seenBy, showDeliveryStatus, currentUserId, peopleById, onLayout, onToggleControls, onOpenReactions, onOpenActions, onShowPeople, onPreview }) {
+function ChatMessage({ message, grouped, active, highlighted, seenBy, showDeliveryStatus, currentUserId, peopleById, onLayout, onToggleControls, onShowControls, onOpenActions, onReact, onShowPeople, onPreview }) {
   const enter = useRef(new Animated.Value(0)).current;
   useEffect(() => {
     Animated.timing(enter, { toValue: 1, duration: 190, easing: Easing.out(Easing.cubic), useNativeDriver: Platform.OS !== 'web' }).start();
@@ -556,25 +548,27 @@ function ChatMessage({ message, grouped, active, highlighted, seenBy, showDelive
       opacity: enter,
       transform: [{ translateY: enter.interpolate({ inputRange: [0, 1], outputRange: [8, 0] }) }],
     }]}>
-      {!message.mine && !grouped && <ProfilePhoto photo={message.avatar} name={message.sender} size={31} style={styles.chatAvatar} />}
-      {!message.mine && grouped && <View style={styles.chatAvatarSpacer} />}
       <View style={[styles.messageBlock, message.mine && styles.messageBlockMine]}>
-        {!message.mine && !grouped && <Text style={styles.sender}>{message.sender}</Text>}
+        {!message.mine && !grouped && <Text style={[styles.sender, styles.messageIndent]}>{message.sender}</Text>}
         <View style={[styles.bubbleActionRow, message.mine && styles.bubbleActionRowMine]}>
-          <Pressable accessibilityHint="Tap for message controls. Long press for reactions and message options." onPress={() => onToggleControls(message.id)} onLongPress={() => onOpenReactions(message.id)} delayLongPress={240} style={[styles.bubble, message.mine && styles.bubbleMine, mediaOnly && styles.mediaBubble, mediaOnly && message.mine && styles.mediaBubbleMine, message.deletedAt && styles.deletedBubble, highlighted && styles.highlightedMessageBubble]}>
+          {!message.mine && !grouped && <ProfilePhoto photo={message.avatar} name={message.sender} size={31} style={styles.chatAvatar} />}
+          {!message.mine && grouped && <View style={styles.chatAvatarSpacer} />}
+          <Pressable accessibilityHint="Tap or long press for reactions and message options." onPress={() => onToggleControls(message.id)} onLongPress={() => onShowControls(message.id)} delayLongPress={240} style={[styles.bubble, message.mine && styles.bubbleMine, mediaOnly && styles.mediaBubble, mediaOnly && message.mine && styles.mediaBubbleMine, message.deletedAt && styles.deletedBubble, highlighted && styles.highlightedMessageBubble]}>
             {message.image && <PopImage uri={message.image} sticker={message.mediaKind === 'stickers'} style={[styles.chatAttachmentImage, message.mediaType === 'gif' && styles.chatAttachmentGif, mediaOnly && styles.chatAttachmentMediaOnly]} onPress={() => onPreview(message)} onLongPress={() => onOpenActions(message.id)} />}
             {message.video && <VideoAttachment uri={message.video} mediaOnly={mediaOnly} />}
             {message.deletedAt ? <View style={styles.deletedMessageRow}><Icon name="ban-outline" size={14} color={C.ink40} /><Text style={styles.deletedMessageText}>{message.moderatedAt ? 'Message removed by a moderator' : 'Message unsent'}</Text></View> : visibleText ? <Text style={[styles.bubbleText, message.mine && styles.bubbleTextMine]}>{visibleText}</Text> : null}
             {message.deliveryState && hasMedia && <View style={styles.mediaProgress}><ActivityIndicator size="small" color={C.surface} /></View>}
           </Pressable>
-          {active && !message.deletedAt && !message.deliveryState && <View style={styles.quickMessageActions}>
-            <Pressable accessibilityLabel="React to message" onPress={() => onOpenReactions(message.id)} style={styles.quickMessageAction}><Icon name="happy-outline" size={18} color={C.ink70} /></Pressable>
-            <Pressable accessibilityLabel="More message actions" onPress={() => onOpenActions(message.id)} style={styles.quickMessageAction}><Icon name="ellipsis-horizontal" size={19} color={C.ink70} /></Pressable>
-          </View>}
         </View>
+        <View style={[styles.messageExtras, message.mine ? styles.messageExtrasMine : styles.messageIndent]}>
+        {active && !message.deletedAt && !message.deliveryState && <View style={styles.quickMessageActions}>
+          {REACTION_OPTIONS.map((emoji) => <Pressable key={emoji} accessibilityLabel={`React ${emoji}`} onPress={() => { onReact(message.id, emoji); onToggleControls(message.id); }} style={({ pressed }) => [styles.quickMessageAction, pressed && styles.quickMessageActionPressed]}><Text style={styles.quickMessageEmoji}>{emoji}</Text></Pressable>)}
+          <Pressable accessibilityLabel="More message actions" onPress={() => onOpenActions(message.id)} style={({ pressed }) => [styles.quickMessageAction, pressed && styles.quickMessageActionPressed]}><Icon name="ellipsis-horizontal" size={20} color={C.ink70} /></Pressable>
+        </View>}
         {reactionGroups.length > 0 && <View style={[styles.reactionSummary, message.mine && styles.reactionSummaryMine]}>{reactionGroups.map((reaction) => <Pressable key={reaction.emoji} disabled={message.deletedAt} accessibilityLabel={`${reaction.emoji} from ${peopleSummary(reaction.people)}`} onPress={() => onShowPeople(`Reacted ${reaction.emoji}`, reaction.people)} style={[styles.reactionChip, reaction.people.some((person) => person.id === currentUserId) && styles.reactionChipMine]}><Text style={styles.reactionEmoji}>{reaction.emoji}</Text><Text style={styles.reactionCount}>{reaction.people.length}</Text></Pressable>)}</View>}
         <View style={[styles.messageMetaRow, message.mine && styles.messageMetaRowMine]}>{message.pinned && <View style={styles.pinnedMessageBadge}><Icon name="pin" size={9} color={C.teal} /><Text style={styles.pinnedMessageBadgeText}>PINNED</Text></View>}<Text style={[styles.messageTime, message.mine && styles.messageTimeMine]}>{message.time}{message.editedAt ? ' · Edited' : ''}{message.mine && showDeliveryStatus && !seenBy.length ? ` · ${status}` : ''}</Text></View>
         {message.mine && <SeenReceipt people={seenBy} onPress={() => onShowPeople('Seen by', seenBy)} />}
+        </View>
       </View>
     </Animated.View>
   );
@@ -590,7 +584,6 @@ function TeamChat({ team, messages, readStates, currentUser, typing, liveMatch, 
   const [editingMessage, setEditingMessage] = useState(null);
   const [selectedMessageId, setSelectedMessageId] = useState(null);
   const [activeMessageId, setActiveMessageId] = useState(null);
-  const [interactionMode, setInteractionMode] = useState('reactions');
   const [previewMessage, setPreviewMessage] = useState(null);
   const [peopleDetails, setPeopleDetails] = useState(null);
   const [reportingMessage, setReportingMessage] = useState(null);
@@ -665,10 +658,9 @@ function TeamChat({ team, messages, readStates, currentUser, typing, liveMatch, 
     if (highlightTimerRef.current) clearTimeout(highlightTimerRef.current);
     if (suppressAutoScrollTimerRef.current) clearTimeout(suppressAutoScrollTimerRef.current);
   }, []);
-  const openInteraction = (messageId, mode) => {
+  const openMessageActions = (messageId) => {
     setActiveMessageId(null);
     setSelectedMessageId(messageId);
-    setInteractionMode(mode);
   };
   const publishTyping = useCallback((isTyping) => {
     if (typingActiveRef.current === isTyping) return;
@@ -763,6 +755,7 @@ function TeamChat({ team, messages, readStates, currentUser, typing, liveMatch, 
         contentContainerStyle={styles.chatContent}
         showsVerticalScrollIndicator={false}
         keyboardShouldPersistTaps="handled"
+        onScrollBeginDrag={() => setActiveMessageId(null)}
         scrollEventThrottle={16}
         onScroll={({ nativeEvent }) => {
           const distanceFromBottom = nativeEvent.contentSize.height - nativeEvent.layoutMeasurement.height - nativeEvent.contentOffset.y;
@@ -774,22 +767,22 @@ function TeamChat({ team, messages, readStates, currentUser, typing, liveMatch, 
       >
         {hasEarlier && <Pressable disabled={loadingEarlier} onPress={onLoadEarlier} style={styles.loadEarlierButton}>{loadingEarlier ? <ActivityIndicator size="small" color={C.teal} /> : <Text style={styles.loadEarlierText}>Load earlier messages</Text>}</Pressable>}
         <Text style={styles.chatDay}>TODAY</Text>
+        <Pressable accessible={false} onPress={() => setActiveMessageId(null)} style={styles.chatTapArea}>
         {messages.map((message, index) => {
           if (message.type === 'live-match') return <View key={message.id} style={styles.autoMatchMessage}><View style={styles.autoMatchLabel}><Icon name="radio-outline" size={14} color={C.teal} /><Text style={styles.autoMatchLabelText}>Peakle Match Center posted automatically</Text></View><LiveMatchCard match={liveMatch} onPress={onWatchLive} /></View>;
           const previous = messages[index - 1];
           const grouped = previous?.sender === message.sender && previous?.mine === message.mine;
-          return <ChatMessage key={message.id} message={message} grouped={grouped} active={activeMessageId === message.id} highlighted={highlightedMessageId === message.id} seenBy={seenByMessage[message.id] || []} showDeliveryStatus={message.id === latestMineId} currentUserId={currentUserId} peopleById={peopleById} onLayout={({ nativeEvent }) => { const y = nativeEvent.layout.y; messageLayoutsRef.current[message.id] = y; revealMessage(message.id, y); }} onToggleControls={(messageId) => setActiveMessageId((current) => current === messageId ? null : messageId)} onOpenReactions={(messageId) => openInteraction(messageId, 'reactions')} onOpenActions={(messageId) => openInteraction(messageId, 'actions')} onShowPeople={(title, people) => setPeopleDetails({ title, people })} onPreview={setPreviewMessage} />;
+          return <ChatMessage key={message.id} message={message} grouped={grouped} active={activeMessageId === message.id} highlighted={highlightedMessageId === message.id} seenBy={seenByMessage[message.id] || []} showDeliveryStatus={message.id === latestMineId} currentUserId={currentUserId} peopleById={peopleById} onLayout={({ nativeEvent }) => { const y = nativeEvent.layout.y; messageLayoutsRef.current[message.id] = y; revealMessage(message.id, y); }} onToggleControls={(messageId) => setActiveMessageId((current) => current === messageId ? null : messageId)} onShowControls={setActiveMessageId} onOpenActions={openMessageActions} onReact={onReact} onShowPeople={(title, people) => setPeopleDetails({ title, people })} onPreview={setPreviewMessage} />;
         })}
         {typing?.length > 0 && <TypingBubble people={typing} />}
+        </Pressable>
       </ScrollView>
       {editingMessage && <View style={styles.editingBanner}><Icon name="create-outline" size={16} color={C.teal} /><View style={styles.editingCopy}><Text style={styles.editingTitle}>Editing message</Text><Text numberOfLines={1} style={styles.editingPreview}>{editingMessage.text}</Text></View><Pressable accessibilityLabel="Cancel editing" onPress={() => { stopTyping(); setEditingMessage(null); setDraft(''); }}><Icon name="close" color={C.ink40} /></Pressable></View>}
-      <View style={styles.composer}><Pressable accessibilityLabel="Add photo or video" onPress={showAttachmentOptions} style={styles.addAttachment}><Icon name="add" size={23} color={C.teal} /></Pressable><View style={styles.composerInput}><TextInput value={draft} onChangeText={changeDraft} onBlur={stopTyping} onSubmitEditing={send} returnKeyType="send" multiline maxLength={4000} placeholder={editingMessage ? 'Edit message' : `Message ${team.name}`} placeholderTextColor={C.ink40} style={styles.chatInput} /><Pressable disabled={!draft.trim()} onPress={send} accessibilityLabel={editingMessage ? 'Save edited message' : 'Send message'} style={[styles.sendButton, !draft.trim() && styles.sendDisabled]}><Icon name={editingMessage ? 'checkmark' : 'arrow-up'} size={19} color="#0E2321" /></Pressable></View></View>
+      <View style={styles.composer}><Pressable accessibilityLabel="Add photo or video" onPress={showAttachmentOptions} style={styles.addAttachment}><Icon name="add" size={23} color={C.teal} /></Pressable><View style={styles.composerInput}><TextInput value={draft} onChangeText={changeDraft} onFocus={() => setActiveMessageId(null)} onBlur={stopTyping} onSubmitEditing={send} returnKeyType="send" multiline maxLength={4000} placeholder={editingMessage ? 'Edit message' : `Message ${team.name}`} placeholderTextColor={C.ink40} style={styles.chatInput} /><Pressable disabled={!draft.trim()} onPress={send} accessibilityLabel={editingMessage ? 'Save edited message' : 'Send message'} style={[styles.sendButton, !draft.trim() && styles.sendDisabled]}><Icon name={editingMessage ? 'checkmark' : 'arrow-up'} size={19} color="#0E2321" /></Pressable></View></View>
       <MessageInteractionModal
         message={selectedMessage}
         visible={Boolean(selectedMessage && !selectedMessage.deletedAt && !selectedMessage.deliveryState)}
-        mode={interactionMode}
-        onModeChange={setInteractionMode}
-        onClose={() => { setSelectedMessageId(null); setInteractionMode('reactions'); }}
+        onClose={() => setSelectedMessageId(null)}
         onReact={onReact}
         onPin={onPin}
         canModerate={canReviewRequests(team)}
@@ -2411,13 +2404,13 @@ const lightStyles = createMobileStyleSheet({
   wizardProgress: { marginBottom: 22, flexDirection: 'row' }, wizardStep: { position: 'relative', flex: 1, alignItems: 'center' }, wizardDot: { width: 27, height: 27, zIndex: 2, alignItems: 'center', justifyContent: 'center', borderRadius: 14, borderWidth: 1, borderColor: C.line, backgroundColor: C.surface }, wizardDotActive: { borderColor: C.optic, backgroundColor: C.optic }, wizardDotText: { color: C.ink40, fontSize: 8, fontWeight: '900' }, wizardDotTextActive: { color: C.ink }, wizardStepText: { maxWidth: 72, marginTop: 6, color: C.ink40, textAlign: 'center', fontSize: 7, fontWeight: '700' }, wizardStepTextActive: { color: C.ink, fontWeight: '900' }, wizardLine: { position: 'absolute', top: 13, left: '62%', right: '-38%', height: 1, backgroundColor: C.line }, wizardLineActive: { backgroundColor: C.optic }, stepIntro: { marginBottom: 18 }, stepTitle: { color: C.ink, fontSize: 23, lineHeight: 28, fontWeight: '900', letterSpacing: -.5 }, stepBody: { marginTop: 6, color: C.ink70, fontSize: 11, lineHeight: 17 }, selectedBaseCard: { minHeight: 82, marginBottom: 12, paddingHorizontal: 13, flexDirection: 'row', alignItems: 'center', gap: 11, borderRadius: 16, borderWidth: 1, borderColor: '#BFD8D2', backgroundColor: '#E5F0ED' }, selectedBaseIcon: { width: 44, height: 44, alignItems: 'center', justifyContent: 'center', borderRadius: 13, backgroundColor: C.surface }, selectedBaseCopy: { flex: 1 }, selectedBaseLabel: { color: C.teal, fontSize: 7, fontWeight: '900', letterSpacing: .7 }, selectedBaseCity: { marginTop: 2, color: C.ink, fontSize: 15, fontWeight: '900' }, selectedBaseMeta: { marginTop: 2, color: C.ink40, fontSize: 9 }, baseRequired: { minHeight: 48, marginBottom: 12, paddingHorizontal: 12, flexDirection: 'row', alignItems: 'center', gap: 7, borderRadius: 13, backgroundColor: '#F7EAE6' }, baseRequiredText: { flex: 1, color: C.brick, fontSize: 9, fontWeight: '700' }, useCurrentBase: { minHeight: 58, marginBottom: 18, paddingHorizontal: 13, flexDirection: 'row', alignItems: 'center', gap: 9, borderRadius: 14, backgroundColor: C.optic }, useCurrentBaseCopy: { flex: 1 }, useCurrentBaseTitle: { color: C.ink, fontSize: 10, fontWeight: '900' }, useCurrentBaseMeta: { marginTop: 2, color: C.ink70, fontSize: 8 }, baseSearch: { minHeight: 52, paddingHorizontal: 13, flexDirection: 'row', alignItems: 'center', gap: 8, borderRadius: 14, borderWidth: 1, borderColor: C.line, backgroundColor: C.surface }, baseSearchInput: { flex: 1, minHeight: 50, color: C.ink, fontSize: 12 }, baseResults: { marginTop: 9, overflow: 'hidden', borderRadius: 16, borderWidth: 1, borderColor: C.line, backgroundColor: C.surface }, baseResult: { minHeight: 59, paddingHorizontal: 12, flexDirection: 'row', alignItems: 'center', gap: 9 }, baseResultBorder: { borderTopWidth: 1, borderColor: C.line }, baseResultIcon: { width: 35, height: 35, alignItems: 'center', justifyContent: 'center', borderRadius: 11, backgroundColor: '#E5F0ED' }, baseResultCopy: { flex: 1 }, baseResultCity: { color: C.ink, fontSize: 11, fontWeight: '900' }, baseResultMeta: { marginTop: 2, color: C.ink40, fontSize: 8 }, baseEmpty: { minHeight: 92, alignItems: 'center', justifyContent: 'center' }, baseEmptyTitle: { marginBottom: 3, color: C.ink, fontSize: 11, fontWeight: '800' }, locationPrivacy: { marginTop: 12, padding: 12, flexDirection: 'row', alignItems: 'flex-start', gap: 8, borderRadius: 13, backgroundColor: '#E5F0ED' }, locationPrivacyText: { flex: 1, color: C.ink70, fontSize: 9, lineHeight: 14 }, reviewCover: { overflow: 'hidden', borderRadius: 20 }, reviewCard: { marginTop: 12, overflow: 'hidden', borderRadius: 18, borderWidth: 1, borderColor: C.line, backgroundColor: C.surface }, reviewRow: { minHeight: 82, paddingHorizontal: 13, paddingVertical: 14, flexDirection: 'row', alignItems: 'center', gap: 10 }, reviewBorder: { borderTopWidth: 1, borderColor: C.line }, reviewIcon: { width: 39, height: 39, alignItems: 'center', justifyContent: 'center', borderRadius: 12, backgroundColor: '#E5F0ED' }, reviewCopy: { flex: 1 }, reviewLabel: { color: C.ink40, fontSize: 7, fontWeight: '900', letterSpacing: .7 }, reviewValue: { marginTop: 2, color: C.ink, fontSize: 11, fontWeight: '900' }, reviewMeta: { marginTop: 3, color: C.ink40, fontSize: 8, lineHeight: 12 }, reviewEdit: { padding: 6, color: C.teal, fontSize: 9, fontWeight: '900' }, wizardActions: { marginTop: 22, flexDirection: 'row', gap: 9 }, wizardBack: { width: 92, minHeight: 53, alignItems: 'center', justifyContent: 'center', borderRadius: 14, borderWidth: 1, borderColor: C.line, backgroundColor: C.surface }, wizardBackText: { color: C.ink70, fontSize: 11, fontWeight: '800' }, wizardPrimary: { flex: 1 },
   formPhoto: { marginBottom: 20, padding: 10, borderRadius: 20, backgroundColor: '#E5F0ED' }, formCoverPressable: { overflow: 'hidden', borderRadius: 15 }, previewCoverContent: { position: 'relative', flex: 1 }, previewCameraCover: { position: 'absolute', top: 11, right: 11, width: 28, height: 28, alignItems: 'center', justifyContent: 'center', borderRadius: 14, backgroundColor: 'rgba(8,24,22,0.52)' }, previewCoverBottom: { position: 'absolute', left: 13, right: 13, bottom: 13, flexDirection: 'row', alignItems: 'center', gap: 10 }, previewCrestWrapper: { position: 'relative' }, previewCrestCamera: { position: 'absolute', bottom: -4, right: -4, width: 20, height: 20, alignItems: 'center', justifyContent: 'center', borderRadius: 10, borderWidth: 2, borderColor: '#E5F0ED', backgroundColor: C.optic }, previewCoverText: { flex: 1 }, previewCoverTitle: { color: C.surface, fontSize: 18, fontWeight: '900' }, previewCoverHint: { marginTop: 2, color: 'rgba(255,255,255,.76)', fontSize: 8 }, coverChoiceRow: { paddingHorizontal: 4, paddingTop: 11, paddingBottom: 2, flexDirection: 'row', alignItems: 'center', gap: 8 }, coverChoiceActions: { alignItems: 'flex-end', gap: 4 }, formPhotoCopy: { flex: 1 }, formPhotoTitle: { color: C.ink, fontSize: 13, fontWeight: '800' }, photoActionRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 7, paddingHorizontal: 4, paddingBottom: 6 }, photoButton: { paddingHorizontal: 11, paddingVertical: 7, borderRadius: 9, backgroundColor: C.surface }, photoButtonText: { color: C.teal, fontSize: 9, fontWeight: '800' }, gradientButton: { paddingHorizontal: 4, paddingVertical: 4 }, gradientButtonText: { color: C.ink40, fontSize: 8, fontWeight: '700' }, formField: { marginBottom: 15 }, formLabel: { marginBottom: 7, color: C.ink70, fontSize: 9, fontWeight: '800', letterSpacing: .8 }, formInput: { minHeight: 50, paddingHorizontal: 14, borderRadius: 13, borderWidth: 1, borderColor: C.line, color: C.ink, backgroundColor: C.surface, fontSize: 12 }, formTextarea: { minHeight: 100, paddingTop: 13, textAlignVertical: 'top' }, levelOptions: { marginBottom: 17, flexDirection: 'row', gap: 7 }, levelOption: { minHeight: 38, flex: 1, alignItems: 'center', justifyContent: 'center', borderRadius: 10, borderWidth: 1, borderColor: C.line, backgroundColor: C.surface }, levelOptionActive: { borderColor: C.ink, backgroundColor: C.ink }, levelOptionText: { color: C.ink70, fontSize: 8, fontWeight: '800' }, levelOptionTextActive: { color: C.surface }, visibilityOptions: { marginBottom: 17, flexDirection: 'row', gap: 8 }, visibilityOption: { minHeight: 82, flex: 1, padding: 11, flexDirection: 'row', alignItems: 'flex-start', gap: 8, borderRadius: 12, borderWidth: 1, borderColor: C.line, backgroundColor: C.surface }, visibilityOptionActive: { borderColor: C.ink, backgroundColor: C.ink }, visibilityCopy: { flex: 1 }, visibilityTitle: { color: C.ink, fontSize: 10, fontWeight: '900' }, visibilityTitleActive: { color: C.surface }, visibilityHelp: { marginTop: 4, color: C.ink40, fontSize: 8, lineHeight: 12 }, visibilityHelpActive: { color: 'rgba(255,255,255,.65)' }, formNotice: { marginBottom: 16, padding: 12, flexDirection: 'row', alignItems: 'center', gap: 8, borderRadius: 12, backgroundColor: '#E5F0ED' }, formNoticeText: { flex: 1, color: C.ink70, fontSize: 9, lineHeight: 14 }, saveButton: { minHeight: 53, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 7, borderRadius: 14, backgroundColor: C.optic }, saveButtonDisabled: { opacity: .62 },
   inviteProgress: { padding: 14, flexDirection: 'row', alignItems: 'center', gap: 10, borderRadius: 16, backgroundColor: '#E5F0ED' }, inviteProgressIcon: { width: 43, height: 43, borderRadius: 13, alignItems: 'center', justifyContent: 'center', backgroundColor: C.surface }, inviteProgressTitle: { color: C.ink, fontSize: 12, fontWeight: '900' }, invitePrivacy: { marginTop: 12, color: C.ink40, fontSize: 9, lineHeight: 14 }, searchingText: { paddingVertical: 24, color: C.ink40, textAlign: 'center', fontSize: 10 }, playerResults: { marginTop: 12, overflow: 'hidden', borderRadius: 16, borderWidth: 1, borderColor: C.line, backgroundColor: C.surface }, playerResult: { minHeight: 70, marginHorizontal: 13, flexDirection: 'row', alignItems: 'center', gap: 10 }, invitePlayerButton: { minHeight: 37, paddingHorizontal: 10, flexDirection: 'row', alignItems: 'center', gap: 5, borderRadius: 10, backgroundColor: C.optic }, invitePlayerButtonSent: { borderWidth: 1, borderColor: '#BFD8D2', backgroundColor: '#E5F0ED' }, invitePlayerText: { color: C.ink, fontSize: 9, fontWeight: '900' }, invitePlayerTextSent: { color: C.teal }, invitationCard: { marginBottom: 12, padding: 15, borderRadius: 20, borderBottomLeftRadius: 9, borderBottomRightRadius: 9, borderWidth: 1, borderColor: '#BFD8D2', backgroundColor: C.surface, ...shadow }, invitationEyebrow: { marginBottom: 3, color: C.teal, fontSize: 7, fontWeight: '900', letterSpacing: .7 }, invitationMeta: { marginTop: 13, paddingTop: 11, flexDirection: 'row', alignItems: 'center', gap: 4, borderTopWidth: 1, borderColor: C.line }, invitationExpiry: { marginTop: 5, color: C.ink40, fontSize: 8 },
-  chatScreen: { flex: 1 }, chatHeader: { paddingHorizontal: 16, paddingTop: 8, paddingBottom: 10 }, onlineRow: { marginTop: 2, flexDirection: 'row', alignItems: 'center', gap: 4 }, onlineDot: { width: 6, height: 6, borderRadius: 3, backgroundColor: C.teal }, chatStatus: { color: C.ink40, fontSize: 8 }, chatRule: { height: 1, backgroundColor: C.line }, chatMessages: { flex: 1 }, chatContent: { paddingHorizontal: 14, paddingTop: 12, paddingBottom: 16 }, loadEarlierButton: { minHeight: 34, marginBottom: 12, alignSelf: 'center', paddingHorizontal: 14, alignItems: 'center', justifyContent: 'center', borderRadius: 17, backgroundColor: '#E5F0ED' }, loadEarlierText: { color: C.teal, fontSize: 9, fontWeight: '800' }, chatDay: { marginBottom: 13, color: C.ink40, textAlign: 'center', fontSize: 7, fontWeight: '900', letterSpacing: .8 }, messageRow: { marginTop: 12, flexDirection: 'row', alignItems: 'flex-end', gap: 7 }, messageRowMine: { justifyContent: 'flex-end' }, messageGrouped: { marginTop: 4 }, chatAvatar: { width: 31, height: 31, borderRadius: 16, alignItems: 'center', justifyContent: 'center' }, chatAvatarSpacer: { width: 31 }, messageBlock: { maxWidth: '82%', alignItems: 'flex-start' }, messageBlockMine: { alignItems: 'flex-end' }, sender: { marginLeft: 4, marginBottom: 3, color: C.ink40, fontSize: 8, fontWeight: '800' }, bubble: { paddingHorizontal: 12, paddingVertical: 9, borderRadius: 15, borderBottomLeftRadius: 4, backgroundColor: C.surface, borderWidth: 1, borderColor: C.line }, bubbleMine: { borderBottomLeftRadius: 15, borderBottomRightRadius: 4, borderColor: C.teal, backgroundColor: C.teal }, deletedBubble: { borderColor: C.line, backgroundColor: C.paper }, deletedMessageRow: { flexDirection: 'row', alignItems: 'center', gap: 5 }, deletedMessageText: { color: C.ink40, fontSize: 10, fontStyle: 'italic' }, bubbleText: { color: C.ink, fontSize: 11, lineHeight: 16 }, bubbleTextMine: { color: C.surface }, messageTime: { marginTop: 3, marginLeft: 4, color: C.ink40, fontSize: 7 }, messageTimeMine: { marginLeft: 0, marginRight: 4 }, reactionSummary: { marginTop: -3, marginLeft: 5, flexDirection: 'row', flexWrap: 'wrap', gap: 3 }, reactionSummaryMine: { marginLeft: 0, marginRight: 5, justifyContent: 'flex-end' }, reactionChip: { minHeight: 24, paddingHorizontal: 6, flexDirection: 'row', alignItems: 'center', gap: 3, borderRadius: 12, borderWidth: 1, borderColor: C.line, backgroundColor: C.surface }, reactionChipMine: { borderColor: C.teal, backgroundColor: '#E5F0ED' }, reactionEmoji: { fontSize: 11 }, reactionCount: { color: C.ink70, fontSize: 8, fontWeight: '800' }, messageActions: { marginTop: 6, padding: 7, maxWidth: 290, borderRadius: 13, borderWidth: 1, borderColor: C.line, backgroundColor: C.surface, ...shadow }, messageActionsMine: { alignItems: 'flex-end' }, reactionPicker: { flexDirection: 'row', gap: 2 }, reactionOption: { width: 34, height: 32, alignItems: 'center', justifyContent: 'center', borderRadius: 10, backgroundColor: C.paper }, reactionOptionText: { fontSize: 16 }, messageActionButtons: { marginTop: 6, flexDirection: 'row', gap: 5 }, messageActionButton: { minHeight: 31, paddingHorizontal: 8, flexDirection: 'row', alignItems: 'center', gap: 4, borderRadius: 9, backgroundColor: C.paper }, messageActionText: { color: C.ink70, fontSize: 8, fontWeight: '800' }, editingBanner: { paddingHorizontal: 14, paddingVertical: 8, flexDirection: 'row', alignItems: 'center', gap: 9, borderTopWidth: 1, borderColor: C.line, backgroundColor: '#E5F0ED' }, editingCopy: { flex: 1 }, editingTitle: { color: C.teal, fontSize: 8, fontWeight: '900' }, editingPreview: { marginTop: 2, color: C.ink70, fontSize: 9 }, composer: { paddingHorizontal: 12, paddingTop: 9, paddingBottom: 9, flexDirection: 'row', alignItems: 'flex-end', gap: 8, borderTopWidth: 1, borderColor: C.line, backgroundColor: C.surface }, addAttachment: { width: 40, height: 40, borderRadius: 20, alignItems: 'center', justifyContent: 'center', backgroundColor: '#E5F0ED' }, composerInput: { minHeight: 43, flex: 1, paddingLeft: 13, paddingRight: 4, flexDirection: 'row', alignItems: 'center', borderRadius: 22, backgroundColor: C.paper }, chatInput: { flex: 1, maxHeight: 92, paddingVertical: 10, color: C.ink, fontSize: 11 }, sendButton: { width: 35, height: 35, borderRadius: 18, alignItems: 'center', justifyContent: 'center', backgroundColor: C.optic }, sendDisabled: { opacity: .35 },
+  chatScreen: { flex: 1 }, chatHeader: { paddingHorizontal: 16, paddingTop: 8, paddingBottom: 10 }, onlineRow: { marginTop: 2, flexDirection: 'row', alignItems: 'center', gap: 4 }, onlineDot: { width: 6, height: 6, borderRadius: 3, backgroundColor: C.teal }, chatStatus: { color: C.ink40, fontSize: 8 }, chatRule: { height: 1, backgroundColor: C.line }, chatMessages: { flex: 1 }, chatContent: { flexGrow: 1, paddingHorizontal: 14, paddingTop: 12, paddingBottom: 16 }, chatTapArea: { flexGrow: 1 }, loadEarlierButton: { minHeight: 34, marginBottom: 12, alignSelf: 'center', paddingHorizontal: 14, alignItems: 'center', justifyContent: 'center', borderRadius: 17, backgroundColor: '#E5F0ED' }, loadEarlierText: { color: C.teal, fontSize: 9, fontWeight: '800' }, chatDay: { marginBottom: 13, color: C.ink40, textAlign: 'center', fontSize: 7, fontWeight: '900', letterSpacing: .8 }, messageRow: { marginTop: 12, flexDirection: 'row' }, messageRowMine: { justifyContent: 'flex-end' }, messageGrouped: { marginTop: 4 }, chatAvatar: { width: 31, height: 31, borderRadius: 16, alignItems: 'center', justifyContent: 'center' }, chatAvatarSpacer: { width: 31 }, messageBlock: { maxWidth: '90%', alignItems: 'flex-start' }, messageBlockMine: { alignItems: 'flex-end' }, sender: { marginLeft: 4, marginBottom: 3, color: C.ink40, fontSize: 8, fontWeight: '800' }, bubble: { flexShrink: 1, paddingHorizontal: 12, paddingVertical: 9, borderRadius: 15, borderBottomLeftRadius: 4, backgroundColor: C.surface, borderWidth: 1, borderColor: C.line }, bubbleMine: { borderBottomLeftRadius: 15, borderBottomRightRadius: 4, borderColor: C.teal, backgroundColor: C.teal }, deletedBubble: { borderColor: C.line, backgroundColor: C.paper }, deletedMessageRow: { flexDirection: 'row', alignItems: 'center', gap: 5 }, deletedMessageText: { color: C.ink40, fontSize: 10, fontStyle: 'italic' }, bubbleText: { color: C.ink, fontSize: 11, lineHeight: 16 }, bubbleTextMine: { color: C.surface }, messageTime: { marginTop: 3, marginLeft: 4, color: C.ink40, fontSize: 7 }, messageTimeMine: { marginLeft: 0, marginRight: 4 }, reactionSummary: { marginTop: -3, marginLeft: 5, flexDirection: 'row', flexWrap: 'wrap', gap: 3 }, reactionSummaryMine: { marginLeft: 0, marginRight: 5, justifyContent: 'flex-end' }, reactionChip: { minHeight: 24, paddingHorizontal: 6, flexDirection: 'row', alignItems: 'center', gap: 3, borderRadius: 12, borderWidth: 1, borderColor: C.line, backgroundColor: C.surface }, reactionChipMine: { borderColor: C.teal, backgroundColor: '#E5F0ED' }, reactionEmoji: { fontSize: 11 }, reactionCount: { color: C.ink70, fontSize: 8, fontWeight: '800' }, messageActions: { marginTop: 6, padding: 7, maxWidth: 290, borderRadius: 13, borderWidth: 1, borderColor: C.line, backgroundColor: C.surface, ...shadow }, messageActionsMine: { alignItems: 'flex-end' }, reactionPicker: { flexDirection: 'row', gap: 2 }, reactionOption: { width: 34, height: 32, alignItems: 'center', justifyContent: 'center', borderRadius: 10, backgroundColor: C.paper }, reactionOptionText: { fontSize: 16 }, messageActionButtons: { marginTop: 6, flexDirection: 'row', gap: 5 }, messageActionButton: { minHeight: 31, paddingHorizontal: 8, flexDirection: 'row', alignItems: 'center', gap: 4, borderRadius: 9, backgroundColor: C.paper }, messageActionText: { color: C.ink70, fontSize: 8, fontWeight: '800' }, editingBanner: { paddingHorizontal: 14, paddingVertical: 8, flexDirection: 'row', alignItems: 'center', gap: 9, borderTopWidth: 1, borderColor: C.line, backgroundColor: '#E5F0ED' }, editingCopy: { flex: 1 }, editingTitle: { color: C.teal, fontSize: 8, fontWeight: '900' }, editingPreview: { marginTop: 2, color: C.ink70, fontSize: 9 }, composer: { paddingHorizontal: 12, paddingTop: 9, paddingBottom: 9, flexDirection: 'row', alignItems: 'flex-end', gap: 8, borderTopWidth: 1, borderColor: C.line, backgroundColor: C.surface }, addAttachment: { width: 40, height: 40, borderRadius: 20, alignItems: 'center', justifyContent: 'center', backgroundColor: '#E5F0ED' }, composerInput: { minHeight: 43, flex: 1, paddingLeft: 13, paddingRight: 4, flexDirection: 'row', alignItems: 'center', borderRadius: 22, backgroundColor: C.paper }, chatInput: { flex: 1, maxHeight: 92, paddingVertical: 10, color: C.ink, fontSize: 11 }, sendButton: { width: 35, height: 35, borderRadius: 18, alignItems: 'center', justifyContent: 'center', backgroundColor: C.optic }, sendDisabled: { opacity: .35 },
   highlightedMessageBubble: { borderWidth: 2, borderColor: C.optic },
   chatPinnedBanner: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: 20, paddingBottom: 12 },
   chatPinnedBannerCopy: { marginLeft: 10, flex: 1 },
   chatPinnedBannerTitle: { color: C.teal, fontSize: 10, fontWeight: '900', letterSpacing: 0.5, textTransform: 'uppercase' },
   chatPinnedBannerText: { color: C.ink, fontSize: 12, marginTop: 2 },
-  chatAttachmentImage: { width: 210, height: 150, marginBottom: 7, borderRadius: 10 }, attachmentFallback: { ...StyleSheet.absoluteFillObject, alignItems: 'center', justifyContent: 'center', gap: 7 }, attachmentFallbackText: { color: C.ink40, fontSize: 8, fontWeight: '800' }, chatAttachmentVideo: { width: 230, height: 150, marginBottom: 7, borderRadius: 10, overflow: 'hidden', backgroundColor: '#000' }, typingRow: { marginTop: 9, flexDirection: 'row', alignItems: 'flex-end', gap: 7 }, typingBubble: { width: 51, height: 35, paddingVertical: 3, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 5 }, typingDot: { width: 6, height: 6, borderRadius: 3, backgroundColor: C.ink40 }, autoMatchMessage: { marginTop: 17 }, autoMatchLabel: { marginBottom: 7, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 5 }, autoMatchLabelText: { color: C.ink40, fontSize: 7, fontWeight: '700' }, liveCard: { overflow: 'hidden', borderRadius: 18, borderBottomLeftRadius: 8, borderBottomRightRadius: 8, borderWidth: 1, borderColor: '#BFD8D2', backgroundColor: C.surface, ...shadow }, liveCardHead: { paddingHorizontal: 13, paddingTop: 12, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }, liveBadge: { paddingHorizontal: 7, paddingVertical: 5, flexDirection: 'row', alignItems: 'center', gap: 5, borderRadius: 7, backgroundColor: '#F7EAE6' }, liveDot: { width: 7, height: 7, borderRadius: 4, backgroundColor: C.brick }, liveBadgeText: { color: C.brick, fontSize: 7, fontWeight: '900', letterSpacing: .6 }, liveGame: { color: C.ink40, fontSize: 7, fontWeight: '800', letterSpacing: .6 }, livePlayers: { marginTop: 9, color: C.ink40, textAlign: 'center', fontSize: 8 }, liveScoreRow: { minHeight: 75, paddingHorizontal: 11, flexDirection: 'row', alignItems: 'center', justifyContent: 'center' }, liveTeam: { width: 65, alignItems: 'center' }, liveTeamAway: { alignItems: 'center' }, liveTag: { color: C.teal, fontSize: 8, fontWeight: '900' }, liveTeamName: { marginTop: 3, color: C.ink70, textAlign: 'center', fontSize: 7 }, liveScore: { width: 38, color: C.ink, textAlign: 'center', fontSize: 29, fontWeight: '900' }, liveDash: { color: C.ink40, fontSize: 16 }, cardServing: { marginHorizontal: 12, marginBottom: 10, paddingVertical: 7, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 5, borderRadius: 9, backgroundColor: '#E5F0ED' }, cardServingText: { color: C.teal, fontSize: 7, fontWeight: '800' }, liveCardFoot: { minHeight: 43, paddingHorizontal: 12, flexDirection: 'row', alignItems: 'center', gap: 8, borderTopWidth: 1, borderColor: C.line, backgroundColor: '#F8F9F5' }, liveLastPlay: { flex: 1, color: C.ink40, fontSize: 7 }, watchLive: { flexDirection: 'row', alignItems: 'center', gap: 3 }, watchLiveText: { color: C.ink, fontSize: 8, fontWeight: '900' },
+  chatAttachmentImage: { width: 210, height: 150, marginBottom: 7, borderRadius: 10 }, attachmentFallback: { ...StyleSheet.absoluteFillObject, alignItems: 'center', justifyContent: 'center', gap: 7 }, attachmentFallbackText: { color: C.ink40, fontSize: 8, fontWeight: '800' }, chatAttachmentVideo: { width: 230, height: 150, marginBottom: 7, borderRadius: 10, overflow: 'hidden', backgroundColor: '#000' }, typingRow: { marginTop: 9, alignItems: 'flex-start' }, typingBubble: { width: 62, height: 38, paddingVertical: 3, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 5, borderRadius: 19, borderBottomLeftRadius: 19, transformOrigin: 'left bottom' }, typingDot: { width: 8, height: 8, borderRadius: 4, backgroundColor: C.ink70 }, autoMatchMessage: { marginTop: 17 }, autoMatchLabel: { marginBottom: 7, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 5 }, autoMatchLabelText: { color: C.ink40, fontSize: 7, fontWeight: '700' }, liveCard: { overflow: 'hidden', borderRadius: 18, borderBottomLeftRadius: 8, borderBottomRightRadius: 8, borderWidth: 1, borderColor: '#BFD8D2', backgroundColor: C.surface, ...shadow }, liveCardHead: { paddingHorizontal: 13, paddingTop: 12, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }, liveBadge: { paddingHorizontal: 7, paddingVertical: 5, flexDirection: 'row', alignItems: 'center', gap: 5, borderRadius: 7, backgroundColor: '#F7EAE6' }, liveDot: { width: 7, height: 7, borderRadius: 4, backgroundColor: C.brick }, liveBadgeText: { color: C.brick, fontSize: 7, fontWeight: '900', letterSpacing: .6 }, liveGame: { color: C.ink40, fontSize: 7, fontWeight: '800', letterSpacing: .6 }, livePlayers: { marginTop: 9, color: C.ink40, textAlign: 'center', fontSize: 8 }, liveScoreRow: { minHeight: 75, paddingHorizontal: 11, flexDirection: 'row', alignItems: 'center', justifyContent: 'center' }, liveTeam: { width: 65, alignItems: 'center' }, liveTeamAway: { alignItems: 'center' }, liveTag: { color: C.teal, fontSize: 8, fontWeight: '900' }, liveTeamName: { marginTop: 3, color: C.ink70, textAlign: 'center', fontSize: 7 }, liveScore: { width: 38, color: C.ink, textAlign: 'center', fontSize: 29, fontWeight: '900' }, liveDash: { color: C.ink40, fontSize: 16 }, cardServing: { marginHorizontal: 12, marginBottom: 10, paddingVertical: 7, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 5, borderRadius: 9, backgroundColor: '#E5F0ED' }, cardServingText: { color: C.teal, fontSize: 7, fontWeight: '800' }, liveCardFoot: { minHeight: 43, paddingHorizontal: 12, flexDirection: 'row', alignItems: 'center', gap: 8, borderTopWidth: 1, borderColor: C.line, backgroundColor: '#F8F9F5' }, liveLastPlay: { flex: 1, color: C.ink40, fontSize: 7 }, watchLive: { flexDirection: 'row', alignItems: 'center', gap: 3 }, watchLiveText: { color: C.ink, fontSize: 8, fontWeight: '900' },
   mediaBubble: { paddingHorizontal: 3, paddingVertical: 3, overflow: 'hidden', borderColor: 'transparent', backgroundColor: 'transparent' },
   mediaBubbleMine: { borderColor: 'transparent', backgroundColor: 'transparent' },
   mediaProgress: { position: 'absolute', right: 9, bottom: 9, width: 30, height: 30, alignItems: 'center', justifyContent: 'center', borderRadius: 15, backgroundColor: 'rgba(14,35,33,.62)' },
@@ -2511,23 +2504,21 @@ const lightStyles = createMobileStyleSheet({
   peopleModalName: { flex: 1, color: C.ink, fontSize: 12, fontWeight: '800' },
   peopleModalEmoji: { fontSize: 20 },
   interactionBackdrop: { flex: 1, paddingHorizontal: 18, justifyContent: 'center', backgroundColor: 'rgba(5,14,13,.58)' },
-  interactionContent: { maxWidth: '92%', alignSelf: 'flex-start' },
-  interactionContentMine: { alignSelf: 'flex-end', alignItems: 'flex-end' },
   floatingReactionPicker: { minHeight: 54, marginBottom: 10, paddingHorizontal: 7, flexDirection: 'row', alignItems: 'center', gap: 1, borderRadius: 28, backgroundColor: C.surface, ...shadow },
   floatingReactionOption: { width: 43, height: 46, alignItems: 'center', justifyContent: 'center', borderRadius: 23 },
   floatingReactionOptionActive: { backgroundColor: '#E5F0ED', transform: [{ scale: 1.18 }] },
   floatingReactionText: { fontSize: 25 },
-  bubbleActionRow: { flexDirection: 'row', alignItems: 'center', gap: 6 },
+  // The avatar sits beside the bubble itself, so controls and reactions
+  // opening underneath never push it down.
+  bubbleActionRow: { maxWidth: '100%', flexDirection: 'row', alignItems: 'flex-end', gap: 7 },
+  messageExtras: { maxWidth: '100%', alignItems: 'flex-start' },
+  messageExtrasMine: { alignItems: 'flex-end' },
+  messageIndent: { marginLeft: 38 },
   bubbleActionRowMine: { flexDirection: 'row-reverse' },
-  quickMessageActions: { flexDirection: 'row', alignItems: 'center', gap: 3 },
-  quickMessageAction: { width: 31, height: 31, alignItems: 'center', justifyContent: 'center', borderRadius: 16, borderWidth: 1, borderColor: C.line, backgroundColor: C.surface },
-  interactionMessageRow: { maxWidth: '100%', flexDirection: 'row', alignItems: 'center', gap: 8 },
-  interactionMessageRowMine: { flexDirection: 'row-reverse' },
-  interactionBubble: { maxWidth: '82%', paddingHorizontal: 14, paddingVertical: 11, borderRadius: 18, borderBottomLeftRadius: 5, backgroundColor: C.surface },
-  interactionBubbleMine: { borderBottomLeftRadius: 18, borderBottomRightRadius: 5, backgroundColor: C.teal },
-  interactionPreviewText: { color: C.ink, fontSize: 12, lineHeight: 18 },
-  interactionPreviewTextMine: { color: C.surface },
-  moreMessageButton: { width: 43, height: 43, alignItems: 'center', justifyContent: 'center', borderRadius: 22, backgroundColor: C.surface, ...shadow },
+  quickMessageActions: { maxWidth: '100%', marginTop: 2, flexDirection: 'row', alignItems: 'center' },
+  quickMessageAction: { width: 36, minWidth: 26, flexShrink: 1, height: 36, alignItems: 'center', justifyContent: 'center', borderRadius: 18 },
+  quickMessageActionPressed: { backgroundColor: 'rgba(28,107,102,.14)' },
+  quickMessageEmoji: { fontSize: 22 },
   messageActionSheet: { position: 'absolute', left: 10, right: 10, bottom: 10, paddingHorizontal: 14, paddingTop: 8, paddingBottom: 12, borderRadius: 24, backgroundColor: C.surface, ...shadow },
   actionSheetHandle: { width: 38, height: 4, alignSelf: 'center', marginBottom: 10, borderRadius: 2, backgroundColor: C.line },
   actionSheetTitle: { marginBottom: 5, color: C.ink, fontSize: 16, fontWeight: '900' },
