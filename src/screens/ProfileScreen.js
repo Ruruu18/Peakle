@@ -25,6 +25,7 @@ import ProfilePhotoPicker from '../components/ProfilePhotoPicker';
 import NotificationSheet from '../components/NotificationSheet';
 import ScrollView from '../components/FocusResetScrollView';
 import useResponsiveWidth from '../hooks/useResponsiveWidth';
+import useDesktopLayout from '../hooks/useDesktopLayout';
 import { webLayout, webDialog } from '../utils/webLayout';
 import { createDarkStyleSheet, DARK_CONTENT_COLORS, useTheme } from '../context/ThemeContext';
 import { useOperations } from '../context/OperationsContext';
@@ -265,13 +266,13 @@ function formatLastLogin(isoString) {
   return date.toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' });
 }
 
-function Settings({ preferences, setPreference, onAction, lastLogin }) {
+function Settings({ preferences, setPreference, onAction, lastLogin, showLogOut = true }) {
   return (
     <View>
       <Text style={styles.settingsLabel}>PREFERENCES</Text>
       <View style={styles.settingsCard}>
-        {Platform.OS !== 'web' ? <SettingRow icon="chatbubble-ellipses-outline" title="Message notifications" detail="Lock-screen delivery, quick reply, and device test" onPress={() => onAction('Message notifications')} border={false} /> : <Text style={styles.footText}>Updates appear here while Peakle is open.</Text>}
-        <SettingRow icon="notifications-outline" title="Squad notifications" detail="Challenges, invites, and team updates" value={preferences.squad} onToggle={(value) => setPreference('squad', value)} />
+        {Platform.OS !== 'web' ? <SettingRow icon="chatbubble-ellipses-outline" title="Message notifications" detail="Lock-screen delivery, quick reply, and device test" onPress={() => onAction('Message notifications')} border={false} /> : null}
+        <SettingRow icon="notifications-outline" title="Squad notifications" detail="Challenges, invites, and team updates" value={preferences.squad} onToggle={(value) => setPreference('squad', value)} border={Platform.OS !== 'web'} />
         <SettingRow icon="calendar-outline" title="Match reminders" detail="One hour before every match" value={preferences.reminders} onToggle={(value) => setPreference('reminders', value)} />
         <SettingRow icon="sync-outline" title="Calendar sync" detail={preferences.calendar ? 'Syncing with your calendar' : 'Not connected'} value={preferences.calendar} onToggle={(value) => setPreference('calendar', value)} />
       </View>
@@ -289,7 +290,7 @@ function Settings({ preferences, setPreference, onAction, lastLogin }) {
         <SettingRow icon="document-text-outline" title="Privacy policy" detail="How Peakle handles your data" onPress={() => onAction('Privacy policy')} />
         <SettingRow icon="reader-outline" title="Terms of service" onPress={() => onAction('Terms of service')} />
         <SettingRow icon="trash-outline" title="Delete account" detail="Permanently remove your account and personal data" destructive onPress={() => onAction('Delete account')} />
-        <SettingRow icon="log-out-outline" title="Log out" destructive onPress={() => onAction('Log out')} />
+        {showLogOut ? <SettingRow icon="log-out-outline" title="Log out" destructive onPress={() => onAction('Log out')} /> : null}
       </View>
       <Text style={styles.version}>PEAKLE · VERSION 1.0.0</Text>
     </View>
@@ -575,6 +576,8 @@ function ProfileScreen({ navigation, route }) {
   const { hasOrganizerAccess } = useOrganizerPass();
   const width = useResponsiveWidth();
   const compactPhone = width <= 440;
+  // On desktop the app sidebar switches sections, so the tab bar is hidden.
+  const desktop = useDesktopLayout();
   const { notifications: operationNotifications, unreadCount, readNotification, readAllNotifications, removeNotification, clearNotifications, respondFollowRequest, enablePushNotifications, disablePushNotifications } = useOperations();
   const dataCacheKey = profileScreenCacheKey(user?.id || 'guest');
   const initialSnapshot = useRef(peekCachedData(dataCacheKey)).current;
@@ -628,6 +631,11 @@ function ProfileScreen({ navigation, route }) {
     const requestedTab = route.params?.openTab;
     if (['Overview', 'Matches', 'Settings'].includes(requestedTab)) setTab(requestedTab);
   }, [route.params?.openTab, route.params?.openTabToken]);
+
+  // Keep the desktop sidebar's highlighted section in step with in-page tab changes.
+  useEffect(() => {
+    if (desktop && route.params?.openTab !== tab) navigation.setParams({ openTab: tab });
+  }, [desktop, tab]);
 
   useEffect(() => {
     if (route.params?.openNotificationsToken) setNotificationsOpen(true);
@@ -764,12 +772,12 @@ function ProfileScreen({ navigation, route }) {
         {hasOrganizerAccess && <OrganizerPortalShortcut onOpen={openOrganizerPortal} />}
         </View>
         <View {...webLayout('profile-content')}>
-        <View style={[styles.tabs, compactPhone && styles.tabsCompact]}>{['Overview', 'Matches', 'Settings'].map((item) => <Pressable key={item} onPress={() => setTab(item)} style={[styles.tab, tab === item && styles.tabActive]}><Text style={[styles.tabText, tab === item && styles.tabTextActive]}>{item}</Text></Pressable>)}</View>
+        {!desktop && <View style={[styles.tabs, compactPhone && styles.tabsCompact]}>{['Overview', 'Matches', 'Settings'].map((item) => <Pressable key={item} onPress={() => setTab(item)} style={[styles.tab, tab === item && styles.tabActive]}><Text style={[styles.tabText, tab === item && styles.tabTextActive]}>{item}</Text></Pressable>)}</View>}
         {tab === 'Overview' && <Overview matches={recordedMatches} onAchievement={setAchievement} onSeeMatches={() => setTab('Matches')} onMatch={setSelectedMatch} onStartFocus={() => {
           navigation.navigate('Play', { focusChallengeToken: Date.now(), focusChallenge: { id: 'return-depth-7-of-10', title: 'Return depth', instruction: 'Land 7 of your first 10 returns past mid-court.', target: 7, attempts: 10 } });
         }} />}
         {tab === 'Matches' && <History source={recordedMatches} onMatch={setSelectedMatch} />}
-        {tab === 'Settings' && <Settings preferences={preferences} setPreference={setPreference} onAction={handleSetting} lastLogin={user?.lastLogin} />}
+        {tab === 'Settings' && <Settings preferences={preferences} setPreference={setPreference} onAction={handleSetting} lastLogin={user?.lastLogin} showLogOut={!desktop} />}
         </View>
         </View>
       </ScrollView>

@@ -28,6 +28,7 @@ import ConnectionsScreen from '../screens/ConnectionsScreen';
 import LeaderboardScreen from '../screens/LeaderboardScreen';
 import CompetitionDivisionScreen from '../screens/CompetitionDivisionScreen';
 import { useTheme } from '../context/ThemeContext';
+import { useAuth } from '../context/AuthContext';
 import { useNearbyPlayersContext } from '../context/NearbyPlayersContext';
 import LeaveMatchDialog from '../components/LeaveMatchDialog';
 import useDesktopLayout, { DESKTOP_SIDEBAR_WIDTH } from '../hooks/useDesktopLayout';
@@ -38,6 +39,13 @@ const Tab = createBottomTabNavigator();
 const colors = { ink: '#0E2321', surface: '#FFFFFF', optic: '#D6E94A', teal: '#1C6B66', ink40: '#7C8983', line: '#DDE3DA' };
 const icons = { Home: 'home-outline', Book: 'compass-outline', Play: 'tennisball-outline', Team: 'people-outline', Profile: 'person-outline', Leaderboard: 'podium-outline', Activities: 'calendar-outline', Inbox: 'chatbubbles-outline', HelpSupport: 'help-circle-outline' };
 const BALL_IMAGE = require('../../public/images/ball.png');
+// On desktop the Profile route is split into sidebar sections that map to its tabs.
+const PROFILE_SECTIONS = [
+  { tab: 'Overview', label: 'Profile', icon: 'person-outline' },
+  { tab: 'Matches', label: 'Matches', icon: 'stats-chart-outline' },
+  { tab: 'Settings', label: 'Settings', icon: 'settings-outline' },
+];
+const SETTINGS_ROUTES = new Set(['Privacy', 'LegalDocument', 'AccountDeletion', 'PaymentHistory']);
 const AnimatedPressable = Animated.createAnimatedComponent(Pressable);
 
 function TabBarItem({ focused, label, onPress, play, routeName, theme, badge = 0 }) {
@@ -123,6 +131,7 @@ function PeakleTabBar({ state, descriptors, navigation }) {
   const insets = useSafeAreaInsets();
   const desktop = useDesktopLayout();
   const { isDark } = useTheme();
+  const { signOut } = useAuth();
   const { joinedInvite, leave } = useNearbyPlayersContext();
   const [leaveDialogOpen, setLeaveDialogOpen] = useState(false);
   const [leavingMatch, setLeavingMatch] = useState(false);
@@ -139,6 +148,9 @@ function PeakleTabBar({ state, descriptors, navigation }) {
   const visibleRoutes = desktop
     ? desktopRoutes.map((name) => state.routes.find((route) => route.name === name)).filter(Boolean)
     : state.routes.filter((route) => !alwaysHiddenRoutes.has(route.name));
+  const activeProfileSection = currentRoute.name === 'Profile' ? (currentRoute.params?.openTab || 'Overview')
+    : SETTINGS_ROUTES.has(currentRoute.name) ? 'Settings'
+    : null;
   const mobileOwner = currentRoute.name === 'Pickleball'
     ? (currentRoute.params?.ownerTab || ({ Ratings: 'Profile', Privacy: 'Profile', 'Find play': 'Play', Compete: 'Book' }[currentRoute.params?.openTab]))
     : currentRoute.name === 'Leaderboard' ? 'Home'
@@ -174,11 +186,26 @@ function PeakleTabBar({ state, descriptors, navigation }) {
             if (!routeFocused && !event.defaultPrevented) navigation.navigate(route.name, route.params);
           };
           const badge = route.name === 'Team' ? Number(route.params?.unreadCount || 0) : 0;
+          if (desktop && route.name === 'Profile') return PROFILE_SECTIONS.map((section) => {
+            const sectionFocused = activeProfileSection ? activeProfileSection === section.tab : focused && section.tab === 'Overview';
+            const onSectionPress = () => {
+              if (sectionFocused && routeFocused) return;
+              if (currentRoute.name === 'Play' && joinedInvite) {
+                if (leaveDialogOpen) return;
+                setPendingRoute({ name: 'Profile', params: { openTab: section.tab, openTabToken: Date.now() } });
+                setLeaveError('');
+                setLeaveDialogOpen(true);
+                return;
+              }
+              navigation.navigate('Profile', { openTab: section.tab, openTabToken: Date.now() });
+            };
+            return <Pressable key={`${route.key}-${section.tab}`} accessibilityRole="button" accessibilityLabel={`${section.label} tab`} accessibilityState={{ selected: sectionFocused }} onPress={onSectionPress} style={({ hovered, pressed }) => [styles.sidebarLink, { backgroundColor: sectionFocused ? theme.active : hovered || pressed ? theme.background : 'transparent' }]}><AppIcon name={section.icon} size={21} color={sectionFocused ? colors.ink : theme.muted} /><Text style={[styles.sidebarLabel, { color: sectionFocused ? colors.ink : isDark ? '#F3F5EF' : colors.ink }]}>{section.label}</Text></Pressable>;
+          });
           if (desktop) return <Pressable key={route.key} accessibilityRole="button" accessibilityLabel={`${label} tab`} accessibilityState={{ selected: focused }} onPress={onPress} style={({ hovered, pressed }) => [styles.sidebarLink, { backgroundColor: focused ? theme.active : hovered || pressed ? theme.background : 'transparent' }]}>{route.name === 'Play' ? <Image source={BALL_IMAGE} style={{ width: 21, height: 21, tintColor: focused ? colors.ink : theme.muted }} resizeMode="contain" /> : <AppIcon name={icons[route.name]} size={21} color={focused ? colors.ink : theme.muted} />}<Text style={[styles.sidebarLabel, { color: focused ? colors.ink : isDark ? '#F3F5EF' : colors.ink }]}>{label}</Text>{badge > 0 ? <View style={styles.sidebarBadge}><Text style={styles.tabBadgeText}>{badge > 99 ? '99+' : badge}</Text></View> : null}</Pressable>;
           return <TabBarItem key={route.key} focused={focused} label={label} onPress={onPress} play={play} routeName={route.name} theme={theme} badge={badge} />;
         })}
       </View>
-      {desktop ? <View style={[styles.sidebarFooter, { borderColor: theme.line }]}><Text style={[styles.sidebarFootnote, { color: theme.muted }]}>Your community. Your court.</Text></View> : null}
+      {desktop ? <View style={[styles.sidebarFooter, { borderColor: theme.line }]}><Pressable accessibilityRole="button" accessibilityLabel="Log out" onPress={() => signOut()} style={({ hovered, pressed }) => [styles.sidebarLink, styles.sidebarLogOut, (hovered || pressed) && { backgroundColor: theme.background }]}><AppIcon name="log-out-outline" size={21} color="#B6472E" /><Text style={[styles.sidebarLabel, { color: '#B6472E' }]}>Log out</Text></Pressable><Text style={[styles.sidebarFootnote, { color: theme.muted }]}>Your community. Your court.</Text></View> : null}
       <LeaveMatchDialog
         visible={leaveDialogOpen}
         hostName={joinedInvite?.sender?.display_name}
@@ -281,6 +308,7 @@ const styles = StyleSheet.create({
   sidebarLabel: { flex: 1, fontSize: 13, fontWeight: '700' },
   sidebarBadge: { minWidth: 19, paddingHorizontal: 5, paddingVertical: 3, borderRadius: 10, backgroundColor: '#B6472E' },
   sidebarFooter: { marginTop: 'auto', paddingTop: 22, paddingBottom: 16, borderTopWidth: 1 },
+  sidebarLogOut: { marginBottom: 14 },
   sidebarFootnote: { fontSize: 11, lineHeight: 17, textAlign: 'center' },
   tabOuter: { backgroundColor: 'transparent', paddingHorizontal: 12, paddingTop: 5 },
   tabBar: { height: 76, paddingHorizontal: 5, borderWidth: 1, borderColor: colors.line, borderRadius: 25, flexDirection: 'row', backgroundColor: colors.surface, ...Platform.select({ ios: { shadowColor: colors.ink, shadowOpacity: 0.16, shadowRadius: 24, shadowOffset: { width: 0, height: 10 } }, android: { elevation: 11 } }) },
