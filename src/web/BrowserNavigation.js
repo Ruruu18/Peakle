@@ -29,10 +29,10 @@ const ROUTE_TITLES = {
   CompetitionDivision: 'Competition Division',
 };
 
-function updatePageTitle(routeName) {
-  if (typeof document === 'undefined') return;
-  const label = ROUTE_TITLES[routeName] || routeName;
-  document.title = `${label} | Peakle`;
+// Passed to NavigationContainer's documentTitle so React Navigation's own
+// title updates use these labels instead of overwriting them with route names.
+export function formatPageTitle(_options, route) {
+  return `${ROUTE_TITLES[route?.name] || route?.name || 'Peakle'} | Peakle`;
 }
 
 export function BrowserScene({ children, route }) {
@@ -53,12 +53,6 @@ export function BrowserScene({ children, route }) {
 export class BrowserNavigationLayout extends React.Component {
   container = React.createRef();
 
-  componentDidMount() {
-    // Set the title for the initial route on first load.
-    const currentRoute = this.props.state.routes[this.props.state.index];
-    updatePageTitle(currentRoute.name);
-  }
-
   getSnapshotBeforeUpdate(previousProps) {
     const previousKey = previousProps.state.routes[previousProps.state.index].key;
     const nextKey = this.props.state.routes[this.props.state.index].key;
@@ -74,22 +68,13 @@ export class BrowserNavigationLayout extends React.Component {
     return true;
   }
 
-  componentDidUpdate(previousProps, _previousState, shouldMoveFocus) {
-    const previousIndex = previousProps.state.index;
-    const nextIndex = this.props.state.index;
-
-    // Update the browser tab title whenever the active route changes.
-    if (previousIndex !== nextIndex || previousProps.state.routes[previousIndex]?.name !== this.props.state.routes[nextIndex]?.name) {
-      const currentRoute = this.props.state.routes[nextIndex];
-      updatePageTitle(currentRoute.name);
-    }
-
+  componentDidUpdate(_previousProps, _previousState, shouldMoveFocus) {
     const container = this.container.current;
     if (!shouldMoveFocus || container.ownerDocument.activeElement !== container.ownerDocument.body) return;
 
     // Preserve focus in the tab bar or an autofocus control. When the old
     // scene owned focus, start keyboard navigation at the newly visible scene.
-    const focusedKey = this.props.state.routes[nextIndex].key;
+    const focusedKey = this.props.state.routes[this.props.state.index].key;
     const scene = [...container.querySelectorAll('[data-browser-scene]')]
       .find((element) => element.dataset.browserScene === focusedKey);
     scene?.focus({ preventScroll: true });

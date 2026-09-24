@@ -17,6 +17,7 @@ import ErrorBoundary from './src/components/ErrorBoundary';
 import DemoAutopilot from './src/components/DemoAutopilot';
 import { DEMO_MODE } from './src/config/demoMode';
 import { webNavigationState } from './src/lib/webNavigation';
+import { formatPageTitle } from './src/web/BrowserNavigation';
 
 function setWebTitle(title) {
   if (Platform.OS === 'web' && typeof document !== 'undefined') document.title = `${title} | Peakle`;
@@ -242,7 +243,7 @@ function Root() {
   if (passwordRecovery) { setWebTitle('Reset Password'); return <AuthFlowScreen key="password-recovery" initialScreen="reset-password" />; }
   if (!user) { setWebTitle('Sign In'); return <AuthFlowScreen key="login" initialScreen="login" />; }
   if (!user.onboardingCompleted) { setWebTitle('Get Started'); return <AuthFlowScreen key={`new-user-setup-${user.id}`} initialScreen="new-user-overview" />; }
-  return <View key={`player-session-${user.id}`} style={[styles.appShell, { backgroundColor: appBackground }]}><NavigationContainer ref={navigationRef} theme={navigationTheme} linking={linking}><AppNavigator /></NavigationContainer><MatchInviteOverlay onAccepted={openAcceptedMatch} />{Platform.OS !== 'web' ? <SupportBubble navigationRef={navigationRef} /> : null}{DEMO_MODE && Platform.OS !== 'web' ? <DemoAutopilot navigationRef={navigationRef} /> : null}</View>;
+  return <View key={`player-session-${user.id}`} style={[styles.appShell, { backgroundColor: appBackground }]}><NavigationContainer ref={navigationRef} theme={navigationTheme} linking={linking} documentTitle={{ formatter: formatPageTitle }}><AppNavigator /></NavigationContainer><MatchInviteOverlay onAccepted={openAcceptedMatch} />{Platform.OS !== 'web' ? <SupportBubble navigationRef={navigationRef} /> : null}{DEMO_MODE && Platform.OS !== 'web' ? <DemoAutopilot navigationRef={navigationRef} /> : null}</View>;
 }
 
 export default function App() {
