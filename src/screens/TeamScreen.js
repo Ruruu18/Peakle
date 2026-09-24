@@ -22,6 +22,7 @@ import {
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { StatusBar } from 'expo-status-bar';
 import Ionicons from '@expo/vector-icons/Ionicons';
+import AppIcon from '../components/AppIcon';
 import { Image as ExpoImage } from 'expo-image';
 import Svg, { Circle, Defs, LinearGradient as SvgLinearGradient, Rect, Stop } from 'react-native-svg';
 import * as Crypto from 'expo-crypto';
@@ -199,7 +200,7 @@ const optimisticTeamMessage = ({ teamId, currentUserId, text = null, image = nul
   };
 };
 
-function Icon({ name, size = 20, color = C.ink }) { return <Ionicons name={name} size={size} color={color} />; }
+function Icon({ name, size = 20, color = C.ink }) { return <AppIcon name={name} size={size} color={color} />; }
 function TeamCover({ team, height = 148, children }) {
   const colors = teamGradient(team);
   const gradientId = `team-gradient-${String(team.id || team.tag || 'preview').replace(/[^a-z0-9]/gi, '')}`;

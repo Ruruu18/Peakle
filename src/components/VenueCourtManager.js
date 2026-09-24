@@ -3,6 +3,7 @@ import { webDialog } from '../utils/webLayout';
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { ActivityIndicator, AppState, KeyboardAvoidingView, Linking, Platform, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
 import Ionicons from '@expo/vector-icons/Ionicons';
+import AppIcon from './AppIcon';
 import { useFocusEffect } from '@react-navigation/native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { createManagedCourt, createManagedVenue, listManagedVenues, reviewManagedVenueApplication, updateManagedCourt, updateManagedVenueLocation } from '../services/database';
@@ -22,7 +23,7 @@ const LIGHT_C = {
 let C = LIGHT_C;
 
 function Icon({ name, size = 20, color = C.ink }) {
-  return <Ionicons name={name} size={size} color={color} />;
+  return <AppIcon name={name} size={size} color={color} />;
 }
 
 function VenueForm({ visible, onClose, onSaved }) {

@@ -3,6 +3,7 @@ import { Animated, Easing, Image, Platform, Pressable, StyleSheet, Text, View } 
 import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import Ionicons from '@expo/vector-icons/Ionicons';
+import AppIcon from '../components/AppIcon';
 import HomeScreen from '../screens/HomeScreen';
 import BookScreen from '../screens/BookScreen';
 import PlayScreen from '../screens/PlayScreen';
@@ -103,7 +104,7 @@ function TabBarItem({ focused, label, onPress, play, routeName, theme, badge = 0
         {play ? (
           <Image source={BALL_IMAGE} defaultSource={BALL_IMAGE} fadeDuration={0} style={styles.playIcon} resizeMode="contain" />
         ) : (
-          <Ionicons name={icons[routeName]} size={20} color={focused ? theme.activeText : theme.muted} />
+          <AppIcon name={icons[routeName]} size={20} color={focused ? theme.activeText : theme.muted} />
         )}
       </Animated.View>
       <Text style={[styles.tabLabel, { color: focused ? (play ? theme.centerActiveLabel : theme.activeLabel) : theme.muted }, focused && styles.tabLabelActive]}>{label}</Text>
@@ -173,7 +174,7 @@ function PeakleTabBar({ state, descriptors, navigation }) {
             if (!routeFocused && !event.defaultPrevented) navigation.navigate(route.name, route.params);
           };
           const badge = route.name === 'Team' ? Number(route.params?.unreadCount || 0) : 0;
-          if (desktop) return <Pressable key={route.key} accessibilityRole="button" accessibilityLabel={`${label} tab`} accessibilityState={{ selected: focused }} onPress={onPress} style={({ hovered, pressed }) => [styles.sidebarLink, { backgroundColor: focused ? theme.active : hovered || pressed ? theme.background : 'transparent' }]}><Ionicons name={icons[route.name]} size={21} color={focused ? colors.ink : theme.muted} /><Text style={[styles.sidebarLabel, { color: focused ? colors.ink : isDark ? '#F3F5EF' : colors.ink }]}>{label}</Text>{badge > 0 ? <View style={styles.sidebarBadge}><Text style={styles.tabBadgeText}>{badge > 99 ? '99+' : badge}</Text></View> : null}</Pressable>;
+          if (desktop) return <Pressable key={route.key} accessibilityRole="button" accessibilityLabel={`${label} tab`} accessibilityState={{ selected: focused }} onPress={onPress} style={({ hovered, pressed }) => [styles.sidebarLink, { backgroundColor: focused ? theme.active : hovered || pressed ? theme.background : 'transparent' }]}>{route.name === 'Play' ? <Image source={BALL_IMAGE} style={{ width: 21, height: 21, tintColor: focused ? colors.ink : theme.muted }} resizeMode="contain" /> : <AppIcon name={icons[route.name]} size={21} color={focused ? colors.ink : theme.muted} />}<Text style={[styles.sidebarLabel, { color: focused ? colors.ink : isDark ? '#F3F5EF' : colors.ink }]}>{label}</Text>{badge > 0 ? <View style={styles.sidebarBadge}><Text style={styles.tabBadgeText}>{badge > 99 ? '99+' : badge}</Text></View> : null}</Pressable>;
           return <TabBarItem key={route.key} focused={focused} label={label} onPress={onPress} play={play} routeName={route.name} theme={theme} badge={badge} />;
         })}
       </View>

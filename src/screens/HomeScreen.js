@@ -12,6 +12,7 @@ import {
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { StatusBar } from 'expo-status-bar';
 import Ionicons from '@expo/vector-icons/Ionicons';
+import AppIcon from '../components/AppIcon';
 import { useFocusEffect, useNavigation } from '@react-navigation/native';
 import LocationPicker from '../components/LocationPicker';
 import NotificationSheet from '../components/NotificationSheet';
@@ -40,6 +41,7 @@ const C = {
 };
 
 const AnimatedPressable = Animated.createAnimatedComponent(Pressable);
+const BALL_IMAGE = require('../../public/images/ball.png');
 
 function MotionPressable({ children, onPress, onPressIn, onPressOut, style, ...props }) {
   const pressProgress = useRef(new Animated.Value(1)).current;
@@ -113,7 +115,7 @@ function relativeTime(value, now = new Date()) {
 function Icon({ name, size = 21, color }) {
   const { isDark } = useTheme();
   const resolved = color ?? (isDark ? C.paper : C.ink);
-  return <Ionicons name={name} size={size} color={resolved} />;
+  return <AppIcon name={name} size={size} color={resolved} />;
 }
 
 function KitchenLine({ dark = false, style }) {
@@ -353,7 +355,7 @@ function PublicActivityCard({ activity, userLocation, onPress, wide, single }) {
 
 function ActivityList({ matches, now }) {
   const { isDark } = useTheme();
-  if (!matches.length) return <View style={[styles.emptyDataCard, isDark && darkStyles.card]}><Icon name="tennisball-outline" size={25} color={C.teal} /><Text style={[styles.emptyDataTitle, isDark && darkStyles.text]}>No recorded matches yet</Text><Text style={[styles.emptyDataText, isDark && darkStyles.mutedText]}>Completed matches will appear here after they are saved.</Text></View>;
+  if (!matches.length) return <View style={[styles.emptyDataCard, isDark && darkStyles.card]}><Image source={BALL_IMAGE} style={{ width: 25, height: 25, tintColor: C.teal }} resizeMode="contain" /><Text style={[styles.emptyDataTitle, isDark && darkStyles.text]}>No recorded matches yet</Text><Text style={[styles.emptyDataText, isDark && darkStyles.mutedText]}>Completed matches will appear here after they are saved.</Text></View>;
 
   return (
     <View style={[styles.activityCard, isDark && darkStyles.card]}>
@@ -363,7 +365,7 @@ function ActivityList({ matches, now }) {
         <React.Fragment key={match.id}>
           {index > 0 && <KitchenLine style={styles.activityDivider} />}
           <View style={styles.activityItem}>
-            <View style={[styles.activityIcon, { backgroundColor: won ? '#E5F0ED' : '#F7EAE6' }]}><Icon name={won ? 'trophy-outline' : 'tennisball-outline'} size={18} color={won ? C.teal : C.brick} /></View>
+            <View style={[styles.activityIcon, { backgroundColor: won ? '#E5F0ED' : '#F7EAE6' }]}>{won ? <Icon name="trophy-outline" size={18} color={C.teal} /> : <Image source={BALL_IMAGE} style={{ width: 18, height: 18, tintColor: C.brick }} resizeMode="contain" />}</View>
             <View style={styles.activityCopy}><Text style={[styles.activityText, isDark && darkStyles.bodyText]}><Text style={[styles.bold, isDark && darkStyles.text]}>{won ? 'Won' : 'Lost'}</Text> vs. {match.opponent} · <Text style={[styles.bold, isDark && darkStyles.text]}>{match.score || 'Score unavailable'}</Text></Text><Text style={[styles.activityMeta, isDark && darkStyles.mutedText]}>{match.type} · {relativeTime(match.endedAt, now)}</Text></View>
             <View style={[styles.activityTail, styles.activityTailMuted, isDark && darkStyles.subtle, won && styles.activityTailWon]}><Text style={[styles.tailText, won ? styles.tailTextWon : styles.tailBrick]}>{match.result}</Text></View>
           </View>
@@ -384,7 +386,7 @@ function BottomNav({ onNavigate }) {
         return (
           <Pressable key={label} accessibilityRole="button" accessibilityLabel={label} onPress={() => onNavigate(label)} style={styles.navItem}>
             {active && <KitchenLine style={styles.activeTick} />}
-            <View style={play ? styles.playButton : undefined}><Icon name={icon} size={play ? 24 : 21} color={active || play ? C.ink : C.ink40} /></View>
+            <View style={play ? styles.playButton : undefined}>{play ? <Image source={BALL_IMAGE} style={{ width: 24, height: 24, tintColor: C.ink }} resizeMode="contain" /> : <Icon name={icon} size={21} color={active ? C.ink : C.ink40} />}</View>
             <Text style={[styles.navLabel, (active || play) && styles.navLabelActive]}>{label}</Text>
           </Pressable>
         );

@@ -14,6 +14,7 @@ import * as Location from 'expo-location';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { StatusBar } from 'expo-status-bar';
 import Ionicons from '@expo/vector-icons/Ionicons';
+import AppIcon from '../components/AppIcon';
 import Svg, { Circle } from 'react-native-svg';
 import { useAuth } from '../context/AuthContext';
 import { listMyMatches, listTeams } from '../services/database';
@@ -60,7 +61,7 @@ let C = LIGHT_C;
 const ORGANIZER_PORTAL_URL = (process.env.EXPO_PUBLIC_ORGANIZER_PORTAL_URL || 'https://organizer.peakle.app').replace(/\/+$/, '');
 
 function Icon({ name, size = 20, color = C.ink }) {
-  return <Ionicons name={name} size={size} color={color} />;
+  return <AppIcon name={name} size={size} color={color} />;
 }
 
 function KitchenLine({ quiet = false, style }) {

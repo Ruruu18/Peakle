@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import { ActivityIndicator, Pressable, StyleSheet, Text, View } from 'react-native';
 import Ionicons from '@expo/vector-icons/Ionicons';
+import AppIcon from './AppIcon';
 import * as ImagePicker from 'expo-image-picker';
 import ResilientImage from './ResilientImage';
 
@@ -57,7 +58,7 @@ export default function OrganizerImagePicker({
       <ResilientImage
         uri={value || null}
         accessibilityLabel={value ? title : undefined}
-        fallback={<Ionicons name={emptyIcon} size={compact ? 24 : 30} color={C.teal} />}
+        fallback={<AppIcon name={emptyIcon} size={compact ? 24 : 30} color={C.teal} />}
         fallbackColor={C.tealWash}
         style={[styles.preview, compact && styles.previewCompact]}
       />

@@ -15,6 +15,7 @@ import {
   View,
 } from 'react-native';
 import Ionicons from '@expo/vector-icons/Ionicons';
+import AppIcon from '../components/AppIcon';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useAuth } from '../context/AuthContext';
 import { useOpenPlaySession } from '../context/OpenPlaySessionContext';
@@ -43,7 +44,7 @@ const formatTime = (seconds) => `${String(Math.floor(seconds / 60)).padStart(2, 
 const playerName = (players, id) => players.find((player) => player.id === id)?.name || 'Player';
 
 function Icon({ name, size = 20, color = C.ink }) {
-  return <Ionicons name={name} size={size} color={color} />;
+  return <AppIcon name={name} size={size} color={color} />;
 }
 
 function KitchenLine() {

@@ -6,6 +6,7 @@ import { useFocusEffect } from '@react-navigation/native';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { StatusBar } from 'expo-status-bar';
 import Ionicons from '@expo/vector-icons/Ionicons';
+import AppIcon from '../components/AppIcon';
 import { WebView } from '../components/CheckoutBrowser';
 import ScrollView from '../components/FocusResetScrollView';
 import { DARK_CONTENT_COLORS, useTheme } from '../context/ThemeContext';
@@ -109,7 +110,7 @@ function parseRequestSchedule(action) {
   return { startsAt: startsAt.toISOString(), endsAt: endsAt.toISOString(), area: action.area.trim() };
 }
 
-function Icon({ name, size = 20, color }) { return <Ionicons name={name} size={size} color={color} />; }
+function Icon({ name, size = 20, color }) { return <AppIcon name={name} size={size} color={color} />; }
 function Pill({ children, active, onPress, C }) { return <Pressable accessibilityRole="button" accessibilityState={{ selected: active }} onPress={onPress} style={[s.pill, { backgroundColor: active ? C.optic : C.surface, borderColor: active ? 'transparent' : C.line }]}><Text style={[s.pillText, { color: active ? '#0E2321' : C.ink40 }]}>{children}</Text></Pressable>; }
 function Section({ eyebrow, title, action, C }) { return <View style={s.sectionHead}><View style={s.flex}><Text style={[s.eyebrow, { color: C.ink40 }]}>{eyebrow}</Text><Text style={[s.h2, { color: C.ink }]}>{title}</Text></View>{action}</View>; }
 function Empty({ icon, title, detail, C }) { return <View style={[s.empty, { backgroundColor: C.surface, borderColor: C.line }]}><Icon name={icon} size={28} color={C.teal} /><Text style={[s.emptyTitle, { color: C.ink }]}>{title}</Text><Text style={[s.emptyDetail, { color: C.ink40 }]}>{detail}</Text></View>; }

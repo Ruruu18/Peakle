@@ -1,6 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { ActivityIndicator, Alert, Animated, Easing, Platform, Pressable, RefreshControl, StyleSheet, Text, TextInput, View } from 'react-native';
 import Ionicons from '@expo/vector-icons/Ionicons';
+import AppIcon from '../components/AppIcon';
 import { distanceInKm, formatDistance, useUserLocation } from '../context/LocationContext';
 import { createDarkStyleSheet, DARK_CONTENT_COLORS, useTheme } from '../context/ThemeContext';
 import { createMobileStyleSheet } from '../utils/mobileStyles';
@@ -30,7 +31,7 @@ import { announceScoreForVoiceOver } from '../utils/scoreAccessibility';
 const LIGHT_C = { ink: '#0E2321', paper: '#F3F5EF', surface: '#FFFFFF', optic: '#D6E94A', teal: '#1C6B66', brick: '#B6472E', ink70: '#3C4A45', ink40: '#7C8983', line: '#DDE3DA' };
 let C = LIGHT_C;
 
-function Icon({ name, size = 20, color = C.ink }) { return <Ionicons name={name} size={size} color={color} />; }
+function Icon({ name, size = 20, color = C.ink }) { return <AppIcon name={name} size={size} color={color} />; }
 function money(value) { return Number(value) > 0 ? `₱${Number(value).toLocaleString('en-PH')}` : 'Free'; }
 function discoveryErrorMessage(error, fallback = 'Live games are unavailable right now.') {
   const message = error?.message || '';

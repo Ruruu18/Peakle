@@ -23,6 +23,7 @@ import { StatusBar } from 'expo-status-bar';
 import * as MediaLibrary from 'expo-media-library';
 import * as Sharing from 'expo-sharing';
 import Ionicons from '@expo/vector-icons/Ionicons';
+import AppIcon from '../components/AppIcon';
 import { captureRef } from 'react-native-view-shot';
 import { exportWebMatchCard } from '../services/exportWebMatchCard';
 import PlayerOpenPlayScreen from './PlayerOpenPlayScreen';
@@ -99,7 +100,7 @@ function playableCourtsFromBookings(bookings) {
 }
 
 function Icon({ name, size = 20, color = C.ink }) {
-  return <Ionicons name={name} size={size} color={color} />;
+  return <AppIcon name={name} size={size} color={color} />;
 }
 
 function KitchenLine({ dark = false, style }) {
@@ -372,7 +373,7 @@ function PlayChoiceScreen({ onFindPlay, onSetupMatch, unfinishedMatch, onResume 
           style={({ pressed }) => [styles.playChoiceCard, styles.playChoiceCardSecondary, pressed && styles.pressed]}
         >
           <View style={styles.playChoiceTop}>
-            <View style={styles.playChoiceIconSecondary}><Icon name="tennisball-outline" size={25} color={C.teal} /></View>
+            <View style={styles.playChoiceIconSecondary}><Image source={BALL_IMAGE} style={{ width: 25, height: 25, tintColor: C.teal }} resizeMode="contain" /></View>
             <View style={styles.playChoiceArrow}><Icon name="arrow-forward" size={19} color={C.teal} /></View>
           </View>
           <Text style={styles.playChoiceEyebrowSecondary}>ALREADY HAVE A GAME?</Text>

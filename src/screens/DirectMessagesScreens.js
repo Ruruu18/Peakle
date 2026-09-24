@@ -18,6 +18,7 @@ import {
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { StatusBar } from 'expo-status-bar';
 import Ionicons from '@expo/vector-icons/Ionicons';
+import AppIcon from '../components/AppIcon';
 import { useFocusEffect } from '@react-navigation/native';
 import { DEMO_MODE } from '../config/demoMode';
 import { DEMO_CONVERSATION_ID, DEMO_DIRECT_MESSAGE_DRIP } from '../config/demoData';
@@ -122,7 +123,7 @@ const playerFromRoute = (player) => player ? {
 } : null;
 
 function Icon({ name, size = 20, color }) {
-  return <Ionicons name={name} size={size} color={color} />;
+  return <AppIcon name={name} size={size} color={color} />;
 }
 
 function useSkeletonPulse() {

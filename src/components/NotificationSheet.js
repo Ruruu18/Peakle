@@ -3,6 +3,7 @@ import { webDialog } from '../utils/webLayout';
 import React, { useState } from 'react';
 import { ActivityIndicator, Alert, Platform, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import Ionicons from '@expo/vector-icons/Ionicons';
+import AppIcon from './AppIcon';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import {
   createDarkStyleSheet,
@@ -54,7 +55,7 @@ function NotificationCard({ item, onRead, onDelete, onOpen, onFollowResponse, st
   const body = (
     <>
       <View style={[styles.noticeIcon, unread ? styles.noticeIconUnread : styles.noticeIconRead]}>
-        <Ionicons name={item.icon} size={20} color={unread ? colors.teal : colors.ink40} />
+        <AppIcon name={item.icon} size={20} color={unread ? colors.teal : colors.ink40} />
       </View>
       <View style={styles.noticeCopy}>
         <View style={styles.noticeTitleRow}>

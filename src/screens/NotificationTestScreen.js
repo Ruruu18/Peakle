@@ -10,6 +10,7 @@ import {
   View,
 } from 'react-native';
 import Ionicons from '@expo/vector-icons/Ionicons';
+import AppIcon from '../components/AppIcon';
 import * as Device from 'expo-device';
 import * as Notifications from 'expo-notifications';
 import { StatusBar } from 'expo-status-bar';
@@ -216,7 +217,7 @@ export default function NotificationTestScreen({ navigation }) {
           </View>
           <View style={[styles.notificationPreview, { backgroundColor: isDark ? '#304A46' : 'rgba(255,255,255,.94)' }]}>
             <View style={styles.previewHead}>
-              <View style={styles.previewAppIcon}><Ionicons name="tennisball" size={13} color="#0E2321" /></View>
+              <View style={styles.previewAppIcon}><AppIcon name="tennisball" size={13} color="#0E2321" /></View>
               <Text style={[styles.previewApp, { color: colors.ink70 }]}>PEAKLE</Text>
               <Text style={[styles.previewNow, { color: colors.muted }]}>now</Text>
             </View>
