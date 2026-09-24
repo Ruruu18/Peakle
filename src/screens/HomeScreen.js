@@ -450,6 +450,8 @@ export default function HomeScreen() {
   const [suggestedPlayers, setSuggestedPlayers] = useState([]);
   const [suggestionsLoading, setSuggestionsLoading] = useState(true);
   const [followingPlayerId, setFollowingPlayerId] = useState(null);
+  const [connectedPlayerIds, setConnectedPlayerIds] = useState(() => new Set());
+  const [suggestionsRequest, setSuggestionsRequest] = useState(0);
   const [dashboardError, setDashboardError] = useState('');
   const [dashboardRequest, setDashboardRequest] = useState(0);
   const [now, setNow] = useState(() => new Date());
@@ -458,6 +460,31 @@ export default function HomeScreen() {
   const toastAnim = useRef(new Animated.Value(0)).current;
   const displayName = user?.name?.trim() || 'Player';
   const notices = useMemo(() => operationNotifications.map(presentNotification), [operationNotifications]);
+  // Players who accepted our follow request now follow each other with us, so
+  // they no longer belong in "People you may know".
+  const acceptedFollowKey = useMemo(() => operationNotifications
+    .filter((notice) => notice.kind === 'follow_accepted' && notice.data?.playerId)
+    .map((notice) => notice.data.playerId)
+    .sort()
+    .join(','), [operationNotifications]);
+  const visibleSuggestedPlayers = useMemo(() => {
+    const accepted = new Set(acceptedFollowKey ? acceptedFollowKey.split(',') : []);
+    return suggestedPlayers.filter((player) => !connectedPlayerIds.has(player.id) && !accepted.has(player.id));
+  }, [acceptedFollowKey, connectedPlayerIds, suggestedPlayers]);
+  const previousAcceptedFollowKey = useRef(acceptedFollowKey);
+  useEffect(() => {
+    if (previousAcceptedFollowKey.current === acceptedFollowKey) return;
+    previousAcceptedFollowKey.current = acceptedFollowKey;
+    setSuggestionsRequest((value) => value + 1);
+  }, [acceptedFollowKey]);
+  const respondToFollow = async (item, accept) => {
+    const accepted = await respondFollowRequest(item.data?.requesterId, accept, item.id);
+    if (accept && item.data?.requesterId) {
+      setConnectedPlayerIds((current) => new Set(current).add(item.data.requesterId));
+      setSuggestionsRequest((value) => value + 1);
+    }
+    return accepted;
+  };
 
   useEffect(() => {
     const timer = setInterval(() => setNow(new Date()), 60_000);
@@ -543,7 +570,7 @@ export default function HomeScreen() {
       .catch(() => { if (active) setSuggestedPlayers([]); })
       .finally(() => { if (active) setSuggestionsLoading(false); });
     return () => { active = false; };
-  }, [dashboardRequest, tablet, user?.id]));
+  }, [dashboardRequest, suggestionsRequest, tablet, user?.id]));
 
   useFocusEffect(useCallback(() => {
     let active = true;
@@ -719,11 +746,11 @@ export default function HomeScreen() {
   const peopleYouMayKnow = (
     <View style={styles.section}>
       <SectionTitle eyebrow="FIND YOUR PEOPLE" title="People you may know" />
-      {suggestionsLoading && !suggestedPlayers.length ? (
+      {suggestionsLoading && !visibleSuggestedPlayers.length ? (
         <View style={[styles.suggestionsLoadingCard, isDark && darkStyles.card]}><ActivityIndicator color={C.teal} /><Text style={[styles.openPlayLoadingText, isDark && darkStyles.mutedText]}>Finding players for you…</Text></View>
-      ) : suggestedPlayers.length ? (
+      ) : visibleSuggestedPlayers.length ? (
         <ScrollView {...webLayout('home-cards')} horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.suggestionsScroll}>
-          {suggestedPlayers.map((player) => <SuggestedPlayerCard key={player.id} player={player} wide={tablet} busy={followingPlayerId === player.id} onFollow={requestSuggestedFollow} onPress={() => navigation.navigate('PublicProfile', { player })} />)}
+          {visibleSuggestedPlayers.map((player) => <SuggestedPlayerCard key={player.id} player={player} wide={tablet} busy={followingPlayerId === player.id} onFollow={requestSuggestedFollow} onPress={() => navigation.navigate('PublicProfile', { player })} />)}
         </ScrollView>
       ) : (
         <View style={[styles.emptyDataCard, isDark && darkStyles.card]}><Icon name="people-outline" size={25} color={C.teal} /><Text style={[styles.emptyDataTitle, isDark && darkStyles.text]}>You’re all caught up</Text><Text style={[styles.emptyDataText, isDark && darkStyles.mutedText]}>New player suggestions will appear here as the Peakle community grows.</Text></View>
@@ -784,7 +811,7 @@ export default function HomeScreen() {
         <KitchenLine style={[styles.headerLine, compactHeader && styles.headerLineCompact]} />
         {tablet ? <View {...webLayout('home')} style={styles.tabletGrid}><View style={styles.primaryColumn}>{schedule}{discovery}{peopleYouMayKnow}{nearby}</View><View style={styles.secondaryColumn}>{gameOverview}{feed}</View></View> : <>{schedule}{discovery}{peopleYouMayKnow}{gameOverview}{nearby}{feed}</>}
       </ScrollView>
-      <NotificationSheet visible={notifications} onClose={() => setNotifications(false)} items={notices} unreadCount={unreadCount} onRead={(id) => readNotification(id).catch((error) => Alert.alert('Notifications', error.message || 'This notification could not be marked as read.'))} onReadAll={() => readAllNotifications().catch((error) => Alert.alert('Notifications', error.message || 'Notifications could not be marked as read.'))} onDelete={removeNotification} onClearRead={clearNotifications} onFollowResponse={(item, accept) => respondFollowRequest(item.data?.requesterId, accept, item.id)} onOpen={(item) => { if (!item.read_at) readNotification(item.id).catch(() => {}); setNotifications(false); if (item.kind === 'community_announcement' && item.data?.eventKind && item.data?.eventId) navigation.navigate('CommunityChat', { eventKind: item.data.eventKind, eventId: item.data.eventId, ownerTab: 'Home' }); else if (item.data?.conversationId) navigation.navigate('DirectChat', { conversationId: item.data.conversationId, player: item.data?.playerId ? { id: item.data.playerId } : undefined, ownerTab: 'Team' }); else if (item.data?.sessionId) navigation.navigate('OpenPlayActivity', { token: Date.now(), sessionId: item.data.sessionId, direct: true, returnTo: 'Home' }); }} />
+      <NotificationSheet visible={notifications} onClose={() => setNotifications(false)} items={notices} unreadCount={unreadCount} onRead={(id) => readNotification(id).catch((error) => Alert.alert('Notifications', error.message || 'This notification could not be marked as read.'))} onReadAll={() => readAllNotifications().catch((error) => Alert.alert('Notifications', error.message || 'Notifications could not be marked as read.'))} onDelete={removeNotification} onClearRead={clearNotifications} onFollowResponse={respondToFollow} onOpen={(item) => { if (!item.read_at) readNotification(item.id).catch(() => {}); setNotifications(false); if (item.kind === 'community_announcement' && item.data?.eventKind && item.data?.eventId) navigation.navigate('CommunityChat', { eventKind: item.data.eventKind, eventId: item.data.eventId, ownerTab: 'Home' }); else if (item.data?.conversationId) navigation.navigate('DirectChat', { conversationId: item.data.conversationId, player: item.data?.playerId ? { id: item.data.playerId } : undefined, ownerTab: 'Team' }); else if (item.data?.sessionId) navigation.navigate('OpenPlayActivity', { token: Date.now(), sessionId: item.data.sessionId, direct: true, returnTo: 'Home' }); }} />
       <LocationPicker visible={locationOpen} onClose={() => setLocationOpen(false)} />
       {!!toast && <Animated.View style={[styles.toast, { opacity: toastAnim, transform: [{ translateY: toastAnim.interpolate({ inputRange: [0, 1], outputRange: [18, 0] }) }] }]}><Text style={styles.toastText}>{toast}</Text></Animated.View>}
     </SafeAreaView>
