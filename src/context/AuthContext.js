@@ -170,8 +170,12 @@ export function AuthProvider({ children }) {
         ? { ...mapUser(authUser), ...(hasCachedUser ? cachedUser : {}), id: authUser.id, email: authUser.email }
         : null;
       if (!active || authGeneration.current !== startupGeneration) return;
-      setUser(provisionalUser);
-      if (!authUser || hasCachedUser) setHydrated(true);
+      // An uncached provisional user has no onboarding state yet; keep the launch
+      // screen up until the real profile loads so onboarding never flashes.
+      if (!authUser || hasCachedUser) {
+        setUser(provisionalUser);
+        setHydrated(true);
+      }
       const syncedSignInMethod = provisionalUser?.lastSignInMethod === 'google' || provisionalUser?.lastSignInMethod === 'email'
         ? provisionalUser.lastSignInMethod
         : localSignInMethod;
@@ -194,10 +198,13 @@ export function AuthProvider({ children }) {
             AsyncStorage.setItem(LAST_SIGN_IN_METHOD_KEY, currentUser.lastSignInMethod).catch(() => {});
           }
         } catch (error) {
-          if (active && authGeneration.current === startupGeneration) handleAccessRevocation(error);
-          // Keep the authenticated cached profile visible while the database reconnects.
+          if (active && authGeneration.current === startupGeneration) {
+            handleAccessRevocation(error);
+            // Keep the authenticated cached profile visible while the database reconnects.
+            if (!isAccountAccessError(error)) setUser((current) => current || provisionalUser);
+          }
         } finally {
-          if (active) setHydrated(true);
+          if (active && authGeneration.current === startupGeneration) setHydrated(true);
         }
       }
     }).catch(() => { if (active) setHydrated(true); });
@@ -222,18 +229,28 @@ export function AuthProvider({ children }) {
         const authUser = session.user;
         const cachedUser = await readCachedData(userCacheKey(authUser.id));
         if (!active || authGeneration.current !== eventGeneration) return;
-        setUser((current) => current?.id === authUser.id
-          ? current
-          : { ...mapUser(authUser), ...(cachedUser?.id === authUser.id ? cachedUser : {}), id: authUser.id, email: authUser.email });
-        setHydrated(true);
+        const hasCachedUser = cachedUser?.id === authUser.id;
+        const provisionalUser = { ...mapUser(authUser), ...(hasCachedUser ? cachedUser : {}), id: authUser.id, email: authUser.email };
+        // Without a cached profile the provisional user has no onboarding state yet
+        // (mapUser defaults it to false). Showing it would flash the onboarding
+        // screen for existing accounts, so wait for the real profile instead.
+        if (hasCachedUser) {
+          setUser((current) => (current?.id === authUser.id ? current : provisionalUser));
+          setHydrated(true);
+        }
         try {
           const value = await withTimeout(readCurrentUser(authUser), AUTH_STARTUP_TIMEOUT_MS, 'Profile refresh timed out.');
           if (!active || authGeneration.current !== eventGeneration) return;
           setUser(value);
           writeCachedData(userCacheKey(authUser.id), value);
         } catch (error) {
-          if (active && authGeneration.current === eventGeneration) handleAccessRevocation(error);
-          // A temporary fetch failure must not turn an authenticated user into a guest.
+          if (active && authGeneration.current === eventGeneration) {
+            handleAccessRevocation(error);
+            // A temporary fetch failure must not turn an authenticated user into a guest.
+            if (!isAccountAccessError(error)) setUser((current) => (current?.id === authUser.id ? current : provisionalUser));
+          }
+        } finally {
+          if (active && authGeneration.current === eventGeneration) setHydrated(true);
         }
       }, 0);
     });
