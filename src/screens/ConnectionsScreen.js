@@ -102,9 +102,11 @@ export default function ConnectionsScreen({ navigation, route }) {
     >
       <View style={s.avatarWrap}>
         <ProfilePhoto photo={item.avatar} name={item.name} size={52} />
-        <View style={[s.statusRing, { backgroundColor: C.surface }]}>
-          <View style={[s.statusDot, { backgroundColor: item.playerStatus === 'away' ? '#D49A32' : item.playerStatus === 'in_play' ? '#2F80ED' : '#68B96B' }]} />
-        </View>
+        {item.isOnline ? (
+          <View style={[s.statusRing, { backgroundColor: C.surface }]}>
+            <View style={[s.statusDot, { backgroundColor: item.playerStatus === 'away' ? '#D49A32' : item.playerStatus === 'in_play' ? '#2F80ED' : '#68B96B' }]} />
+          </View>
+        ) : null}
       </View>
       <View style={s.playerCopy}>
         <Text numberOfLines={1} style={[s.playerName, { color: C.ink }]}>{item.name}</Text>

@@ -376,6 +376,36 @@ export function AuthProvider({ children }) {
     };
   }, [user?.id]);
 
+  // Report real app activity so followers see a status dot only while this
+  // player is using Peakle. The server also treats a check-in older than five
+  // minutes as offline, covering apps closed without a background event.
+  useEffect(() => {
+    if (!supabase || !user?.id) return undefined;
+    const touch = (isActive) => {
+      supabase.rpc('touch_player_activity', { p_active: isActive }).then(() => {}, () => {});
+    };
+    let timer = null;
+    const start = () => {
+      touch(true);
+      clearInterval(timer);
+      timer = setInterval(() => touch(true), 2 * 60 * 1000);
+    };
+    const stop = () => {
+      clearInterval(timer);
+      timer = null;
+      touch(false);
+    };
+    if (AppState.currentState === 'active') start();
+    const appState = AppState.addEventListener('change', (nextState) => {
+      if (nextState === 'active') start();
+      else if (timer) stop();
+    });
+    return () => {
+      appState.remove();
+      if (timer) stop();
+    };
+  }, [user?.id]);
+
   const rememberPendingVerification = async (email) => {
     setPendingVerificationEmail(email);
     await AsyncStorage.setItem(PENDING_VERIFICATION_EMAIL_KEY, email).catch(() => {});
@@ -635,6 +665,7 @@ export function AuthProvider({ children }) {
     if (user?.id) {
       await Promise.all([
         client.from('player_presence').update({ availability: 'offline', updated_at: new Date().toISOString() }).eq('user_id', user.id).then(() => {}, () => {}),
+        client.rpc('touch_player_activity', { p_active: false }).then(() => {}, () => {}),
         disablePushToken(user.id).catch(() => {}),
       ]);
     }

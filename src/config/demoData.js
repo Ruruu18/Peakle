@@ -292,8 +292,8 @@ export const DEMO_SUGGESTIONS = [
 ];
 
 export const DEMO_FOLLOWING = [
-  { id: 'p-priya-shah', name: 'Priya Shah', avatar: null, area: 'Austin, TX', playerStatus: 'free' },
-  { id: 'p-diego-ramirez', name: 'Diego Ramirez', avatar: null, area: 'Austin, TX', playerStatus: 'playing' },
+  { id: 'p-priya-shah', name: 'Priya Shah', avatar: null, area: 'Austin, TX', playerStatus: 'free', isOnline: true },
+  { id: 'p-diego-ramirez', name: 'Diego Ramirez', avatar: null, area: 'Austin, TX', playerStatus: 'playing', isOnline: true },
 ];
 
 export const DEMO_FOLLOW_COUNTS = { followers: 22, following: 15 };

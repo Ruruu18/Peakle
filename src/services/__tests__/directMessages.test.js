@@ -214,6 +214,7 @@ describe('listFollowingPlayers / listFollowerPlayers (follow-graph hydration)', 
       error: null,
     });
     client.from.mockReturnValueOnce(relationships).mockReturnValueOnce(profiles);
+    client.rpc.mockResolvedValueOnce({ data: [{ user_id: 'p1', is_online: true }, { user_id: 'p2', is_online: false }], error: null });
     requireSupabase.mockReturnValue(client);
 
     const result = await listFollowingPlayers();
@@ -223,9 +224,10 @@ describe('listFollowingPlayers / listFollowerPlayers (follow-graph hydration)', 
     expect(client.from).toHaveBeenNthCalledWith(2, 'profiles');
     expect(profiles.in).toHaveBeenCalledWith('id', ['p2', 'p1']);
     // Relationship order is preserved (p2, p1, p2), each hydrated to a profile.
+    expect(client.rpc).toHaveBeenCalledWith('get_player_activity', { p_player_ids: ['p2', 'p1'] });
     expect(result.map((p) => p.id)).toEqual(['p2', 'p1', 'p2']);
-    expect(result[0]).toEqual({ id: 'p2', name: 'Peakle player', avatar: null, area: null, playerStatus: 'free' });
-    expect(result[1]).toEqual({ id: 'p1', name: 'Alex', avatar: 'a.png', area: 'BGC', playerStatus: 'playing' });
+    expect(result[0]).toEqual({ id: 'p2', name: 'Peakle player', avatar: null, area: null, playerStatus: 'free', isOnline: false });
+    expect(result[1]).toEqual({ id: 'p1', name: 'Alex', avatar: 'a.png', area: 'BGC', playerStatus: 'playing', isOnline: true });
   });
 
   it('follower_id is used as the relationship key for listFollowerPlayers', async () => {
@@ -238,7 +240,8 @@ describe('listFollowingPlayers / listFollowerPlayers (follow-graph hydration)', 
     const result = await listFollowerPlayers();
     expect(relationships.eq).toHaveBeenCalledWith('followed_id', 'me');
     expect(profiles.in).toHaveBeenCalledWith('id', ['p9']);
-    expect(result).toEqual([{ id: 'p9', name: 'Sam', avatar: null, area: null, playerStatus: 'free' }]);
+    // Activity lookup failures leave players offline instead of failing the list.
+    expect(result).toEqual([{ id: 'p9', name: 'Sam', avatar: null, area: null, playerStatus: 'free', isOnline: false }]);
   });
 
   it('propagates a profile-lookup error', async () => {

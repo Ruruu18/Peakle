@@ -77,6 +77,7 @@ async function hydrateFollowProfiles(client, relationships, idKey) {
       .flatMap((result) => result.data || [])
       .map((profile) => [profile.id, profile]),
   );
+  const onlineIds = await getOnlinePlayerIds(client, ids);
   return relationships
     .map((relationship) => profilesById.get(relationship[idKey]))
     .filter(Boolean)
@@ -86,7 +87,21 @@ async function hydrateFollowProfiles(client, relationships, idKey) {
       avatar: profile.avatar_url || null,
       area: profile.home_area || null,
       playerStatus: profile.presence_status || 'free',
+      isOnline: onlineIds.has(profile.id),
     }));
+}
+
+// presence_status is only the player's chosen label and defaults to free, so
+// the status dot is shown only for players who are using the app right now.
+// Activity is non-essential: if it cannot load, everyone simply reads offline.
+async function getOnlinePlayerIds(client, ids) {
+  try {
+    const { data, error } = await client.rpc('get_player_activity', { p_player_ids: ids });
+    if (error) return new Set();
+    return new Set((data || []).filter((row) => row.is_online).map((row) => row.user_id));
+  } catch {
+    return new Set();
+  }
 }
 
 export async function listFollowingPlayers() {

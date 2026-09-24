@@ -301,7 +301,7 @@ function FollowingStrip({ players, onPress, colors }) {
                     </View>
                 }
               </View>
-              {item.playerStatus ? (
+              {item.isOnline ? (
                 <View
                   style={[
                     styles.followingOnlineDot,
@@ -900,6 +900,24 @@ function DirectChatConversation({ route, navigation }) {
     }
   }, [conversationId, routePlayer?.id, user?.id]);
   useEffect(() => { loadConversation(); }, [loadConversation]);
+  // A follow can become mutual while this chat stays mounted (e.g. the player
+  // accepts the request from notifications and comes back), so re-check the
+  // relationship gate on focus and periodically while it is showing.
+  const awaitingRelationship = !conversationId && Boolean(routePlayer?.id) && messagePermission != null && !messagePermission.canMessage;
+  const refreshMessagePermission = useCallback(async () => {
+    if (!awaitingRelationship || conversationLoadingRef.current) return;
+    try {
+      setMessagePermission(await getDirectMessagePermission(routePlayer.id));
+    } catch {
+      // Keep the current gate; the next check will try again.
+    }
+  }, [awaitingRelationship, routePlayer?.id]);
+  useFocusEffect(useCallback(() => {
+    refreshMessagePermission();
+    if (!awaitingRelationship) return undefined;
+    const timer = setInterval(refreshMessagePermission, 15000);
+    return () => clearInterval(timer);
+  }, [awaitingRelationship, refreshMessagePermission]));
   const sendTyping = useCallback((isTyping) => {
     if (!conversationId || conversation?.status !== 'accepted' || !channelRef.current) return;
     channelRef.current.send({ type: 'broadcast', event: 'typing', payload: { userId: user?.id, isTyping } }).catch(() => {});
