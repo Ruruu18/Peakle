@@ -12,3 +12,6 @@ dist/
 supabase/.temp/
 android/app/google-services.json
 android/.kotlin/
+
+# Local copy of Vercel deploy env vars (contains keys)
+env.vercel-deploy
