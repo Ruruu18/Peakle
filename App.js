@@ -18,6 +18,10 @@ import DemoAutopilot from './src/components/DemoAutopilot';
 import { DEMO_MODE } from './src/config/demoMode';
 import { webNavigationState } from './src/lib/webNavigation';
 
+function setWebTitle(title) {
+  if (Platform.OS === 'web' && typeof document !== 'undefined') document.title = `${title} | Peakle`;
+}
+
 const Notifications = Platform.OS === 'web' ? null : require('expo-notifications');
 const colors = { ink: '#0E2321', optic: '#D6E94A', surface: '#FFFFFF' };
 const BALL_IMAGE = require('./public/images/ball_green.png');
@@ -234,10 +238,10 @@ function Root() {
     navigationRef.navigate('Play', params);
   });
 
-  if (!hasFinishedLaunch.current) return <LaunchScreen edition={null} />;
-  if (passwordRecovery) return <AuthFlowScreen key="password-recovery" initialScreen="reset-password" />;
-  if (!user) return <AuthFlowScreen key="login" initialScreen="login" />;
-  if (!user.onboardingCompleted) return <AuthFlowScreen key={`new-user-setup-${user.id}`} initialScreen="new-user-overview" />;
+  if (!hasFinishedLaunch.current) { setWebTitle('Loading'); return <LaunchScreen edition={null} />; }
+  if (passwordRecovery) { setWebTitle('Reset Password'); return <AuthFlowScreen key="password-recovery" initialScreen="reset-password" />; }
+  if (!user) { setWebTitle('Sign In'); return <AuthFlowScreen key="login" initialScreen="login" />; }
+  if (!user.onboardingCompleted) { setWebTitle('Get Started'); return <AuthFlowScreen key={`new-user-setup-${user.id}`} initialScreen="new-user-overview" />; }
   return <View key={`player-session-${user.id}`} style={[styles.appShell, { backgroundColor: appBackground }]}><NavigationContainer ref={navigationRef} theme={navigationTheme} linking={linking}><AppNavigator /></NavigationContainer><MatchInviteOverlay onAccepted={openAcceptedMatch} />{Platform.OS !== 'web' ? <SupportBubble navigationRef={navigationRef} /> : null}{DEMO_MODE && Platform.OS !== 'web' ? <DemoAutopilot navigationRef={navigationRef} /> : null}</View>;
 }
 
