@@ -1,5 +1,7 @@
+import Modal from './ResponsiveModal';
+import { webDialog } from '../utils/webLayout';
 import React, { useEffect, useMemo, useState } from 'react';
-import { ActivityIndicator, Modal, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
+import { ActivityIndicator, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
 import Ionicons from '@expo/vector-icons/Ionicons';
 import { useUserLocation } from '../context/LocationContext';
 import { PH_LOCATIONS, formatLocation, locationMatchesSearch, parseLocation } from '../data/phLocations';
@@ -45,10 +47,10 @@ export default function LocationPicker({ visible, onClose }) {
 
   return (
     <Modal visible={visible} transparent animationType="slide" onRequestClose={onClose} statusBarTranslucent>
-      <View style={styles.backdrop}>
+      <View {...webDialog('backdrop')} style={styles.backdrop}>
         <Pressable accessibilityLabel="Close location picker" style={styles.backdropDismiss} onPress={onClose} />
-        <View style={styles.sheet}>
-          <View style={styles.handle} />
+        <View {...webDialog('surface')} style={styles.sheet}>
+          <View {...webDialog('handle')} style={styles.handle} />
           <View style={styles.header}>
             <View style={styles.headerCopy}>
               <Text style={styles.eyebrow}>YOUR SEARCH AREA</Text>

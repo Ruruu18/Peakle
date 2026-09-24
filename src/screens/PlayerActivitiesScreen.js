@@ -1,3 +1,4 @@
+import { webLayout } from '../utils/webLayout';
 import React, { useCallback, useMemo, useState } from 'react';
 import { Pressable, RefreshControl, StyleSheet, Text, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
@@ -125,7 +126,7 @@ export default function PlayerActivitiesScreen({ navigation }) {
         </ScrollView>
         {error ? <View style={styles.error}><Icon name="alert-circle-outline" color={LIGHT.brick} /><Text style={styles.errorText}>{error}</Text></View> : null}
         {visible.length
-            ? visible.map((activity) => <ActivityRow key={activity.id} activity={activity} userLocation={userLocation} colors={colors} onPress={() => openActivity(activity)} />)
+            ? <View {...webLayout('court-grid')}>{visible.map((activity) => <ActivityRow key={activity.id} activity={activity} userLocation={userLocation} colors={colors} onPress={() => openActivity(activity)} />)}</View>
             : <View style={[styles.empty, { backgroundColor: colors.surface, borderColor: colors.line }]}><Icon name="compass-outline" size={29} color={colors.ink40} /><Text style={[styles.emptyTitle, { color: colors.ink }]}>Nothing in this view yet</Text><Text style={[styles.emptyMeta, { color: colors.ink40 }]}>New public activities from verified venues will appear here.</Text></View>}
       </ScrollView>
       <PeakleLoadingOverlay visible={loading && !activities.length} status="FINDING PUBLIC ACTIVITIES" />

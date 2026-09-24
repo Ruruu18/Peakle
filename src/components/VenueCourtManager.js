@@ -1,5 +1,7 @@
+import Modal from './ResponsiveModal';
+import { webDialog } from '../utils/webLayout';
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
-import { ActivityIndicator, AppState, KeyboardAvoidingView, Linking, Modal, Platform, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
+import { ActivityIndicator, AppState, KeyboardAvoidingView, Linking, Platform, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
 import Ionicons from '@expo/vector-icons/Ionicons';
 import { useFocusEffect } from '@react-navigation/native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -74,7 +76,7 @@ function VenueForm({ visible, onClose, onSaved }) {
   return (
     <Modal visible={visible} transparent animationType="slide" onRequestClose={onClose}>
       <KeyboardAvoidingView style={styles.modalKeyboard} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
-      <View style={styles.modalBackdrop}><View style={styles.formSheet}><View style={styles.formHandle} />
+      <View {...webDialog('backdrop')} style={styles.modalBackdrop}><View {...webDialog('surface')} style={styles.formSheet}><View {...webDialog('handle')} style={styles.formHandle} />
         <View style={styles.formHeader}><View><Text style={styles.eyebrow}>NEW VENUE · STEP {step} OF 2</Text><Text style={styles.formTitle}>{step === 1 ? 'Where is your venue?' : 'Set venue details'}</Text></View><Pressable accessibilityLabel="Close venue form" onPress={onClose} style={styles.closeButton}><Icon name="close" /></Pressable></View>
         <View style={styles.formProgress}><View style={styles.formProgressActive} /><View style={[styles.formProgressStep, step === 2 && styles.formProgressActive]} /></View>
         <ScrollView contentContainerStyle={[styles.formContent, { paddingBottom: Math.max(insets.bottom + 28, 44) }]} keyboardDismissMode="interactive" keyboardShouldPersistTaps="handled" showsVerticalScrollIndicator={false}>
@@ -144,9 +146,9 @@ function CourtForm({ court, venue, visible, onClose, onSaved }) {
   return (
     <Modal visible={visible} transparent animationType="slide" onRequestClose={onClose}>
       <KeyboardAvoidingView style={styles.modalKeyboard} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
-      <View style={styles.modalBackdrop}>
-        <View style={styles.formSheet}>
-          <View style={styles.formHandle} />
+      <View {...webDialog('backdrop')} style={styles.modalBackdrop}>
+        <View {...webDialog('surface')} style={styles.formSheet}>
+          <View {...webDialog('handle')} style={styles.formHandle} />
           <View style={styles.formHeader}><View><Text style={styles.eyebrow}>{court ? 'EDIT COURT' : 'NEW COURT'}</Text><Text style={styles.formTitle}>{court ? `Edit ${court.name}` : 'Add a court'}</Text></View><Pressable accessibilityLabel="Close court form" onPress={onClose} style={styles.closeButton}><Icon name="close" /></Pressable></View>
           <ScrollView contentContainerStyle={styles.formContent} keyboardShouldPersistTaps="handled" showsVerticalScrollIndicator={false}>
             <View style={styles.friendlyIntro}><View style={styles.friendlyIntroIcon}><Icon name="tennisball-outline" color={C.teal} /></View><View style={styles.flex}><Text style={styles.friendlyIntroTitle}>{venue?.name}</Text><Text style={styles.friendlyIntroBody}>Set the basic details players need. You can edit these anytime.</Text></View></View>

@@ -7,7 +7,7 @@ export function BrowserScene({ children, route }) {
   // Preserve match state while excluding inactive scenes from all focus paths.
   return (
     <View
-      dataSet={{ browserScene: route.key }}
+      dataSet={{ browserScene: route.key, screen: route.name }}
       tabIndex={-1}
       inert={!focused}
       style={{ flex: 1, display: focused ? 'flex' : 'none' }}

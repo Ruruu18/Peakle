@@ -26,7 +26,7 @@ try {
   });
   // All external requests are intercepted; this test never changes real accounts.
   await installBackend(page, baseUrl);
-  await page.setViewport({ width: 390, height: 844 });
+  await page.setViewport(process.argv.includes('--desktop') ? { width: 1440, height: 1000 } : { width: 390, height: 844 });
   await signInFixture(page, baseUrl);
 
   const assertSafeFocus = async () => {

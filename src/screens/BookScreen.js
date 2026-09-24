@@ -1,3 +1,4 @@
+import Modal from '../components/ResponsiveModal';
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   ActivityIndicator,
@@ -5,7 +6,6 @@ import {
   Image,
   Linking,
   Alert,
-  Modal,
   Platform,
   Pressable,
   RefreshControl,
@@ -26,6 +26,7 @@ import LocationPicker from '../components/LocationPicker';
 import ScrollView from '../components/FocusResetScrollView';
 import SectionList from '../components/FocusResetSectionList';
 import useResponsiveWidth from '../hooks/useResponsiveWidth';
+import { webLayout, webDialog } from '../utils/webLayout';
 import { distanceInKm, formatDistance, useUserLocation } from '../context/LocationContext';
 import { useAuth } from '../context/AuthContext';
 import { useOperations } from '../context/OperationsContext';
@@ -274,11 +275,11 @@ function MapOptionsSheet({ destination, onClose }) {
   };
   return (
     <Modal visible={Boolean(destination)} transparent animationType="slide" statusBarTranslucent onRequestClose={onClose}>
-      <View style={styles.mapModal}>
+      <View {...webDialog('backdrop')} style={styles.mapModal}>
         <Pressable accessibilityLabel="Close map options" onPress={onClose} style={styles.mapBackdrop} />
-        <SafeAreaView edges={['bottom']} style={styles.mapSheetSafe}>
-          <View accessibilityViewIsModal style={styles.mapSheet}>
-            <View style={styles.mapSheetHandle} />
+        <SafeAreaView {...webDialog('safe')} edges={['bottom']} style={styles.mapSheetSafe}>
+          <View {...webDialog('surface')} accessibilityViewIsModal style={styles.mapSheet}>
+            <View {...webDialog('handle')} style={styles.mapSheetHandle} />
             <View style={styles.mapSheetHeader}><View style={styles.mapSheetIcon}><Icon name="navigate" size={21} color="#0E2321" /></View><View style={styles.flex}><Text style={styles.mapSheetEyebrow}>GET DIRECTIONS</Text><Text numberOfLines={1} style={styles.mapSheetTitle}>{destination?.name || 'Open venue'}</Text><Text numberOfLines={2} style={styles.mapSheetAddress}>{[destination?.address, destination?.area].filter(Boolean).join(' · ')}</Text></View><Pressable accessibilityRole="button" accessibilityLabel="Close" onPress={onClose} style={styles.mapSheetClose}><Icon name="close" size={20} color={C.ink70} /></Pressable></View>
             <Text style={styles.mapSheetPrompt}>Choose a navigation app</Text>
             {loading ? <View style={styles.mapSheetLoading}><ActivityIndicator color={C.teal} /><Text style={styles.bodySmall}>Checking installed maps…</Text></View> : providers.map((provider) => <Pressable key={provider.id} accessibilityRole="button" onPress={() => chooseProvider(provider)} style={({ pressed }) => [styles.mapProvider, pressed && styles.pressed]}><View style={styles.mapProviderIcon}><Icon name={provider.id === 'apple' ? 'logo-apple' : provider.id === 'google' ? 'logo-google' : provider.id === 'waze' ? 'car-sport-outline' : 'map-outline'} size={22} color={C.teal} /></View><View style={styles.flex}><Text style={styles.mapProviderName}>{provider.label}</Text><Text style={styles.mapProviderMeta}>{provider.id === 'system' ? 'Use your phone’s default maps app' : `Open directions in ${provider.label}`}</Text></View><Icon name="chevron-forward" size={18} color={C.ink40} /></Pressable>)}
@@ -399,7 +400,7 @@ function PaymentCheckoutModal({ bookingId, onDone }) {
   return (
     <Modal visible={Boolean(bookingId)} animationType="slide" transparent={true} statusBarTranslucent onRequestClose={() => finish('cancelled')}>
       {checkoutUrl ? (
-        <SafeAreaView style={styles.checkoutSafe} edges={['top', 'bottom']}>
+        <SafeAreaView {...webDialog('page')} style={styles.checkoutSafe} edges={['top', 'bottom']}>
           <View style={styles.checkoutHeader}>
             <Text style={styles.checkoutTitle}>Secure checkout</Text>
             <Pressable accessibilityRole="button" accessibilityLabel="Close checkout" onPress={() => finish('cancelled')} style={styles.mapSheetClose}><Icon name="close" size={20} color={C.ink70} /></Pressable>
@@ -415,11 +416,11 @@ function PaymentCheckoutModal({ bookingId, onDone }) {
           />
         </SafeAreaView>
       ) : (
-        <View style={styles.mapModal}>
+        <View {...webDialog('backdrop')} style={styles.mapModal}>
           <Pressable accessibilityLabel="Close checkout" onPress={() => finish('cancelled')} style={styles.mapBackdrop} />
-          <SafeAreaView edges={['bottom']} style={styles.mapSheetSafe}>
-            <View accessibilityViewIsModal style={styles.mapSheet}>
-              <View style={styles.mapSheetHandle} />
+          <SafeAreaView {...webDialog('safe')} edges={['bottom']} style={styles.mapSheetSafe}>
+            <View {...webDialog('surface')} accessibilityViewIsModal style={styles.mapSheet}>
+              <View {...webDialog('handle')} style={styles.mapSheetHandle} />
               <View style={[styles.checkoutHeader, { borderBottomWidth: 0, paddingHorizontal: 0 }]}>
                 <Text style={styles.checkoutTitle}>Choose payment method</Text>
                 <Pressable accessibilityRole="button" accessibilityLabel="Close checkout" onPress={() => finish('cancelled')} style={styles.mapSheetClose}><Icon name="close" size={20} color={C.ink70} /></Pressable>
@@ -485,7 +486,7 @@ function Discovery({ courts, loading, error, onRetry, onSelect, onShowBookings, 
       <View style={styles.resultsHead}><View style={styles.resultsCopy}><Text style={styles.eyebrow}>NEAREST TO {userLocation.label.toUpperCase()}</Text><Text style={styles.h2}>{filtered.length} {filtered.length === 1 ? 'court' : 'courts'} available</Text></View><View style={styles.mapLink}><Icon name="navigate-outline" size={16} color={C.teal} /><Text style={styles.mapText}>Distance</Text></View></View>
       {loading && !courts.length && <View style={styles.loadState}><ActivityIndicator color={C.teal} /><Text style={styles.emptyText}>Finding available courts…</Text></View>}
       {!loading && error && !courts.length && <View style={styles.empty}><Icon name="cloud-offline-outline" size={32} color={C.ink40} /><Text style={styles.emptyTitle}>Courts could not load</Text><Text style={styles.emptyText}>{error}</Text><Pressable accessibilityRole="button" onPress={onRetry} style={styles.retryButton}><Text style={styles.retryText}>Try again</Text></Pressable></View>}
-      {filtered.map((court) => <CourtCard key={court.id} court={court} onPress={() => onSelect(court)} />)}
+      <View {...webLayout('court-grid')}>{filtered.map((court) => <CourtCard key={court.id} court={court} onPress={() => onSelect(court)} />)}</View>
       {!loading && !error && !filtered.length && <View style={styles.empty}><Icon name="search-outline" size={32} color={C.ink40} /><Text style={styles.emptyTitle}>No courts found</Text><Text style={styles.emptyText}>Try another neighborhood or clear the selected filter.</Text><Pressable accessibilityRole="button" onPress={() => { setQuery(''); setFilter('All'); }} style={styles.retryButton}><Text style={styles.retryText}>Clear filters</Text></Pressable></View>}
     </ScrollView>
   );
@@ -608,7 +609,7 @@ function MyBookings({ bookings, loading, loadingMore, hasMoreHistory, error, onR
         onEndReachedThreshold={0.35}
       />
       <Modal visible={Boolean(selectedPastBooking)} animationType="slide" presentationStyle={Platform.OS === 'ios' ? 'pageSheet' : 'fullScreen'} onRequestClose={() => setSelectedPastBooking(null)}>
-        <SafeAreaView style={styles.pastBookingModalSafe}>
+        <SafeAreaView {...webDialog('page')} style={styles.pastBookingModalSafe}>
           <View style={styles.pastBookingModalHead}>
             <View style={styles.flex}><Text style={styles.eyebrow}>RESERVATION HISTORY</Text><Text style={styles.pastBookingModalTitle}>Booking details</Text></View>
             <Pressable accessibilityRole="button" accessibilityLabel="Close booking details" onPress={() => setSelectedPastBooking(null)} style={({ pressed }) => [styles.pastBookingModalClose, pressed && styles.pressed]}><Icon name="close" size={21} color={C.ink} /></Pressable>
@@ -1237,7 +1238,7 @@ export default function BookScreen({ route, navigation }) {
     }
   };
   const openMaps = (destination) => setMapDestination(destination);
-  return <SafeAreaView style={styles.safe}><StatusBar style={isDark ? 'light' : 'dark'} backgroundColor={C.paper} />{step === 'discover' && rootView === 'find' && <Discovery courts={venues} loading={venuesLoading} error={venuesError} onRetry={() => setVenuesRequest((value) => value + 1)} onShowBookings={() => setRootView('bookings')} onShowEvents={() => navigation.navigate('Pickleball', { openTab: 'Compete', ownerTab: 'Book' })} onSelect={(selected) => { setOpenedFromHome(false); setEditingBooking(null); selectCourt(selected); }} />}{step === 'discover' && rootView === 'bookings' && <MyBookings bookings={bookings} loading={bookingsLoading} loadingMore={bookingsLoadingMore} hasMoreHistory={hasMoreBookingHistory} error={bookingsError} onRetry={() => setBookingsRequest((value) => value + 1)} onLoadMore={loadOlderBookings} onFindCourts={() => setRootView('find')} onOpenMaps={openMaps} onCancel={cancelReservation} onModify={changeReservation} onPay={resumeReservationPayment} onViewLastMatch={() => navigation.navigate('Profile', { openTab: 'Matches', openTabToken: Date.now(), openMatchId: 'latest' })} />}{step === 'detail' && activeCourt && <CourtDetail court={activeCourt} onBack={backFromDetail} onBook={(option) => { setCourtOption(option); setEditingBooking(null); setStep('setup'); }} onOpenMaps={openMaps} />}{step === 'setup' && activeCourt && courtOption && <Setup court={activeCourt} courtOption={courtOption} teams={joinedTeams} existingBooking={editingBooking} saving={savingBooking} availabilityVersion={availabilityVersion} onBack={() => { setEditingBooking(null); setStep(editingBooking ? 'discover' : 'detail'); }} onConfirm={confirmBooking} onWaitlist={waitlist} />}{step === 'success' && activeCourt && booking && <Success court={activeCourt} booking={booking} onDone={finishBookingSuccess} />}<MapOptionsSheet destination={mapDestination} onClose={() => setMapDestination(null)} /><PaymentCheckoutModal bookingId={checkoutBookingId} onDone={handleCheckoutDone} /><Modal visible={Boolean(cancelAlert)} transparent animationType="fade" statusBarTranslucent onRequestClose={() => setCancelAlert(null)}><View style={styles.alertOverlay}><View style={styles.alertCard}><Text style={styles.alertTitle}>{cancelAlert?.unpaid ? 'Cancel this payment hold?' : 'Cancel this booking?'}</Text><Text style={styles.alertMessage}>{cancelAlert?.unpaid ? 'No payment was collected. The court will be released immediately.' : 'The court will be released and the next waitlisted player may be notified.'}</Text><View style={styles.alertActions}><Pressable accessibilityRole="button" onPress={() => setCancelAlert(null)} style={({ pressed }) => [styles.alertButton, styles.alertKeep, pressed && styles.pressed]}><Text style={styles.alertKeepText}>Keep booking</Text></Pressable><Pressable accessibilityRole="button" onPress={async () => { const { reservation, unpaid } = cancelAlert; setCancelAlert(null); try { if (unpaid) await cancelUnpaidBooking(reservation.id, reservation.revision || 1); else await cancelBooking(reservation.id, reservation.revision || 1, 'Cancelled by player'); setBookingsRequest((value) => value + 1); } catch (error) { Alert.alert('Could not cancel', error.message || 'Please try again.'); } }} style={({ pressed }) => [styles.alertButton, styles.alertCancel, pressed && styles.pressed]}><Text style={styles.alertCancelText}>{cancelAlert?.unpaid ? 'Release court' : 'Cancel booking'}</Text></Pressable></View></View></View></Modal></SafeAreaView>;
+  return <SafeAreaView style={styles.safe}><StatusBar style={isDark ? 'light' : 'dark'} backgroundColor={C.paper} />{step === 'discover' && rootView === 'find' && <Discovery courts={venues} loading={venuesLoading} error={venuesError} onRetry={() => setVenuesRequest((value) => value + 1)} onShowBookings={() => setRootView('bookings')} onShowEvents={() => navigation.navigate('Pickleball', { openTab: 'Compete', ownerTab: 'Book' })} onSelect={(selected) => { setOpenedFromHome(false); setEditingBooking(null); selectCourt(selected); }} />}{step === 'discover' && rootView === 'bookings' && <MyBookings bookings={bookings} loading={bookingsLoading} loadingMore={bookingsLoadingMore} hasMoreHistory={hasMoreBookingHistory} error={bookingsError} onRetry={() => setBookingsRequest((value) => value + 1)} onLoadMore={loadOlderBookings} onFindCourts={() => setRootView('find')} onOpenMaps={openMaps} onCancel={cancelReservation} onModify={changeReservation} onPay={resumeReservationPayment} onViewLastMatch={() => navigation.navigate('Profile', { openTab: 'Matches', openTabToken: Date.now(), openMatchId: 'latest' })} />}{step === 'detail' && activeCourt && <CourtDetail court={activeCourt} onBack={backFromDetail} onBook={(option) => { setCourtOption(option); setEditingBooking(null); setStep('setup'); }} onOpenMaps={openMaps} />}{step === 'setup' && activeCourt && courtOption && <Setup court={activeCourt} courtOption={courtOption} teams={joinedTeams} existingBooking={editingBooking} saving={savingBooking} availabilityVersion={availabilityVersion} onBack={() => { setEditingBooking(null); setStep(editingBooking ? 'discover' : 'detail'); }} onConfirm={confirmBooking} onWaitlist={waitlist} />}{step === 'success' && activeCourt && booking && <Success court={activeCourt} booking={booking} onDone={finishBookingSuccess} />}<MapOptionsSheet destination={mapDestination} onClose={() => setMapDestination(null)} /><PaymentCheckoutModal bookingId={checkoutBookingId} onDone={handleCheckoutDone} /><Modal visible={Boolean(cancelAlert)} transparent animationType="fade" statusBarTranslucent onRequestClose={() => setCancelAlert(null)}><View {...webDialog('backdrop')} style={styles.alertOverlay}><View {...webDialog('surface')} style={styles.alertCard}><Text style={styles.alertTitle}>{cancelAlert?.unpaid ? 'Cancel this payment hold?' : 'Cancel this booking?'}</Text><Text style={styles.alertMessage}>{cancelAlert?.unpaid ? 'No payment was collected. The court will be released immediately.' : 'The court will be released and the next waitlisted player may be notified.'}</Text><View style={styles.alertActions}><Pressable accessibilityRole="button" onPress={() => setCancelAlert(null)} style={({ pressed }) => [styles.alertButton, styles.alertKeep, pressed && styles.pressed]}><Text style={styles.alertKeepText}>Keep booking</Text></Pressable><Pressable accessibilityRole="button" onPress={async () => { const { reservation, unpaid } = cancelAlert; setCancelAlert(null); try { if (unpaid) await cancelUnpaidBooking(reservation.id, reservation.revision || 1); else await cancelBooking(reservation.id, reservation.revision || 1, 'Cancelled by player'); setBookingsRequest((value) => value + 1); } catch (error) { Alert.alert('Could not cancel', error.message || 'Please try again.'); } }} style={({ pressed }) => [styles.alertButton, styles.alertCancel, pressed && styles.pressed]}><Text style={styles.alertCancelText}>{cancelAlert?.unpaid ? 'Release court' : 'Cancel booking'}</Text></Pressable></View></View></View></Modal></SafeAreaView>;
 }
 
 const shadow = Platform.select({ ios: { shadowColor: C.ink, shadowOpacity: 0.08, shadowRadius: 12, shadowOffset: { width: 0, height: 4 } }, android: { elevation: 3 } });

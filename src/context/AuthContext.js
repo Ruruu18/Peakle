@@ -23,7 +23,9 @@ import {
 
 const AuthContext = createContext(null);
 const PENDING_VERIFICATION_EMAIL_KEY = '@peakle/pending-verification-email';
-const LAST_SIGN_IN_METHOD_KEY = '@peakle/last-sign-in-method';
+// The legacy key also contained methods copied from remote profiles. Start a
+// device-only history so a badge always represents an explicit button press.
+const LAST_SIGN_IN_METHOD_KEY = '@peakle/last-selected-sign-in-method';
 const REMEMBERED_EMAIL_KEY = '@peakle/remembered-email';
 const ONBOARDING_SAVE_TIMEOUT_MS = 15000;
 const AUTH_STARTUP_TIMEOUT_MS = 8000;
@@ -176,13 +178,7 @@ export function AuthProvider({ children }) {
         setUser(provisionalUser);
         setHydrated(true);
       }
-      const syncedSignInMethod = provisionalUser?.lastSignInMethod === 'google' || provisionalUser?.lastSignInMethod === 'email'
-        ? provisionalUser.lastSignInMethod
-        : localSignInMethod;
-      setLastSignInMethod(syncedSignInMethod);
-      if (provisionalUser?.lastSignInMethod) {
-        AsyncStorage.setItem(LAST_SIGN_IN_METHOD_KEY, provisionalUser.lastSignInMethod).catch(() => {});
-      }
+      setLastSignInMethod(localSignInMethod);
       if (authUser) {
         try {
           const currentUser = await withTimeout(
@@ -193,10 +189,6 @@ export function AuthProvider({ children }) {
           if (!active || authGeneration.current !== startupGeneration) return;
           setUser(currentUser);
           writeCachedData(userCacheKey(authUser.id), currentUser);
-          if (currentUser?.lastSignInMethod) {
-            setLastSignInMethod(currentUser.lastSignInMethod);
-            AsyncStorage.setItem(LAST_SIGN_IN_METHOD_KEY, currentUser.lastSignInMethod).catch(() => {});
-          }
         } catch (error) {
           if (active && authGeneration.current === startupGeneration) {
             handleAccessRevocation(error);
@@ -315,6 +307,7 @@ export function AuthProvider({ children }) {
   };
 
   const rememberSignInMethod = async (method) => {
+    if (method !== 'email' && method !== 'google') return;
     setLastSignInMethod(method);
     await AsyncStorage.setItem(LAST_SIGN_IN_METHOD_KEY, method).catch(() => {});
   };
@@ -330,7 +323,6 @@ export function AuthProvider({ children }) {
     const { data, error } = await requireSupabase().auth.signInWithPassword({ email, password });
     if (error) throw error;
     await recordLogin(data.user.id, 'email');
-    await rememberSignInMethod('email');
     await updateRememberedEmail(rememberMe ? email : '');
     setUser(await readCurrentUser(data.user));
   };
@@ -381,7 +373,6 @@ export function AuthProvider({ children }) {
     setPendingVerificationEmail('');
     await AsyncStorage.removeItem(PENDING_VERIFICATION_EMAIL_KEY).catch(() => {});
     await recordLogin(data.user.id, 'google');
-    await rememberSignInMethod('google');
     setUser(await readCurrentUser(data.user));
   };
 
@@ -393,7 +384,6 @@ export function AuthProvider({ children }) {
     if (Platform.OS === 'web') {
       // Redirect in this tab so Safari does not depend on a popup or a second
       // browser's PKCE verifier. The normal startup handler restores the session.
-      await rememberSignInMethod('google');
       const { data, error } = await client.auth.signInWithOAuth({
         provider: 'google',
         options: { redirectTo: `${window.location.origin}/oauth/callback`, skipBrowserRedirect: true, queryParams: { prompt: 'select_account' } },
@@ -428,7 +418,6 @@ export function AuthProvider({ children }) {
     setPendingVerificationEmail('');
     await AsyncStorage.removeItem(PENDING_VERIFICATION_EMAIL_KEY).catch(() => {});
     await recordLogin(authUser.id, 'google');
-    await rememberSignInMethod('google');
     setUser(await readCurrentUser(authUser));
     return { cancelled: false };
   };
@@ -582,7 +571,8 @@ export function AuthProvider({ children }) {
     pendingVerificationEmail: '',
     passwordRecovery: false,
     authLinkError: '',
-    lastSignInMethod: 'email',
+    lastSignInMethod: null,
+    rememberSignInMethod: async () => {},
     rememberedEmail: '',
     signIn: async () => {},
     signUp: async () => ({ user: DEMO_USER, needsEmailConfirmation: false }),
@@ -605,6 +595,7 @@ export function AuthProvider({ children }) {
     passwordRecovery,
     authLinkError,
     lastSignInMethod,
+    rememberSignInMethod,
     rememberedEmail,
     signIn,
     signUp,

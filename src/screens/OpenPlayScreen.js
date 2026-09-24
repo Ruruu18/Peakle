@@ -1,10 +1,11 @@
+import Modal from '../components/ResponsiveModal';
+import { webDialog } from '../utils/webLayout';
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
   ActivityIndicator,
   Alert,
   FlatList,
   KeyboardAvoidingView,
-  Modal,
   Platform,
   Pressable,
   Share,
@@ -528,9 +529,9 @@ function Setup({ organizerName, onBack, onStart }) {
       </> : null}
     </ScrollView>
     <Modal visible={venuePickerVisible} transparent animationType="slide" onRequestClose={closeVenuePicker} statusBarTranslucent>
-      <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : 'height'} style={styles.modalBackdrop}>
-        <View style={[styles.sheet, styles.venuePickerSheet, { paddingBottom: Math.max(insets.bottom, 18) }]}>
-          <View style={styles.sheetHandle} />
+      <KeyboardAvoidingView {...webDialog('backdrop')} behavior={Platform.OS === 'ios' ? 'padding' : 'height'} style={styles.modalBackdrop}>
+        <View {...webDialog('surface')} style={[styles.sheet, styles.venuePickerSheet, { paddingBottom: Math.max(insets.bottom, 18) }]}>
+          <View {...webDialog('handle')} style={styles.sheetHandle} />
           <View style={styles.venuePickerHead}><View style={styles.flex}><Text style={styles.eyebrow}>VERIFIED VENUES</Text><Text style={styles.sheetTitle}>Choose a venue</Text></View><Pressable accessibilityLabel="Close venue picker" onPress={closeVenuePicker} style={styles.iconButton}><Icon name="close" /></Pressable></View>
           <View style={styles.venueSearchBox}><Icon name="search-outline" size={18} color={C.ink40} /><TextInput value={venueSearch} onChangeText={setVenueSearch} placeholder="Search venue or area" placeholderTextColor={C.ink40} style={styles.venueSearchInput} /></View>
           <FlatList style={styles.venueFlatList} data={filteredVenues} keyExtractor={(venue) => venue.id} keyboardShouldPersistTaps="handled" showsVerticalScrollIndicator={false} contentContainerStyle={styles.venueList} renderItem={({ item }) => { const active = item.id === venueId; return <Pressable accessibilityRole="radio" accessibilityState={{ checked: active }} onPress={() => selectVenue(item)} style={[styles.venueListItem, active && styles.venueListItemActive]}><View style={[styles.venueListIcon, active && styles.venueListIconActive]}><Icon name={active ? 'checkmark' : 'location-outline'} size={18} color={active ? '#0E2321' : C.teal} /></View><View style={styles.flex}><Text numberOfLines={1} style={styles.venueListName}>{item.name}</Text><Text numberOfLines={1} style={styles.venueListMeta}>{item.area || item.address || 'Verified Peakle venue'}</Text></View><Icon name="chevron-forward" size={16} color={C.ink40} /></Pressable>; }} ListEmptyComponent={<View style={styles.venueEmpty}><Icon name="search-outline" size={26} color={C.ink40} /><Text style={styles.venueEmptyTitle}>No venue found</Text><Text style={styles.venueEmptyMeta}>Try a venue name, city, or area.</Text></View>} />
@@ -538,9 +539,9 @@ function Setup({ organizerName, onBack, onStart }) {
       </KeyboardAvoidingView>
     </Modal>
     <Modal visible={historyVisible} transparent animationType="slide" onRequestClose={() => setHistoryVisible(false)} statusBarTranslucent>
-      <View style={styles.modalBackdrop}>
-        <View style={[styles.sheet, styles.venuePickerSheet, { paddingBottom: Math.max(insets.bottom, 18) }]}>
-          <View style={styles.sheetHandle} />
+      <View {...webDialog('backdrop')} style={styles.modalBackdrop}>
+        <View {...webDialog('surface')} style={[styles.sheet, styles.venuePickerSheet, { paddingBottom: Math.max(insets.bottom, 18) }]}>
+          <View {...webDialog('handle')} style={styles.sheetHandle} />
           <View style={styles.venuePickerHead}><View style={styles.flex}><Text style={styles.eyebrow}>OPEN PLAY</Text><Text style={styles.sheetTitle}>Session history</Text></View><Pressable accessibilityLabel="Close session history" onPress={() => setHistoryVisible(false)} style={styles.iconButton}><Icon name="close" /></Pressable></View>
           <View style={styles.historyTabs}>{[['upcoming', 'Upcoming'], ['current', 'Current'], ['past', 'Past']].map(([value, label]) => { const active = historySegment === value; return <Pressable key={value} accessibilityRole="tab" accessibilityState={{ selected: active }} onPress={() => setHistorySegment(value)} style={[styles.historyTab, active && styles.historyTabActive]}><Text style={[styles.historyTabText, active && styles.historyTabTextActive]}>{label}</Text></Pressable>; })}</View>
           {historyLoading ? <View style={styles.venueEmpty}><ActivityIndicator color={C.teal} /><Text style={styles.venueEmptyMeta}>Loading sessions…</Text></View>
@@ -564,9 +565,9 @@ function Setup({ organizerName, onBack, onStart }) {
       </View>
     </Modal>
     <Modal visible={Boolean(pickerField)} transparent animationType="slide" onRequestClose={() => setPickerField(null)} statusBarTranslucent>
-      <View style={styles.modalBackdrop}>
-        <View style={[styles.sheet, styles.schedulePickerSheet, { paddingBottom: Math.max(insets.bottom, 18) }]}>
-          <View style={styles.sheetHandle} />
+      <View {...webDialog('backdrop')} style={styles.modalBackdrop}>
+        <View {...webDialog('surface')} style={[styles.sheet, styles.schedulePickerSheet, { paddingBottom: Math.max(insets.bottom, 18) }]}>
+          <View {...webDialog('handle')} style={styles.sheetHandle} />
           <View style={styles.schedulePickerHead}><View style={styles.flex}><Text style={styles.eyebrow}>{pickerField === 'date' ? 'SESSION DATE' : pickerField === 'start' ? 'START TIME' : 'END TIME'}</Text><Text style={styles.schedulePickerTitle}>{pickerField === 'date' ? 'Choose a date' : 'Choose a time'}</Text></View><Pressable accessibilityLabel="Close schedule picker" onPress={() => setPickerField(null)} style={styles.iconButton}><Icon name="close" /></Pressable></View>
           {pickerField === 'date' ? <View style={styles.calendarPicker}>
             <View style={styles.calendarPickerNav}><Pressable accessibilityLabel="Previous month" disabled={pickerMonth <= monthFromDateInput(todayInput)} onPress={() => changePickerMonth(-1)} style={[styles.calendarPickerNavButton, pickerMonth <= monthFromDateInput(todayInput) && styles.disabled]}><Icon name="chevron-back" color={C.teal} /></Pressable><Text style={styles.calendarPickerMonth}>{pickerMonth.toLocaleDateString('en-PH', { timeZone: 'UTC', month: 'long', year: 'numeric' })}</Text><Pressable accessibilityLabel="Next month" onPress={() => changePickerMonth(1)} style={styles.calendarPickerNavButton}><Icon name="chevron-forward" color={C.teal} /></Pressable></View>
@@ -688,7 +689,7 @@ function AnnouncementModal({ visible, onCancel, onPublish }) {
     setBusy(true);
     try { await onPublish(body.trim()); } finally { setBusy(false); }
   };
-  return <Modal visible={visible} transparent animationType="slide" onRequestClose={onCancel}><View style={styles.modalBackdrop}><View style={styles.sheet}><View style={styles.sheetHandle} /><Text style={styles.eyebrow}>VENUE ANNOUNCEMENT</Text><Text style={styles.sheetTitle}>Message everyone</Text><Text style={styles.sheetLead}>Checked-in players receive this in their inbox and by push notification when enabled.</Text><TextInput autoFocus multiline maxLength={280} value={body} onChangeText={setBody} placeholder="Court 2 is reopening in five minutes." placeholderTextColor={C.ink40} style={[styles.singleInput, styles.announcementInput]} /><View style={styles.sheetActions}><Pressable disabled={busy} onPress={onCancel} style={styles.secondaryButton}><Text style={styles.secondaryText}>Cancel</Text></Pressable><Pressable disabled={busy || body.trim().length < 3} onPress={publish} style={[styles.confirmButton, (busy || body.trim().length < 3) && styles.disabled]}>{busy ? <ActivityIndicator color={C.surface} /> : <Text style={styles.confirmText}>Publish</Text>}</Pressable></View></View></View></Modal>;
+  return <Modal visible={visible} transparent animationType="slide" onRequestClose={onCancel}><View {...webDialog('backdrop')} style={styles.modalBackdrop}><View {...webDialog('surface')} style={styles.sheet}><View {...webDialog('handle')} style={styles.sheetHandle} /><Text style={styles.eyebrow}>VENUE ANNOUNCEMENT</Text><Text style={styles.sheetTitle}>Message everyone</Text><Text style={styles.sheetLead}>Checked-in players receive this in their inbox and by push notification when enabled.</Text><TextInput autoFocus multiline maxLength={280} value={body} onChangeText={setBody} placeholder="Court 2 is reopening in five minutes." placeholderTextColor={C.ink40} style={[styles.singleInput, styles.announcementInput]} /><View style={styles.sheetActions}><Pressable disabled={busy} onPress={onCancel} style={styles.secondaryButton}><Text style={styles.secondaryText}>Cancel</Text></Pressable><Pressable disabled={busy || body.trim().length < 3} onPress={publish} style={[styles.confirmButton, (busy || body.trim().length < 3) && styles.disabled]}>{busy ? <ActivityIndicator color={C.surface} /> : <Text style={styles.confirmText}>Publish</Text>}</Pressable></View></View></View></Modal>;
 }
 
 function VenueTVDisplay({ session, onBack }) {
@@ -705,9 +706,9 @@ function AddPlayerModal({ visible, players, onCancel, onAdd }) {
   useEffect(() => { if (visible) setName(''); }, [visible]);
   return (
     <Modal visible={visible} transparent animationType="slide" onRequestClose={onCancel}>
-      <View style={styles.modalBackdrop}>
-        <View style={styles.sheet}>
-          <View style={styles.sheetHandle} /><Text style={styles.eyebrow}>PLAYER CHECK-IN</Text><Text style={styles.sheetTitle}>Add to the waiting pool</Text><Text style={styles.sheetLead}>Walk-ins join at the end of the current rotation.</Text>
+      <View {...webDialog('backdrop')} style={styles.modalBackdrop}>
+        <View {...webDialog('surface')} style={styles.sheet}>
+          <View {...webDialog('handle')} style={styles.sheetHandle} /><Text style={styles.eyebrow}>PLAYER CHECK-IN</Text><Text style={styles.sheetTitle}>Add to the waiting pool</Text><Text style={styles.sheetLead}>Walk-ins join at the end of the current rotation.</Text>
           <TextInput accessibilityLabel="Player name" autoFocus value={name} onChangeText={setName} placeholder="Player name" placeholderTextColor={C.ink40} returnKeyType="done" onSubmitEditing={() => canAdd && onAdd(name.trim())} style={styles.singleInput} />
           {duplicate && <Text style={styles.inputError}>That player is already registered.</Text>}
           <View style={styles.sheetActions}><Pressable onPress={onCancel} style={styles.secondaryButton}><Text style={styles.secondaryText}>Cancel</Text></Pressable><Pressable disabled={!canAdd} onPress={() => onAdd(name.trim())} style={[styles.confirmButton, !canAdd && styles.disabled]}><Text style={styles.confirmText}>Check in</Text></Pressable></View>
@@ -798,9 +799,9 @@ function EndMatchModal({ visible, match, players, onCancel, onConfirm }) {
   if (!match) return null;
   return (
     <Modal visible={visible} transparent animationType="slide" onRequestClose={onCancel}>
-      <View style={styles.modalBackdrop}>
-        <View style={styles.sheet}>
-          <View style={styles.sheetHandle} /><Text style={styles.eyebrow}>END MATCH</Text><Text style={styles.sheetTitle}>Where should players go?</Text><Text style={styles.sheetLead}>Everyone returns to the queue unless you mark them done for the day.</Text>
+      <View {...webDialog('backdrop')} style={styles.modalBackdrop}>
+        <View {...webDialog('surface')} style={styles.sheet}>
+          <View {...webDialog('handle')} style={styles.sheetHandle} /><Text style={styles.eyebrow}>END MATCH</Text><Text style={styles.sheetTitle}>Where should players go?</Text><Text style={styles.sheetLead}>Everyone returns to the queue unless you mark them done for the day.</Text>
           {ids.map((id) => {
             const done = doneIds.includes(id);
             return <Pressable key={id} onPress={() => setDoneIds((current) => done ? current.filter((item) => item !== id) : [...current, id])} style={styles.endPlayerRow}><View style={styles.avatar}><Text style={styles.avatarText}>{initials(playerName(players, id))}</Text></View><Text style={[styles.playerName, styles.flex]}>{playerName(players, id)}</Text><View style={[styles.returnPill, done && styles.donePill]}><Text style={[styles.returnText, done && styles.donePillText]}>{done ? 'DONE' : 'RETURN TO QUEUE'}</Text></View></Pressable>;

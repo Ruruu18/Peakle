@@ -1,3 +1,5 @@
+import Modal from '../components/ResponsiveModal';
+import { webLayout, webDialog } from '../utils/webLayout';
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
   ActivityIndicator,
@@ -5,7 +7,6 @@ import {
   Easing,
   Image,
   KeyboardAvoidingView,
-  Modal,
   Platform,
   Pressable,
   ScrollView,
@@ -81,8 +82,8 @@ function LegalDocumentModal({ documentKey, onClose, requireAgreement = false, on
 
   return (
     <Modal visible={Boolean(documentKey)} transparent animationType="slide" onRequestClose={onClose}>
-      <View style={styles.legalModalBackdrop}>
-        <View style={styles.legalModalSheet}>
+      <View {...webDialog('backdrop')} style={styles.legalModalBackdrop}>
+        <View {...webDialog('surface')} style={styles.legalModalSheet}>
           <View style={styles.legalModalHeader}>
             <View style={styles.legalModalHeading}>
               <Text style={styles.legalModalEyebrow}>{document.eyebrow}</Text>
@@ -275,7 +276,12 @@ function Field({ label, icon, error, dark = false, onFocus, onBlur, secureTextEn
   );
 }
 
-function GoogleButton({ label, onSuccess, onExpoGoSignIn, onError, onBeforeStart, dark = false, lastUsed = false, disabled = false }) {
+function LastUsedBadge() {
+  return <View pointerEvents="none" accessibilityElementsHidden importantForAccessibility="no-hide-descendants" style={styles.lastUsedBadge}><Text style={styles.lastUsedBadgeText}>Last used</Text></View>;
+}
+
+function GoogleButton({ label, onSuccess, onExpoGoSignIn, onError, onBeforeStart, dark = false, simple = false, lastUsed = false, disabled = false }) {
+  const { rememberSignInMethod } = useAuth();
   const [busy, setBusy] = useState(false);
   const isExpoGo = Platform.OS === 'web' || Constants.executionEnvironment === ExecutionEnvironment.StoreClient;
   const iosClientId = process.env.EXPO_PUBLIC_GOOGLE_IOS_CLIENT_ID;
@@ -309,9 +315,10 @@ function GoogleButton({ label, onSuccess, onExpoGoSignIn, onError, onBeforeStart
   }, [response]);
 
   const start = async () => {
-    if (disabled) return;
+    if (disabled || busy) return;
     const canStart = await onBeforeStart?.();
     if (canStart === false) return;
+    await rememberSignInMethod('google');
     onError('');
     if (isExpoGo) {
       setBusy(true);
@@ -326,13 +333,69 @@ function GoogleButton({ label, onSuccess, onExpoGoSignIn, onError, onBeforeStart
   };
 
   return (
-    <View style={styles.googleButtonClip}>
-      <Pressable accessibilityLabel={`${label}${lastUsed ? ', last used' : ''}`} disabled={busy || (!isExpoGo && !request) || disabled} onPress={start} style={({ pressed }) => [styles.googleButton, dark && styles.googleButtonDark, disabled && styles.disabledButton, pressed && styles.pressed]}>
+    <View style={[styles.googleButtonClip, simple && styles.methodButtonWrap]}>
+      <Pressable accessibilityRole="button" accessibilityLabel={`${label}${lastUsed ? ', last used' : ''}`} disabled={busy || (!isExpoGo && !request) || disabled} onPress={start} style={({ pressed }) => [styles.googleButton, dark && styles.googleButtonDark, simple && styles.methodButton, disabled && styles.disabledButton, pressed && styles.pressed]}>
         <Image source={require('../../public/images/google-g.png')} style={styles.googleMark} resizeMode="contain" />
-        <Text style={[styles.googleText, dark && styles.googleTextDark]}>{busy ? 'Connecting to Google…' : label}</Text>
-        {lastUsed ? <View style={styles.googleLastUsed}><Text style={styles.googleLastUsedText}>LAST USED</Text></View> : null}
+        <Text style={[styles.googleText, dark && styles.googleTextDark, simple && styles.methodButtonText]}>{busy ? 'Connecting to Google…' : label}</Text>
+        {simple ? <View style={styles.methodIconSpacer} /> : null}
       </Pressable>
+      {lastUsed ? <LastUsedBadge /> : null}
     </View>
+  );
+}
+
+function SignInOptions({ onEmail, onCreate, onForgot }) {
+  const { signInWithGoogle, signInWithGoogleOAuth, lastSignInMethod, rememberSignInMethod } = useAuth();
+  const [googleError, setGoogleError] = useState('');
+  const [legalDocument, setLegalDocument] = useState(null);
+
+  const chooseEmail = () => {
+    void rememberSignInMethod('email');
+    onEmail();
+  };
+
+  return (
+    <SafeAreaView style={styles.signInSafe}>
+      <StatusBar style="dark" backgroundColor={C.surface} />
+      <ScrollView contentContainerStyle={styles.signInContent} keyboardShouldPersistTaps="handled">
+        <View style={styles.signInMain}>
+          <View style={styles.signInTop}>
+            <Pressable accessibilityRole="button" accessibilityLabel="Forgot password?" onPress={onForgot} style={({ pressed }) => [styles.signInHelp, pressed && styles.pressed]}>
+              <Icon name="help-circle-outline" size={24} color="#71717A" />
+            </Pressable>
+          </View>
+          <View style={styles.signInHeading}>
+            <Text accessibilityRole="header" style={styles.signInTitle}>Log in to Peakle</Text>
+            <Text style={styles.signInSubtitle}>Book courts, find your squad, and keep your game in one place.</Text>
+          </View>
+          <View style={styles.signInMethods}>
+            <GoogleButton simple label="Continue with Google" lastUsed={lastSignInMethod === 'google'} onError={setGoogleError} onExpoGoSignIn={signInWithGoogleOAuth} onSuccess={signInWithGoogle} />
+            <View style={styles.methodButtonWrap}>
+              <Pressable accessibilityRole="button" accessibilityLabel={`Use email${lastSignInMethod === 'email' ? ', last used' : ''}`} onPress={chooseEmail} style={({ pressed }) => [styles.methodButton, pressed && styles.pressed]}>
+                <Icon name="person-outline" size={20} color="#17171B" />
+                <Text style={styles.methodButtonText}>Use email</Text>
+                <View style={styles.methodIconSpacer} />
+              </Pressable>
+              {lastSignInMethod === 'email' ? <LastUsedBadge /> : null}
+            </View>
+          </View>
+          {googleError ? <Text accessibilityRole="alert" style={styles.signInError}>{googleError}</Text> : null}
+        </View>
+        <View style={styles.signInFooter}>
+          <Text style={styles.signInLegal}>
+            By continuing, you agree to our{' '}
+            <Text accessibilityRole="link" onPress={() => setLegalDocument('terms')} style={styles.signInLegalLink}>Terms of Service</Text>
+            {' '}and acknowledge our{' '}
+            <Text accessibilityRole="link" onPress={() => setLegalDocument('privacy')} style={styles.signInLegalLink}>Privacy Policy</Text>.
+          </Text>
+          <View style={styles.signInSignup}>
+            <Text style={styles.signInSignupText}>Don’t have an account?</Text>
+            <Pressable accessibilityRole="button" onPress={onCreate} style={({ pressed }) => [styles.signInSignupButton, pressed && styles.pressed]}><Text style={styles.signInSignupLink}>Sign up</Text></Pressable>
+          </View>
+        </View>
+      </ScrollView>
+      <LegalDocumentModal documentKey={legalDocument} onClose={() => setLegalDocument(null)} />
+    </SafeAreaView>
   );
 }
 
@@ -706,10 +769,10 @@ function LocationPicker({ value, onChange }) {
       </Pressable>
 
       <Modal visible={open} transparent animationType="slide" onRequestClose={closeSheet} statusBarTranslucent>
-        <View style={styles.locModalBackdrop}>
+        <View {...webDialog('backdrop')} style={styles.locModalBackdrop}>
           <Pressable style={StyleSheet.absoluteFillObject} onPress={closeSheet} />
-          <View style={styles.locSheet}>
-            <View style={styles.locHandle} />
+          <View {...webDialog('surface')} style={styles.locSheet}>
+            <View {...webDialog('handle')} style={styles.locHandle} />
             <View style={styles.locHeader}>
               <View style={{ flex: 1 }}>
                 <Text style={styles.locHeaderEyebrow}>YOUR SEARCH AREA</Text>
@@ -894,7 +957,7 @@ export default function AuthFlowScreen({ initialScreen = 'welcome' }) {
   else content = <Personalize profile={profile || { name: user?.name || '', email: user?.email, picture: user?.picture, location: user?.location, skill: user?.skill, preference: user?.preference }} onBack={screen === 'complete-profile' ? undefined : () => goTo('create')} />;
 
   return (
-    <Animated.View style={{ flex: 1, opacity: fade, transform: [{ translateY: fade.interpolate({ inputRange: [0, 1], outputRange: [8, 0] }) }] }}>
+    <Animated.View {...webLayout('auth')} style={{ flex: 1, opacity: fade, transform: [{ translateY: fade.interpolate({ inputRange: [0, 1], outputRange: [8, 0] }) }] }}>
       {content}
     </Animated.View>
   );

@@ -1,5 +1,7 @@
+import Modal from '../components/ResponsiveModal';
+import { webDialog } from '../utils/webLayout';
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { ActivityIndicator, Alert, AppState, Image, Linking, Modal, Pressable, ScrollView as NativeScrollView, Switch, Text, TextInput, View } from 'react-native';
+import { ActivityIndicator, Alert, AppState, Image, Linking, Pressable, ScrollView as NativeScrollView, Switch, Text, TextInput, View } from 'react-native';
 import { useFocusEffect } from '@react-navigation/native';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { StatusBar } from 'expo-status-bar';
@@ -229,9 +231,9 @@ function PlayRequestSheet({ action, busy, onClose, onConfirm, onChangeKind, onCh
   const confirmLabel = publishing ? 'Publish request' : clearing ? 'Clear requests' : 'Close request';
   const dates = publishing ? requestDateOptions() : [];
   return <Modal visible transparent animationType="slide" onRequestClose={() => !busy && onClose()}>
-    <Pressable accessibilityRole="button" accessibilityLabel="Close request dialog" onPress={() => !busy && onClose()} style={s.modalBackdrop}>
-      <Pressable onPress={(event) => event.stopPropagation()} style={[s.requestSheet, { backgroundColor: C.paper, paddingBottom: Math.max(insets.bottom, 18) }]}>
-        <View style={[s.handle, { backgroundColor: C.line }]} />
+    <Pressable {...webDialog('backdrop')} accessibilityRole="button" accessibilityLabel="Close request dialog" onPress={() => !busy && onClose()} style={s.modalBackdrop}>
+      <Pressable {...webDialog('surface')} onPress={(event) => event.stopPropagation()} style={[s.requestSheet, { backgroundColor: C.paper, paddingBottom: Math.max(insets.bottom, 18) }]}>
+        <View {...webDialog('handle')} style={[s.handle, { backgroundColor: C.line }]} />
         <View style={s.row}><View style={s.flex}><Text style={[s.eyebrow, { color: C.teal }]}>{publishing ? 'FIND PLAY' : 'MANAGE REQUESTS'}</Text><Text style={[s.sheetTitle, { color: C.ink }]}>{title}</Text></View><Pressable accessibilityLabel="Close" disabled={busy} onPress={onClose} style={[s.sheetClose, { backgroundColor: C.surface }]}><Icon name="close" size={20} color={C.ink} /></Pressable></View>
         <NativeScrollView style={s.requestSheetScroll} contentContainerStyle={s.requestSheetContent} showsVerticalScrollIndicator={false} keyboardShouldPersistTaps="handled"><Text style={[s.sheetSubtitle, { color: C.ink40 }]}>{detail}</Text>
         {timePickerField ? <View style={s.compactTimePicker}>
@@ -399,7 +401,7 @@ function MembershipCheckoutModal({ membershipId, product, onDone, C }) {
   if (!membershipId) return null;
 
   return <Modal visible animationType="slide" statusBarTranslucent onRequestClose={() => finish('cancelled')}>
-    <SafeAreaView style={[s.checkoutSafe, { backgroundColor: C.surface }]}>
+    <SafeAreaView {...webDialog('page')} style={[s.checkoutSafe, { backgroundColor: C.surface }]}>
       <View style={[s.checkoutHeader, { borderColor: C.line }]}><View style={s.flex}><Text style={[s.checkoutEyebrow, { color: C.teal }]}>SECURE MEMBERSHIP CHECKOUT</Text><Text numberOfLines={1} style={[s.checkoutTitle, { color: C.ink }]}>{product?.name || 'Venue membership'}</Text></View><Pressable accessibilityRole="button" accessibilityLabel="Close checkout" onPress={() => finish('cancelled')} style={[s.sheetClose, { backgroundColor: C.paper }]}><Icon name="close" color={C.ink} /></Pressable></View>
       {checkoutUrl ? <WebView source={{ uri: checkoutUrl }} onShouldStartLoadWithRequest={shouldLoad} onNavigationStateChange={({ url }) => handleResultUrl(url)} startInLoadingState setSupportMultipleWindows={false} renderLoading={() => <View style={s.checkoutCenter}><ActivityIndicator color={C.teal} /><Text style={[s.checkoutHelp, { color: C.ink40 }]}>Opening PayMongo…</Text></View>} style={s.checkoutWebview} />
         : verifying ? <View style={s.checkoutCenter}><View style={[s.checkoutVerifyIcon, { backgroundColor: C.tealWash }]}><ActivityIndicator color={C.teal} /></View><Text style={[s.checkoutVerifyTitle, { color: C.ink }]}>Confirming your payment</Text><Text style={[s.checkoutHelp, { color: C.ink40 }]}>Keep this screen open while Peakle securely verifies the payment with PayMongo. Access activates only after verification.</Text></View>

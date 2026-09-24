@@ -1,5 +1,7 @@
+import Modal from './ResponsiveModal';
+import { webDialog } from '../utils/webLayout';
 import React, { useState } from 'react';
-import { ActivityIndicator, Alert, Modal, Platform, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { ActivityIndicator, Alert, Platform, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import Ionicons from '@expo/vector-icons/Ionicons';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import {
@@ -148,10 +150,10 @@ export default function NotificationSheet({ visible, onClose, items, unreadCount
   return (
     <Modal visible={visible} transparent animationType="slide" onRequestClose={onClose} statusBarTranslucent>
       <View style={{ flex: 1 }}>
-        <View style={styles.backdrop}>
+        <View {...webDialog('backdrop')} style={styles.backdrop}>
           <Pressable accessibilityLabel="Close notifications" onPress={onClose} style={styles.backdropDismiss} />
-          <View accessibilityViewIsModal style={[styles.sheet, { paddingBottom: Math.max(insets.bottom, 16) }]}>
-            <View style={styles.handle} />
+          <View {...webDialog('surface')} accessibilityViewIsModal style={[styles.sheet, { paddingBottom: Math.max(insets.bottom, 16) }]}>
+            <View {...webDialog('handle')} style={styles.handle} />
             <View style={styles.header}>
               <View style={styles.headerCopy}>
                 <Text style={styles.eyebrow}>INBOX</Text>
@@ -205,8 +207,8 @@ export default function NotificationSheet({ visible, onClose, items, unreadCount
           </View>
         </View>
         {showClearAlert && (
-          <View style={styles.alertOverlay}>
-            <View style={styles.alertCard}>
+          <View {...webDialog('backdrop')} style={styles.alertOverlay}>
+            <View {...webDialog('surface')} style={styles.alertCard}>
               <Text style={styles.alertTitle}>Clear read notifications?</Text>
               <Text style={styles.alertMessage}>{clearableCount} read notification{clearableCount === 1 ? '' : 's'} will be permanently deleted.</Text>
               <View style={styles.alertActions}>

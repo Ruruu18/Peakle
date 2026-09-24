@@ -1,3 +1,5 @@
+import Modal from '../components/ResponsiveModal';
+import { webDialog } from '../utils/webLayout';
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   ActivityIndicator,
@@ -6,7 +8,6 @@ import {
   Easing,
   FlatList,
   KeyboardAvoidingView,
-  Modal,
   Platform,
   Pressable,
   StyleSheet,
@@ -360,9 +361,9 @@ function NewMessageModal({ visible, onClose, onSelect, colors }) {
   };
   return (
     <Modal visible={visible} transparent animationType="slide" onRequestClose={onClose} statusBarTranslucent>
-      <View style={styles.composeBackdrop}>
+      <View {...webDialog('backdrop')} style={styles.composeBackdrop}>
         <Pressable accessibilityLabel="Close" onPress={onClose} style={StyleSheet.absoluteFillObject} />
-        <SafeAreaView style={[styles.composeSheet, { backgroundColor: colors.paper }]}>
+        <SafeAreaView {...webDialog('surface')} style={[styles.composeSheet, { backgroundColor: colors.paper }]}>
           <View style={styles.modalHeader}><View><Text style={[styles.eyebrow, { color: colors.teal }]}>PRIVATE CHAT</Text><Text style={[styles.modalTitle, { color: colors.ink }]}>New message</Text></View><Pressable accessibilityLabel="Close" onPress={onClose} style={[styles.iconButton, { borderColor: colors.line, backgroundColor: colors.surface }]}><Icon name="close" color={colors.ink} /></Pressable></View>
           <View style={[styles.search, { backgroundColor: colors.surface, borderColor: colors.line }]}><Icon name="search-outline" color={colors.ink40} /><TextInput autoFocus value={query} onChangeText={setQuery} placeholder="Search player name" placeholderTextColor={colors.ink40} style={[styles.searchInput, { color: colors.ink }]} /></View>
           <Text style={[styles.searchNote, { color: colors.ink40 }]}>Private chat opens for teammates and players who follow each other.</Text>
@@ -731,10 +732,10 @@ function DirectMessageInteractionModal({ message, mode, peer, seen, colors, onMo
   const preview = message.text || 'Message';
   return (
     <Modal visible transparent animationType="fade" onRequestClose={onClose}>
-      <View style={[styles.messageInteractionBackdrop, mode === 'actions' && styles.messageInteractionBackdropBottom]}>
+      <View {...webDialog('backdrop')} style={[styles.messageInteractionBackdrop, mode === 'actions' && styles.messageInteractionBackdropBottom]}>
         <Pressable accessibilityLabel="Close message actions" onPress={onClose} style={StyleSheet.absoluteFillObject} />
         {mode === 'reactions' ? (
-          <View style={[styles.messageInteractionCard, message.mine && styles.messageInteractionCardMine]}>
+          <View {...webDialog('surface')} style={[styles.messageInteractionCard, message.mine && styles.messageInteractionCardMine]}>
             <View style={[styles.directReactionPicker, { backgroundColor: colors.surface }]}>
               {DIRECT_REACTION_OPTIONS.map((emoji) => <Pressable key={emoji} accessibilityLabel={`React ${emoji}`} onPress={() => { onReact(message.id, emoji); onClose(); }} style={({ pressed }) => [styles.directReactionOption, pressed && { backgroundColor: colors.tealWash }]}><Text style={styles.directReactionOptionText}>{emoji}</Text></Pressable>)}
             </View>
@@ -1097,9 +1098,9 @@ export function DirectChatScreen({ route, navigation }) {
         onBlock={blockPlayer}
       />
       <Modal visible={Boolean(reportingMessage)} transparent animationType="fade" onRequestClose={() => setReportingMessage(null)}>
-        <View style={styles.reportBackdrop}>
+        <View {...webDialog('backdrop')} style={styles.reportBackdrop}>
           <Pressable accessibilityLabel="Close report menu" onPress={() => setReportingMessage(null)} style={StyleSheet.absoluteFillObject} />
-          <View style={[styles.reportSheet, { backgroundColor: colors.surface }]}>
+          <View {...webDialog('surface')} style={[styles.reportSheet, { backgroundColor: colors.surface }]}>
             <View style={styles.reportHeader}><View><Text style={[styles.eyebrow, { color: colors.teal }]}>SAFETY</Text><Text style={[styles.reportTitle, { color: colors.ink }]}>Report message</Text></View><Pressable accessibilityLabel="Close" onPress={() => setReportingMessage(null)} style={[styles.iconButton, { borderColor: colors.line, backgroundColor: colors.paper }]}><Icon name="close" color={colors.ink} /></Pressable></View>
             <Text style={[styles.reportLead, { color: colors.ink40 }]}>Choose the reason that best describes the problem. The reported player is not notified.</Text>
             {REPORT_REASONS.map(([reason, label], index) => <Pressable key={reason} onPress={() => submitReport(reason)} style={[styles.reportReason, { borderColor: colors.line }, index === 0 && styles.reportReasonFirst]}><Text style={[styles.reportReasonText, { color: colors.ink }]}>{label}</Text><Icon name="chevron-forward" size={16} color={colors.ink40} /></Pressable>)}

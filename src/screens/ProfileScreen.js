@@ -1,8 +1,8 @@
+import Modal from '../components/ResponsiveModal';
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
   ActivityIndicator,
   Linking,
-  Modal,
   Platform,
   Pressable,
   StyleSheet,
@@ -24,6 +24,7 @@ import ProfilePhotoPicker from '../components/ProfilePhotoPicker';
 import NotificationSheet from '../components/NotificationSheet';
 import ScrollView from '../components/FocusResetScrollView';
 import useResponsiveWidth from '../hooks/useResponsiveWidth';
+import { webLayout, webDialog } from '../utils/webLayout';
 import { createDarkStyleSheet, DARK_CONTENT_COLORS, useTheme } from '../context/ThemeContext';
 import { useOperations } from '../context/OperationsContext';
 import { useOrganizerPass } from '../context/OrganizerPassContext';
@@ -91,10 +92,10 @@ function OrganizerPortalShortcut({ onOpen }) {
 function Sheet({ visible, title, eyebrow, onClose, children, fullHeight = false }) {
   return (
     <Modal visible={visible} transparent animationType="slide" onRequestClose={onClose}>
-      <View style={styles.backdrop}>
+      <View {...webDialog('backdrop')} style={styles.backdrop}>
         <Pressable accessibilityLabel="Close modal backdrop" onPress={onClose} style={styles.backdropDismiss} />
-        <View style={[styles.sheet, fullHeight && styles.sheetTall]}>
-          <View style={styles.handle} />
+        <View {...webDialog('surface')} style={[styles.sheet, fullHeight && styles.sheetTall]}>
+          <View {...webDialog('handle')} style={styles.handle} />
           <View style={styles.sheetHeader}><View style={styles.flex}><Text style={styles.eyebrow}>{eyebrow}</Text><Text style={styles.sheetTitle}>{title}</Text></View><Pressable accessibilityLabel="Close" hitSlop={10} onPress={onClose} style={styles.iconButton}><Icon name="close" size={22} /></Pressable></View>
           <KitchenLine quiet style={styles.sheetLine} />
           <View style={[styles.sheetBody, fullHeight && styles.sheetBodyScrollable]}>{children}</View>
@@ -375,10 +376,10 @@ function LocationPicker({ value, onChange }) {
         onRequestClose={closeSheet}
         statusBarTranslucent
       >
-        <View style={styles.locModalBackdrop}>
+        <View {...webDialog('backdrop')} style={styles.locModalBackdrop}>
           <Pressable style={styles.locModalDismiss} onPress={closeSheet} />
-          <View style={styles.locSheet}>
-            <View style={styles.locHandle} />
+          <View {...webDialog('surface')} style={styles.locSheet}>
+            <View {...webDialog('handle')} style={styles.locHandle} />
 
             {/* Header */}
             <View style={styles.locHeader}>
@@ -747,24 +748,30 @@ function ProfileScreen({ navigation, route }) {
           <View style={styles.topActions}><Pressable accessibilityLabel="Notifications" onPress={() => setNotificationsOpen(true)} style={styles.topActionButton}><Icon name="notifications-outline" size={19} />{unreadCount > 0 && <View style={styles.noticeDot} />}</Pressable></View>
         </View>
         <KitchenLine style={[styles.headerLine, compactPhone && styles.headerLineCompact]} />
-        <View style={[styles.identity, compactPhone && styles.identityCompact]}>
+        <View {...webLayout('profile')}>
+        <View {...webLayout('profile-summary')}>
+        <View {...webLayout('profile-identity')} style={[styles.identity, compactPhone && styles.identityCompact]}>
           <Pressable accessibilityRole="button" accessibilityLabel={`Change player status. Current status ${presenceOption(player.presenceStatus).label}`} accessibilityHint="Opens player availability options" onPress={() => setPresenceOpen(true)} hitSlop={10} style={({ pressed }) => [styles.avatar, pressed && styles.avatarPressed]}><ProfilePhoto photo={player.avatar} name={player.name} size={67} /><View pointerEvents="none" style={styles.avatarStatusButton}><View style={[styles.avatarStatusDot, { backgroundColor: presenceOption(player.presenceStatus).color }]} /></View></Pressable>
-          <View style={styles.identityCopy}>
+          <View {...webLayout('profile-identity-copy')} style={styles.identityCopy}>
             <View style={styles.playerNameRow}><Text numberOfLines={1} style={styles.playerName}>{player.name}</Text><Pressable accessibilityLabel={`Edit profile. Status ${presenceOption(player.presenceStatus).label}`} onPress={() => setEditOpen(true)} hitSlop={8} style={styles.editProfileButton}><Icon name="create-outline" size={18} color={C.ink40} /></Pressable></View>
-            <View style={[styles.clubLocationRow, compactPhone && styles.clubLocationRowCompact]}>
-              <View style={[styles.squad, { marginTop: 0, flexShrink: 1 }]}><Icon name="people" size={12} color={C.teal} /><Text numberOfLines={1} style={[styles.squadText, { flex: 0, flexShrink: 1 }]}>{joinedTeams.length ? `${joinedTeams[0].name}${joinedTeams.length > 1 ? ` +${joinedTeams.length - 1}` : ''}` : 'No team joined'}</Text></View>
-              <View style={[styles.location, { marginTop: 0, flexShrink: 1 }]}><Icon name="location-outline" size={13} color={C.ink40} /><Text numberOfLines={1} style={[styles.locationText, { flex: 0, flexShrink: 1 }]}>{player.location}</Text></View>
+            <View {...webLayout('profile-meta')} style={[styles.clubLocationRow, compactPhone && styles.clubLocationRowCompact]}>
+              <View style={[styles.squad, { marginTop: 0, flexShrink: 1 }]}><Icon name="people" size={12} color={C.teal} /><Text {...webLayout('profile-meta-label')} numberOfLines={1} style={[styles.squadText, { flex: 0, flexShrink: 1 }]}>{joinedTeams.length ? `${joinedTeams[0].name}${joinedTeams.length > 1 ? ` +${joinedTeams.length - 1}` : ''}` : 'No team joined'}</Text></View>
+              <View style={[styles.location, { marginTop: 0, flexShrink: 1 }]}><Icon name="location-outline" size={13} color={C.ink40} /><Text {...webLayout('profile-meta-label')} numberOfLines={1} style={[styles.locationText, { flex: 0, flexShrink: 1 }]}>{player.location}</Text></View>
             </View>
             <View style={[styles.socialStats, compactPhone && styles.socialStatsCompact]}><Pressable accessibilityRole="button" accessibilityLabel={`${followCounts.followers} followers. Open followers list`} hitSlop={7} onPress={() => navigation.navigate('Connections', { initialTab: 'Followers', openToken: Date.now() })} style={({ pressed }) => [styles.socialStat, pressed && styles.socialStatPressed]}><Text style={styles.socialValue}>{formatSocialCount(followCounts.followers)}</Text><Text style={styles.socialLabel}>Followers</Text></Pressable><View style={styles.socialDivider} /><Pressable accessibilityRole="button" accessibilityLabel={`Following ${followCounts.following} players. Open following list`} hitSlop={7} onPress={() => navigation.navigate('Connections', { initialTab: 'Following', openToken: Date.now() })} style={({ pressed }) => [styles.socialStat, pressed && styles.socialStatPressed]}><Text style={styles.socialValue}>{formatSocialCount(followCounts.following)}</Text><Text style={styles.socialLabel}>Following</Text></Pressable></View>
           </View>
         </View>
         {hasOrganizerAccess && <OrganizerPortalShortcut onOpen={openOrganizerPortal} />}
+        </View>
+        <View {...webLayout('profile-content')}>
         <View style={[styles.tabs, compactPhone && styles.tabsCompact]}>{['Overview', 'Matches', 'Settings'].map((item) => <Pressable key={item} onPress={() => setTab(item)} style={[styles.tab, tab === item && styles.tabActive]}><Text style={[styles.tabText, tab === item && styles.tabTextActive]}>{item}</Text></Pressable>)}</View>
         {tab === 'Overview' && <Overview matches={recordedMatches} onAchievement={setAchievement} onSeeMatches={() => setTab('Matches')} onMatch={setSelectedMatch} onStartFocus={() => {
           navigation.navigate('Play', { focusChallengeToken: Date.now(), focusChallenge: { id: 'return-depth-7-of-10', title: 'Return depth', instruction: 'Land 7 of your first 10 returns past mid-court.', target: 7, attempts: 10 } });
         }} />}
         {tab === 'Matches' && <History source={recordedMatches} onMatch={setSelectedMatch} />}
         {tab === 'Settings' && <Settings preferences={preferences} setPreference={setPreference} onAction={handleSetting} lastLogin={user?.lastLogin} />}
+        </View>
+        </View>
       </ScrollView>
 
       <EditProfile visible={editOpen} player={player} isDark={isDark} onClose={() => setEditOpen(false)} onSave={async (value) => { const saved = await updateProfile(value); setPlayer((current) => ({ ...current, ...saved })); setEditOpen(false); showToast('Profile updated.'); }} />

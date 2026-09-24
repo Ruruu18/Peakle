@@ -1,3 +1,5 @@
+import Modal from '../components/ResponsiveModal';
+import { webLayout, webDialog } from '../utils/webLayout';
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import {
   ActivityIndicator,
@@ -6,7 +8,6 @@ import {
   BackHandler,
   Easing,
   FlatList,
-  Modal,
   Platform,
   Pressable,
   StyleSheet,
@@ -244,9 +245,9 @@ function CourtPicker({ courts, visible, selected, onSelect, onClose }) {
 
   return (
     <Modal visible={visible} transparent animationType="slide" onRequestClose={onClose}>
-      <Pressable accessibilityLabel="Close court picker" style={[styles.modalBackdrop, { paddingBottom: Math.max(insets.bottom, 16) }]} onPress={onClose}>
-        <Pressable accessibilityRole="dialog" testID="court-picker-sheet" style={[styles.courtSheet, { height: sheetHeight }]} onPress={(event) => event.stopPropagation()}>
-          <View style={styles.sheetHandle} />
+      <Pressable {...webDialog('backdrop')} accessibilityLabel="Close court picker" style={[styles.modalBackdrop, { paddingBottom: Math.max(insets.bottom, 16) }]} onPress={onClose}>
+        <Pressable {...webDialog('surface')} accessibilityRole="dialog" testID="court-picker-sheet" style={[styles.courtSheet, { height: sheetHeight }]} onPress={(event) => event.stopPropagation()}>
+          <View {...webDialog('handle')} style={styles.sheetHandle} />
           <View style={styles.sheetHead}><View><Text style={styles.eyebrow}>CONFIRMED RESERVATIONS</Text><Text style={styles.sheetTitle}>Choose a booked court</Text></View><Pressable accessibilityLabel="Close" onPress={onClose} style={styles.sheetClose}><Icon name="close" /></Pressable></View>
           <Text style={styles.sheetLead}>Only courts covered by your confirmed bookings are available.</Text>
           <FlatList
@@ -342,7 +343,7 @@ function PlayChoiceScreen({ onFindPlay, onSetupMatch, unfinishedMatch, onResume 
         <Text style={styles.choiceIntroText}>Find people nearby or set up a match you already have.</Text>
       </View>
 
-      <View accessibilityRole="group" accessibilityLabel="Ways to play" style={styles.playChoices}>
+      <View {...webLayout('two-columns')} accessibilityRole="group" accessibilityLabel="Ways to play" style={styles.playChoices}>
         <Pressable
           accessibilityRole="button"
           accessibilityLabel="Find a play"
@@ -1048,8 +1049,8 @@ function ScoreTeam({ index, players, score, games, serving, winner, disabled, on
 function ConfirmEndModal({ visible, onCancel, onConfirm, onSaveUnfinished }) {
   return (
     <Modal visible={visible} transparent animationType="fade" onRequestClose={onCancel}>
-      <Pressable accessibilityLabel="Cancel ending match" style={styles.modalBackdrop} onPress={onCancel}>
-        <Pressable accessibilityRole="dialog" style={styles.dialog} onPress={(event) => event.stopPropagation()}>
+      <Pressable {...webDialog('backdrop')} accessibilityLabel="Cancel ending match" style={styles.modalBackdrop} onPress={onCancel}>
+        <Pressable {...webDialog('surface')} accessibilityRole="dialog" style={styles.dialog} onPress={(event) => event.stopPropagation()}>
           <View style={styles.dialogIcon}><Icon name="flag-outline" size={26} color={C.brick} /></View>
           <Text style={styles.dialogTitle}>End this match?</Text>
           <Text style={styles.dialogBody}>Save it as unfinished to resume later without affecting your record, or end it now as a final result.</Text>
@@ -1065,8 +1066,8 @@ function ServerSelectionModal({ visible, teamName, players, onCancel, onSelect }
   if (!visible) return null;
   return (
     <Modal visible={visible} transparent animationType="fade" onRequestClose={onCancel}>
-      <Pressable accessibilityLabel="Cancel server selection" style={styles.modalBackdrop} onPress={onCancel}>
-        <Pressable accessibilityRole="dialog" style={styles.dialog} onPress={(event) => event.stopPropagation()}>
+      <Pressable {...webDialog('backdrop')} accessibilityLabel="Cancel server selection" style={styles.modalBackdrop} onPress={onCancel}>
+        <Pressable {...webDialog('surface')} accessibilityRole="dialog" style={styles.dialog} onPress={(event) => event.stopPropagation()}>
           <View style={[styles.dialogIcon, { backgroundColor: '#E5F0ED' }]}><Icon name="tennisball-outline" size={26} color={C.teal} /></View>
           <Text style={styles.dialogTitle}>Who is serving?</Text>
           <Text style={styles.dialogBody}>Correct the serving player and server number for {teamName}. This does not award a point.</Text>
@@ -1737,12 +1738,16 @@ function LiveMatch({ match, sharedSession = null, currentUserId, onSyncSharedSta
       {!canScore && <View style={styles.scorerWatchBanner}><Icon name="eye-outline" color={C.teal} /><View style={styles.flex}><Text style={styles.scorerWatchTitle}>Watching live score</Text><Text style={styles.scorerWatchText}>{liveMatch.scorer} has the scoring controls. Score changes and rally announcements appear here automatically.</Text></View></View>}
       {paused && <View style={styles.pausedBanner}><Icon name="pause-circle" color={C.teal} /><Text style={styles.pausedText}>Match paused — scoring is locked.</Text></View>}
 
+      <View {...webLayout('live-grid')}>
+      <View>
       <LiveCourt match={liveMatch} ballBounce={ballBounce} rallyTravel={rallyTravel} scorerMessage={scorerMessage} paused={paused} breakActive={Boolean(gameBreak)} scores={scores} server={server} servingPlayerIndex={servingPlayerIndex} serviceNumber={serviceNumber} celebration={celebration} pointAnnouncement={pointAnnouncement} canScore={canScore} isHost={isHost} onChangeScorer={openScorerHandoff} />
 
       {gameBreak ? <GameBreakCard gameBreak={gameBreak} canScore={canScore} onContinue={continueAfterBreak} /> : null}
 
       <FocusTracker challenge={match.focusChallenge} returns={focusReturns} paused={scoringLocked} onRecord={(deep) => setFocusReturns((items) => items.length < match.focusChallenge.attempts ? [...items, deep] : items)} onUndo={() => setFocusReturns((items) => items.slice(0, -1))} />
 
+      </View>
+      <View>
       {canScore && !gameBreak && <>
         <View style={styles.liveScoringMethod}>
           <View style={styles.liveScoringMethodCopy}>
@@ -1791,6 +1796,8 @@ function LiveMatch({ match, sharedSession = null, currentUserId, onSyncSharedSta
       </View>
       </>}
 
+      </View>
+      </View>
       <MatchBoxScore match={match} games={games} scores={scores} gameScores={gameScores} elapsed={elapsed} gameElapsed={gameElapsed} gameDurations={gameDurations} gameBreak={gameBreak} />
       <RallyBoxScore rallies={rallyLog} />
 
@@ -1916,9 +1923,9 @@ function ResultScreen({ result, saveState = 'saved', saveError = '', onRetrySave
       </View>
 
       <Modal visible={actionsOpen} transparent animationType="fade" onRequestClose={() => setActionsOpen(false)}>
-        <Pressable accessibilityLabel="Close result actions" style={styles.resultActionsBackdrop} onPress={() => setActionsOpen(false)}>
-          <Pressable accessibilityRole="menu" style={styles.resultActionsSheet} onPress={(event) => event.stopPropagation()}>
-            <View style={styles.resultActionsHandle} />
+        <Pressable {...webDialog('backdrop')} accessibilityLabel="Close result actions" style={styles.resultActionsBackdrop} onPress={() => setActionsOpen(false)}>
+          <Pressable {...webDialog('surface')} accessibilityRole="menu" style={styles.resultActionsSheet} onPress={(event) => event.stopPropagation()}>
+            <View {...webDialog('handle')} style={styles.resultActionsHandle} />
             <View style={styles.resultActionsHeader}><View><Text style={styles.resultSectionEyebrow}>MATCH PHOTO</Text><Text style={styles.resultActionsTitle}>Share your final</Text></View><Pressable accessibilityLabel="Close" onPress={() => setActionsOpen(false)} style={styles.resultActionsClose}><Icon name="close" size={19} color={C.ink} /></Pressable></View>
             <Text style={styles.resultActionsLead}>The score card is formatted as a clean portrait image for My Day, Stories, or your gallery.</Text>
             <Pressable accessibilityRole="menuitem" accessibilityLabel="Save match card to photos" onPress={() => makeMatchPhoto('save')} style={({ pressed }) => [styles.resultActionRow, pressed && styles.pressed]}><View style={styles.resultActionIcon}><Icon name="download-outline" color={C.teal} /></View><View style={styles.flex}><Text style={styles.resultActionTitle}>Save to photos</Text><Text style={styles.resultActionMeta}>Keep a high-quality PNG in your gallery</Text></View><Icon name="chevron-forward" size={17} color={C.ink40} /></Pressable>

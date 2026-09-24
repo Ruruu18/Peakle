@@ -14,6 +14,7 @@ import Ionicons from '@expo/vector-icons/Ionicons';
 import ScrollView from '../components/FocusResetScrollView';
 import ProfilePhoto from '../components/ProfilePhoto';
 import useResponsiveWidth from '../hooks/useResponsiveWidth';
+import { webLayout } from '../utils/webLayout';
 import { useTheme } from '../context/ThemeContext';
 import { loadLeaderboard } from '../services/leaderboard';
 
@@ -300,10 +301,11 @@ export default function LeaderboardScreen({ navigation, route }) {
 
         {!loading && !error && data ? (
           <>
+            <View {...webLayout('leaderboard')}>
+            <View>
             <RankHero data={data} format={format} areaLabel={areaLabel} palette={palette} />
 
-            {standings.length ? (
-              <>
+            {standings.length ? <>
                 <View style={styles.sectionHead}>
                   <View>
                     <Text style={[styles.sectionEyebrow, { color: palette.teal }]}>THE PODIUM</Text>
@@ -315,7 +317,10 @@ export default function LeaderboardScreen({ navigation, route }) {
                   </View>
                 </View>
                 <Podium players={topThree} currentUserId={data.user.id} palette={palette} />
-
+            </> : null}
+            </View>
+            <View>
+            {standings.length ? <>
                 <View style={[styles.sectionHead, styles.standingsHead]}>
                   <View>
                     <Text style={[styles.sectionEyebrow, { color: palette.teal }]}>TOP {standings.length}</Text>
@@ -326,8 +331,9 @@ export default function LeaderboardScreen({ navigation, route }) {
                 <View style={[styles.standingsCard, { backgroundColor: palette.surface, borderColor: palette.line }]}>
                   {standings.map((player, index) => <StandingRow key={player.id} player={player} currentUserId={data.user.id} palette={palette} divider={index > 0} />)}
                 </View>
-              </>
-            ) : <EmptyState format={format} palette={palette} />}
+            </> : <EmptyState format={format} palette={palette} />}
+            </View>
+            </View>
 
             <View style={styles.integrityNote}>
               <Ionicons name="shield-checkmark-outline" size={16} color={palette.teal} />
@@ -343,7 +349,7 @@ export default function LeaderboardScreen({ navigation, route }) {
 const styles = StyleSheet.create({
   safe: { flex: 1 },
   scroll: { flex: 1 },
-  wideContainer: { width: '100%', maxWidth: 760, alignSelf: 'center' },
+  wideContainer: { width: '100%', maxWidth: Platform.OS === 'web' ? 1040 : 760, alignSelf: 'center' },
   topbar: { minHeight: 76, paddingHorizontal: 20, flexDirection: 'row', alignItems: 'center' },
   iconButton: { width: 44, height: 44, alignItems: 'center', justifyContent: 'center', borderWidth: 1, borderRadius: 15 },
   titleCopy: { flex: 1, minWidth: 0, paddingHorizontal: 13 },

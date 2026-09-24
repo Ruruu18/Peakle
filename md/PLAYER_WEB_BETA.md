@@ -124,6 +124,31 @@ tournament acceptance scenario.
 
 ## Verification
 
+The player web app switches to a 224px left sidebar at **1024px**. Screen content
+is centered within the remaining space and capped at 1040px (about 1000px after
+padding). Home, Leaderboard, Profile, Teams, Play, and live scoring use two
+columns; court discovery and public activities use two columns, then three at
+1440px. Smaller browser windows retain the bottom tabs and compact layout.
+Native navigation and breakpoints are unchanged.
+
+Web dialog styling uses explicit `webDialog` hooks for centered, bounded,
+scrollable surfaces. Native sheets retain their styles. React Native Web's
+modal focus management and Escape handling remain in use, including the team
+creation form. Resizing preserves the active screen and unsaved inputs.
+
+With the preview server running, the additional desktop checks are:
+
+```sh
+node scripts/player-web-qa.mjs --flows-only --desktop-flows
+node scripts/player-web-focus-qa.mjs --desktop
+```
+
+The main browser suite checks player routes at 320, 390, 768, 1023, 1024, 1280,
+and 1440px. The desktop suite also tests populated grids, 600px-tall windows,
+notifications, location selection, profile editing, player status, team creation,
+dark mode, and resizing while editing. Requests to external services are
+intercepted by fixtures; these checks never change real accounts.
+
 ```sh
 npm test -- --runInBand
 npm run build:web
@@ -141,10 +166,10 @@ These checks cover browser behavior and client requests; they do not establish
 that the deployed project's RLS, email provider, realtime subscriptions, or
 organizer setup are configured correctly.
 
-Layout checks cover login, nine signed-in routes, and live scoring at 320, 390,
-768, and 1440px browser widths. They check the centered app column, navigation
-visibility, and horizontal clipping in vertical scroll views, and capture a
-screenshot of each signed-in route at every size.
+Layout checks cover login, 22 signed-in routes, and live scoring at all seven
+viewport widths. They check content bounds, sidebar and bottom-tab placement,
+navigation visibility, and horizontal clipping in vertical scroll views, and
+capture a screenshot of each signed-in route at every size.
 
 Before inviting the community, run a short rehearsal on the hosted beta with
 an organizer and at least two real player accounts. Confirm email/Google

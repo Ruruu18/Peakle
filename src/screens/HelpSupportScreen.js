@@ -1,10 +1,11 @@
+import Modal from '../components/ResponsiveModal';
+import { webDialog } from '../utils/webLayout';
 import React, { useMemo, useState } from 'react';
 import {
   ActivityIndicator,
   Image,
   KeyboardAvoidingView,
   Linking,
-  Modal,
   Platform,
   Pressable,
   ScrollView,
@@ -179,10 +180,10 @@ function ContactModal({ visible, onClose, user, C, onStarted }) {
   return (
     <Modal visible={visible} transparent animationType="slide" onRequestClose={close}>
       <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : undefined} style={s.modalKeyboard}>
-        <View style={s.backdrop}>
+        <View {...webDialog('backdrop')} style={s.backdrop}>
           <Pressable accessibilityLabel="Close contact support" onPress={close} style={s.backdropDismiss} />
-          <View style={[s.sheet, { backgroundColor: C.paper }]}>
-            <View style={[s.handle, { backgroundColor: C.line }]} />
+          <View {...webDialog('surface')} style={[s.sheet, { backgroundColor: C.paper }]}>
+            <View {...webDialog('handle')} style={[s.handle, { backgroundColor: C.line }]} />
             <View style={s.sheetHeader}>
               <View style={s.flex}>
                 <Text style={[s.eyebrow, { color: C.ink40 }]}>CONTACT SUPPORT</Text>

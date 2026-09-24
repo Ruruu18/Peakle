@@ -4,8 +4,10 @@ import { mkdirSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { installBackend, signInFixture, competitionId, divisionId, sessionId } from './player-web-fixtures.mjs';
+import { checkDesktopLayouts } from './player-web-desktop-checks.mjs';
+const flowViewport = process.argv.includes('--desktop-flows') ? { width: 1440, height: 1000 } : { width: 390, height: 844 };
 const baseUrl = process.env.PLAYER_WEB_URL || 'http://localhost:8081';
-const viewports = [['small-phone', 320, 568], ['phone', 390, 844], ['tablet', 768, 1024], ['desktop', 1440, 1000]];
+const viewports = [['small-phone', 320, 568], ['phone', 390, 844], ['tablet', 768, 1024], ['before-desktop', 1023, 768], ['desktop-breakpoint', 1024, 768], ['laptop', 1280, 800], ['desktop', 1440, 1000]];
 const browser = await puppeteer.launch({ headless: true });
 const artifacts = join(tmpdir(), 'peakle-player-web-qa');
 mkdirSync(artifacts, { recursive: true });
@@ -44,11 +46,12 @@ try {
   player.on('pageerror', (error) => { errors.push(error.message); console.error('Browser error:', error.message); });
   player.on('console', checkConsole);
   const backend = await installBackend(player, baseUrl);
-  await player.setViewport({ width: 390, height: 844 });
+  await player.setViewport(flowViewport);
   await signInFixture(player, baseUrl);
   assert.ok(backend.requests.some(r => r.resource === 'token' && r.body.grant_type !== 'refresh_token'), 'Password login reaches the auth API');
   console.log('Password login passed');
-  for (const path of (process.argv.includes('--flows-only') ? [] : ['/', '/teams', '/explore', '/play', '/compete', '/leaderboard', '/profile', `/competitions/${competitionId}/divisions/${divisionId}`, `/sessions/${sessionId}`])) {
+  if (process.argv.includes('--desktop-flows')) await checkDesktopLayouts(player, backend, baseUrl, artifacts);
+  for (const path of (process.argv.includes('--flows-only') ? [] : ['/', '/teams', '/explore', '/play', '/compete', '/leaderboard', '/profile', '/activities', '/privacy', '/legal/privacy', '/legal/terms', '/account-deletion', '/payment-history', '/help', '/support', '/chats', '/connections', '/players/11111111-1111-4111-8111-111111111111', `/activities/competition/${competitionId}`, `/chats/competition/${competitionId}`, `/competitions/${competitionId}/divisions/${divisionId}`, `/sessions/${sessionId}`])) {
     await player.goto(`${baseUrl}${path}`, { waitUntil: 'networkidle2' });
     await player.waitForSelector('[aria-label="Play tab"]');
     if (path === '/teams') await player.waitForSelector('[aria-label="Open Community Clan chat"]', { timeout: 15000 });
@@ -66,9 +69,15 @@ try {
           return element.checkVisibility() && ['auto', 'scroll'].includes(style.overflowY)
             && style.overflowX === 'hidden' && element.scrollWidth > element.clientWidth + 1;
         }).map((element) => ({ width: element.clientWidth, contentWidth: element.scrollWidth, text: element.innerText.slice(0, 120) }));
-        return { left: shell.left, right: shell.right, width: shell.width, pageWidth: document.documentElement.scrollWidth, tabBottom: tab.bottom, tabRight: tab.right, overflowingScrollViews };
+        const scene = document.querySelector('[data-browser-scene]:not([inert])').getBoundingClientRect();
+        const navigation = document.querySelector('[data-player-navigation]').getBoundingClientRect();
+        return { sceneLeft: scene.left, sceneWidth: scene.width, navigationRight: navigation.right, navigationWidth: navigation.width, navigationHeight: navigation.height, left: shell.left, right: shell.right, width: shell.width, pageWidth: document.documentElement.scrollWidth, tabBottom: tab.bottom, tabRight: tab.right, overflowingScrollViews };
       });
-      assert.ok(layout.left >= 0 && layout.right <= width + 1 && layout.width <= 561 && layout.pageWidth <= width + 1, `${path} at ${name}: app fits its column`);
+      assert.ok(layout.left >= 0 && layout.right <= width + 1 && layout.width <= (width >= 1024 ? width : 561) && layout.pageWidth <= width + 1, `${path} at ${name}: app fits its column`);
+      if (width >= 1024) {
+        assert.ok(layout.navigationWidth === 224 && layout.navigationHeight > height - 60, `${path} at ${name}: sidebar fills the left edge`);
+        assert.ok(layout.sceneLeft >= layout.navigationRight && layout.sceneWidth >= 790 && layout.sceneWidth <= 1041, `${path} at ${name}: content widens without overlapping navigation`);
+      }
       assert.ok(layout.tabRight <= layout.right + 1 && layout.tabBottom <= height + 1, `${path} at ${name}: navigation stays visible`);
       assert.deepEqual(layout.overflowingScrollViews, [], `${path} at ${name}: vertical content is not clipped horizontally`);
       await player.screenshot({ path: `${artifacts}/peakle-beta-auth-${path.split('/')[1] || 'home'}-${name}.png`, fullPage: true });
@@ -76,7 +85,7 @@ try {
     console.log('Route loaded:', path);
     assert.equal(await player.$('[aria-label="Open messages"]'), null);
   }
-  await player.setViewport({ width: 390, height: 844 });
+  await player.setViewport(flowViewport);
   const clickText = (text) => player.locator(`::-p-text(${text})`).click();
   const clickLabel = async (label) => { const selector = `[aria-label="${label}"]:not([aria-disabled="true"])`; await player.waitForSelector(selector); await player.locator(selector).click(); };
   const go = async (path) => { await player.goto(`${baseUrl}${path}`, { waitUntil: 'networkidle2' }); await player.waitForSelector('[aria-label="Play tab"]'); };
@@ -144,8 +153,8 @@ try {
     assert.ok(bounds.left >= 0 && bounds.right <= width + 1 && bounds.tabRight <= width + 1 && bounds.tabBottom <= height + 1, `${name}: scoring and navigation fit the viewport`);
     await player.screenshot({ path: `${artifacts}/peakle-beta-live-${name}.png` });
   }
-  await player.setViewport({ width: 390, height: 844 });
-  console.log('Live scoring layout passed at 320, 390, 768, and 1440px');
+  await player.setViewport(flowViewport);
+  console.log('Live scoring layout passed at all phone, tablet, and desktop viewports');
   await player.reload({ waitUntil: 'networkidle2' });
   await player.locator('[aria-label="Resume saved match"]').click();
   await player.waitForSelector('[aria-label="Team 1 score 1"]');

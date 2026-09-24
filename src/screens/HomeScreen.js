@@ -18,6 +18,8 @@ import NotificationSheet from '../components/NotificationSheet';
 import ProfilePhoto from '../components/ProfilePhoto';
 import ScrollView from '../components/FocusResetScrollView';
 import useResponsiveWidth from '../hooks/useResponsiveWidth';
+import useDesktopLayout from '../hooks/useDesktopLayout';
+import { webLayout } from '../utils/webLayout';
 import { useAuth } from '../context/AuthContext';
 import { distanceInKm, formatDistance, useUserLocation } from '../context/LocationContext';
 import { useOperations } from '../context/OperationsContext';
@@ -430,7 +432,8 @@ export default function HomeScreen() {
   const { isDark, toggleColorMode } = useTheme();
   const { userLocation } = useUserLocation();
   const width = useResponsiveWidth();
-  const tablet = width >= 840;
+  const desktop = useDesktopLayout();
+  const tablet = desktop || width >= 840;
   const compactHeader = width <= 440;
   const [notifications, setNotifications] = useState(false);
   const [locationOpen, setLocationOpen] = useState(false);
@@ -705,7 +708,7 @@ export default function HomeScreen() {
       {activitiesLoading && !activityPreview.length
         ? <View style={[styles.openPlayLoadingCard, isDark && darkStyles.card]}><ActivityIndicator color={C.teal} /><Text style={[styles.openPlayLoadingText, isDark && darkStyles.mutedText]}>Finding activities near you…</Text></View>
         : activityPreview.length
-          ? <ScrollView horizontal={activityPreview.length > 1} showsHorizontalScrollIndicator={false} contentContainerStyle={[styles.openPlayScroll, activityPreview.length === 1 && styles.openPlayScrollSingle]}>
+          ? <ScrollView {...webLayout('home-cards')} horizontal={activityPreview.length > 1} showsHorizontalScrollIndicator={false} contentContainerStyle={[styles.openPlayScroll, activityPreview.length === 1 && styles.openPlayScrollSingle]}>
               {activityPreview.map((activity) => <PublicActivityCard key={activity.id} activity={activity} userLocation={userLocation} wide={tablet} single={activityPreview.length === 1} onPress={() => openActivity(activity)} />)}
             </ScrollView>
           : <View style={[styles.emptyDataCard, isDark && darkStyles.card]}><Icon name="compass-outline" size={25} color={C.teal} /><Text style={[styles.emptyDataTitle, isDark && darkStyles.text]}>No public activities yet</Text><Text style={[styles.emptyDataText, isDark && darkStyles.mutedText]}>Public open play, competitions, clinics, coaching, and camps will appear here.</Text></View>}
@@ -717,7 +720,7 @@ export default function HomeScreen() {
       {suggestionsLoading && !suggestedPlayers.length ? (
         <View style={[styles.suggestionsLoadingCard, isDark && darkStyles.card]}><ActivityIndicator color={C.teal} /><Text style={[styles.openPlayLoadingText, isDark && darkStyles.mutedText]}>Finding players for you…</Text></View>
       ) : suggestedPlayers.length ? (
-        <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.suggestionsScroll}>
+        <ScrollView {...webLayout('home-cards')} horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.suggestionsScroll}>
           {suggestedPlayers.map((player) => <SuggestedPlayerCard key={player.id} player={player} wide={tablet} busy={followingPlayerId === player.id} onFollow={requestSuggestedFollow} onPress={() => navigation.navigate('PublicProfile', { player })} />)}
         </ScrollView>
       ) : (
@@ -751,7 +754,7 @@ export default function HomeScreen() {
   const nearby = (
     <View style={styles.section}>
       <SectionTitle eyebrow="COURT LOCATIONS" title="Nearby courts" right={<View style={styles.nearbyHeaderActions}>{nearbyCourts.length > nearbyPreview.length && <Pressable accessibilityLabel="See all nearby courts" onPress={() => navigation.navigate('Book')} style={styles.nearbySeeAll}><Text style={styles.nearbySeeAllText}>See all</Text></Pressable>}<Pressable accessibilityLabel="Change search location" onPress={() => setLocationOpen(true)} style={[styles.seeAll, isDark && darkStyles.locationPill]}><Icon name="location-outline" size={13} color={isDark ? '#D5DFDB' : C.teal} /><Text numberOfLines={1} style={[styles.seeAllText, isDark && darkStyles.locationPillText]}>{shortLocation}</Text><Icon name="chevron-down" size={12} color={isDark ? '#D5DFDB' : C.teal} /></Pressable></View>} />
-      {nearbyCourts.length ? <ScrollView horizontal={nearbyPreview.length > 1} showsHorizontalScrollIndicator={false} contentContainerStyle={[styles.courtScroll, nearbyPreview.length === 1 && styles.courtScrollSingle]}>
+      {nearbyCourts.length ? <ScrollView {...webLayout('home-cards')} horizontal={nearbyPreview.length > 1} showsHorizontalScrollIndicator={false} contentContainerStyle={[styles.courtScroll, nearbyPreview.length === 1 && styles.courtScrollSingle]}>
         {nearbyPreview.map((court) => <CourtCard key={court.id} court={court} wide={tablet} single={nearbyPreview.length === 1} onPress={() => navigation.navigate('Book', { courtId: court.id, from: 'Home' })} />)}
       </ScrollView> : <View style={[styles.emptyDataCard, isDark && darkStyles.card]}><Icon name="location-outline" size={25} color={C.teal} /><Text style={[styles.emptyDataTitle, isDark && darkStyles.text]}>No bookable courts yet</Text><Text style={[styles.emptyDataText, isDark && darkStyles.mutedText]}>Active venues will appear here when they are added.</Text></View>}
     </View>
@@ -761,7 +764,7 @@ export default function HomeScreen() {
   return (
     <SafeAreaView style={[styles.safe, isDark && darkStyles.safe]}>
       <StatusBar style={isDark ? 'light' : 'dark'} backgroundColor={isDark ? C.ink : C.paper} />
-      <ScrollView style={styles.scroll} contentContainerStyle={[styles.content, compactHeader && styles.contentCompact, tablet && styles.contentTablet]} showsVerticalScrollIndicator={false}>
+      <ScrollView style={styles.scroll} contentContainerStyle={[styles.content, compactHeader && styles.contentCompact, tablet && styles.contentTablet, desktop && styles.contentDesktop]} showsVerticalScrollIndicator={false}>
         <View style={[styles.header, compactHeader && styles.headerCompact]}>
           <View style={styles.headerProfileGroup}>
             <ProfilePhoto photo={user?.picture || user?.avatar} name={displayName} size={40} />
@@ -777,7 +780,7 @@ export default function HomeScreen() {
           </View>
         </View>
         <KitchenLine style={[styles.headerLine, compactHeader && styles.headerLineCompact]} />
-        {tablet ? <View style={styles.tabletGrid}><View style={styles.primaryColumn}>{schedule}{discovery}{peopleYouMayKnow}{nearby}</View><View style={styles.secondaryColumn}>{gameOverview}{feed}</View></View> : <>{schedule}{discovery}{peopleYouMayKnow}{gameOverview}{nearby}{feed}</>}
+        {tablet ? <View {...webLayout('home')} style={styles.tabletGrid}><View style={styles.primaryColumn}>{schedule}{discovery}{peopleYouMayKnow}{nearby}</View><View style={styles.secondaryColumn}>{gameOverview}{feed}</View></View> : <>{schedule}{discovery}{peopleYouMayKnow}{gameOverview}{nearby}{feed}</>}
       </ScrollView>
       <NotificationSheet visible={notifications} onClose={() => setNotifications(false)} items={notices} unreadCount={unreadCount} onRead={(id) => readNotification(id).catch((error) => Alert.alert('Notifications', error.message || 'This notification could not be marked as read.'))} onReadAll={() => readAllNotifications().catch((error) => Alert.alert('Notifications', error.message || 'Notifications could not be marked as read.'))} onDelete={removeNotification} onClearRead={clearNotifications} onFollowResponse={(item, accept) => respondFollowRequest(item.data?.requesterId, accept, item.id)} onOpen={(item) => { if (!item.read_at) readNotification(item.id).catch(() => {}); setNotifications(false); if (item.kind === 'community_announcement' && item.data?.eventKind && item.data?.eventId) navigation.navigate('CommunityChat', { eventKind: item.data.eventKind, eventId: item.data.eventId, ownerTab: 'Home' }); else if (item.data?.conversationId) navigation.navigate('DirectChat', { conversationId: item.data.conversationId, player: item.data?.playerId ? { id: item.data.playerId } : undefined, ownerTab: 'Team' }); else if (item.data?.sessionId) navigation.navigate('OpenPlayActivity', { token: Date.now(), sessionId: item.data.sessionId, direct: true, returnTo: 'Home' }); }} />
       <LocationPicker visible={locationOpen} onClose={() => setLocationOpen(false)} />
@@ -788,6 +791,7 @@ export default function HomeScreen() {
 
 const shadow = Platform.select({ ios: { shadowColor: C.ink, shadowOpacity: 0.08, shadowRadius: 12, shadowOffset: { width: 0, height: 4 } }, android: { elevation: 3 } });
 const styles = createMobileStyleSheet({
+  contentDesktop: { paddingHorizontal: 24, maxWidth: 1040, paddingBottom: 40 },
   safe: { flex: 1, backgroundColor: C.paper },
   scroll: { flex: 1 }, content: { paddingHorizontal: 20, paddingTop: 18, paddingBottom: 126 }, contentCompact: { paddingHorizontal: 16, paddingTop: 22 }, contentTablet: { paddingHorizontal: 34, maxWidth: 1200, width: '100%', alignSelf: 'center' },
   header: { minHeight: 44, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 12 }, headerCompact: { minHeight: 48, gap: 9 }, headerProfileGroup: { flex: 1, minWidth: 0, flexDirection: 'row', alignItems: 'center', gap: 10 }, headerIdentityCopy: { flex: 1, minWidth: 0 }, eyebrow: { color: C.ink40, fontSize: 10, lineHeight: 15, fontWeight: '700', letterSpacing: 1.05 }, eyebrowLight: { color: 'rgba(243,245,239,0.52)' },

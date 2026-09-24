@@ -1,5 +1,7 @@
+import Modal from './ResponsiveModal';
+import { webDialog } from '../utils/webLayout';
 import React from 'react';
-import { ActivityIndicator, Modal, Pressable, StyleSheet, Text, View } from 'react-native';
+import { ActivityIndicator, Pressable, StyleSheet, Text, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import Ionicons from '@expo/vector-icons/Ionicons';
 import { DARK_CONTENT_COLORS, LIGHT_CONTENT_COLORS, useTheme } from '../context/ThemeContext';
@@ -14,15 +16,15 @@ export default function LeaveMatchDialog({ visible, hostName, busy = false, erro
 
   return (
     <Modal visible={visible} transparent animationType="fade" onRequestClose={() => { if (!busy) onCancel(); }}>
-      <Pressable accessibilityLabel="Close leave match dialog" disabled={busy} onPress={onCancel} style={styles.backdrop}>
-        <Pressable
+      <Pressable {...webDialog('backdrop')} accessibilityLabel="Close leave match dialog" disabled={busy} onPress={onCancel} style={styles.backdrop}>
+        <Pressable {...webDialog('surface')}
           accessibilityRole="dialog"
           accessibilityLabel="Leave this match?"
           testID="leave-match-dialog"
           onPress={(event) => event.stopPropagation()}
           style={[styles.sheet, { paddingBottom: Math.max(insets.bottom, 18), backgroundColor: palette.surface, borderColor: palette.line }]}
         >
-          <View style={[styles.handle, { backgroundColor: palette.line }]} />
+          <View {...webDialog('handle')} style={[styles.handle, { backgroundColor: palette.line }]} />
           <View style={[styles.icon, { backgroundColor: palette.brickWash }]}>
             <Ionicons name="exit-outline" size={26} color={palette.error} />
           </View>

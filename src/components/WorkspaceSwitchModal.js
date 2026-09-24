@@ -1,5 +1,7 @@
+import Modal from './ResponsiveModal';
+import { webDialog } from '../utils/webLayout';
 import React from 'react';
-import { Image, Modal, Platform, Pressable, StyleSheet, Text, View } from 'react-native';
+import { Image, Platform, Pressable, StyleSheet, Text, View } from 'react-native';
 import Ionicons from '@expo/vector-icons/Ionicons';
 import { createDarkStyleSheet, DARK_CONTENT_COLORS, useTheme } from '../context/ThemeContext';
 import { createMobileStyleSheet } from '../utils/mobileStyles';
@@ -18,8 +20,8 @@ export default function WorkspaceSwitchModal({ nextMode, onCancel, onConfirm }) 
   const organizer = nextMode === 'organizer';
 
   return <Modal visible={Boolean(nextMode)} transparent animationType="fade" onRequestClose={onCancel}>
-    <Pressable accessibilityLabel="Cancel workspace change" onPress={onCancel} style={styles.backdrop}>
-      <Pressable accessibilityRole="alert" onPress={(event) => event.stopPropagation()} style={styles.dialog}>
+    <Pressable {...webDialog('backdrop')} accessibilityLabel="Cancel workspace change" onPress={onCancel} style={styles.backdrop}>
+      <Pressable {...webDialog('surface')} accessibilityRole="alert" onPress={(event) => event.stopPropagation()} style={styles.dialog}>
         <View style={styles.dialogIcon}>{organizer ? <Ionicons name="key-outline" size={27} color="#0E2321" /> : <Image source={BALL_IMAGE} style={{ width: 27, height: 27, tintColor: '#0E2321' }} resizeMode="contain" />}</View>
         <Text style={styles.eyebrow}>CHANGE APP MODE</Text>
         <Text style={styles.title}>Switch to {organizer ? 'Organizer' : 'Player'}?</Text>

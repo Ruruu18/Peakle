@@ -1,3 +1,5 @@
+import Modal from '../components/ResponsiveModal';
+import { webLayout, webDialog } from '../utils/webLayout';
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   Animated,
@@ -5,7 +7,6 @@ import {
   Dimensions,
   Easing,
   KeyboardAvoidingView,
-  Modal,
   PanResponder,
   Platform,
   Pressable,
@@ -361,9 +362,9 @@ function PeopleModal({ details, onClose }) {
   const people = details?.people || [];
   return (
     <Modal visible={Boolean(details)} transparent animationType="fade" onRequestClose={onClose}>
-      <View style={styles.peopleModalBackdrop}>
+      <View {...webDialog('backdrop')} style={styles.peopleModalBackdrop}>
         <Pressable accessibilityLabel="Close people list" onPress={onClose} style={StyleSheet.absoluteFillObject} />
-        <View style={styles.peopleModalCard}>
+        <View {...webDialog('surface')} style={styles.peopleModalCard}>
           <View style={styles.peopleModalHeader}><Text style={styles.peopleModalTitle}>{details?.title || 'People'}</Text><Pressable accessibilityLabel="Close people list" onPress={onClose} style={styles.peopleModalClose}><Icon name="close" size={19} color={C.ink70} /></Pressable></View>
           <Text style={styles.peopleModalSummary}>{peopleSummary(people)}</Text>
           <ScrollView style={styles.peopleModalList} contentContainerStyle={styles.peopleModalListContent} showsVerticalScrollIndicator={false}>
@@ -445,10 +446,10 @@ function ChatReportModal({ message, onClose, onSubmit }) {
   };
   return (
     <Modal visible={Boolean(message)} transparent animationType="slide" onRequestClose={() => !busy && onClose()}>
-      <View style={styles.reportBackdrop}>
+      <View {...webDialog('backdrop')} style={styles.reportBackdrop}>
         <Pressable accessibilityLabel="Close report form" disabled={busy} onPress={onClose} style={StyleSheet.absoluteFillObject} />
-        <View style={styles.reportSheet}>
-          <View style={styles.actionSheetHandle} />
+        <View {...webDialog('surface')} style={styles.reportSheet}>
+          <View {...webDialog('handle')} style={styles.actionSheetHandle} />
           <View style={styles.reportHead}><View style={styles.reportHeadIcon}><Icon name="flag" color={C.brick} /></View><View style={styles.rosterCopy}><Text style={styles.reportTitle}>Report message</Text><Text style={styles.reportSubtitle}>The message will be hidden while the report is reviewed.</Text></View><Pressable disabled={busy} onPress={onClose} style={styles.peopleModalClose}><Icon name="close" size={18} color={C.ink70} /></Pressable></View>
           <ScrollView style={styles.reportScroll} contentContainerStyle={styles.reportContent} keyboardShouldPersistTaps="handled">
             <Text style={styles.reportLabel}>WHAT HAPPENED?</Text>
@@ -504,7 +505,7 @@ function MessageInteractionModal({ message, visible, mode, canModerate, onModeCh
   const preview = message.deletedAt ? 'Message unsent' : (message.text || (message.video ? 'Video' : 'Photo'));
   return (
     <Modal visible={visible} transparent animationType="fade" onRequestClose={onClose}>
-      <View style={styles.interactionBackdrop}>
+      <View {...webDialog('backdrop')} style={styles.interactionBackdrop}>
         <Pressable accessibilityLabel="Close message actions" onPress={onClose} style={StyleSheet.absoluteFillObject} />
         {mode === 'reactions' && <Animated.View style={[styles.interactionContent, message.mine && styles.interactionContentMine, {
           opacity: reveal,
@@ -516,8 +517,8 @@ function MessageInteractionModal({ message, visible, mode, canModerate, onModeCh
             <Pressable accessibilityLabel="More message actions" onPress={() => onModeChange('actions')} style={styles.moreMessageButton}><Icon name="ellipsis-horizontal" size={22} color={C.ink} /></Pressable>
           </View>
         </Animated.View>}
-        {mode === 'actions' && <View style={styles.messageActionSheet}>
-          <View style={styles.actionSheetHandle} />
+        {mode === 'actions' && <View {...webDialog('surface')} style={styles.messageActionSheet}>
+          <View {...webDialog('handle')} style={styles.actionSheetHandle} />
           <Text style={styles.actionSheetTitle}>Message options</Text>
           <View {...reactionPan.panHandlers} style={[styles.floatingReactionPicker, styles.actionSheetReactionPicker]}>{REACTION_OPTIONS.map((emoji, index) => <Pressable key={emoji} accessibilityLabel={`React ${emoji}`} onPress={() => { onReact(message.id, emoji); onClose(); }} style={[styles.floatingReactionOption, hoveredReaction === index && styles.floatingReactionOptionActive]}><Text style={styles.floatingReactionText}>{emoji}</Text></Pressable>)}</View>
           <Pressable onPress={() => { onClose(); onPin(message.id); }} style={styles.actionSheetRow}><View style={styles.actionSheetIcon}><Icon name={message.pinned ? 'pin' : 'pin-outline'} size={20} color={C.teal} /></View><View style={styles.actionSheetCopy}><Text style={styles.actionSheetRowTitle}>{message.pinned ? 'Unpin message' : 'Pin message'}</Text><Text style={styles.actionSheetRowText}>{message.pinned ? 'Remove this from the team chat info' : 'Keep this easy for everyone to find'}</Text></View></Pressable>
@@ -852,10 +853,10 @@ function MemberManagementModal({ member, visible, managerRole, onClose, onChange
   );
   return (
     <Modal visible={visible} transparent animationType="slide" onRequestClose={() => !busy && onClose()}>
-      <View style={styles.memberManagementBackdrop}>
+      <View {...webDialog('backdrop')} style={styles.memberManagementBackdrop}>
         <Pressable accessibilityLabel="Close member management" disabled={busy} onPress={onClose} style={StyleSheet.absoluteFillObject} />
-        <View style={[styles.memberManagementSheet, { maxHeight: Math.min(680, windowHeight - Math.max(insets.top, 12) - 12) }]}>
-          <View style={styles.actionSheetHandle} />
+        <View {...webDialog('surface')} style={[styles.memberManagementSheet, { maxHeight: Math.min(680, windowHeight - Math.max(insets.top, 12) - 12) }]}>
+          <View {...webDialog('handle')} style={styles.actionSheetHandle} />
           <View style={styles.memberManagementHead}>
             <ProfilePhoto photo={member.avatar} name={member.name} size={48} />
             <View style={styles.rosterCopy}><Text style={styles.memberManagementTitle}>{member.name}</Text><Text style={styles.memberManagementCurrent}>{member.role}</Text></View>
@@ -955,10 +956,10 @@ function TeamScorerPicker({ visible, team, currentUserId, selectedId = null, bus
   });
   return (
     <Modal visible={visible} transparent animationType="slide" onRequestClose={() => !busy && onClose()}>
-      <View style={styles.scorerPickerBackdrop}>
+      <View {...webDialog('backdrop')} style={styles.scorerPickerBackdrop}>
         <Pressable accessibilityLabel="Close scorer selection" disabled={busy} onPress={onClose} style={StyleSheet.absoluteFillObject} />
-        <View style={styles.scorerPickerSheet}>
-          <View style={styles.actionSheetHandle} />
+        <View {...webDialog('surface')} style={styles.scorerPickerSheet}>
+          <View {...webDialog('handle')} style={styles.actionSheetHandle} />
           <View style={styles.scorerPickerHead}><View><Text style={styles.eyebrow}>{changing ? 'LIVE MATCH' : 'MATCH SETUP'}</Text><Text style={styles.scorerPickerTitle}>{changing ? 'Change the scorer' : 'Choose the scorer'}</Text></View><Pressable accessibilityLabel="Close" disabled={busy} onPress={onClose} style={styles.peopleModalClose}><Icon name="close" size={18} color={C.ink70} /></Pressable></View>
           <Text style={styles.scorerPickerHelp}>Scoring controls will be available on this player’s phone. You can choose any signed-in member of {team?.name || 'your team'}.</Text>
           <ScrollView style={styles.scorerPickerList} showsVerticalScrollIndicator={false} nestedScrollEnabled>
@@ -2366,13 +2367,21 @@ export default function TeamScreen({ navigation, route }) {
         </View>
         <KitchenLine style={styles.headerLine} />
         {!tab ? <View style={styles.teamLoading}><ActivityIndicator color={C.teal} /><Text style={styles.footText}>Loading your teams…</Text></View> : <View style={styles.tabs}>{['Joined', 'Discover'].map((item) => <Pressable key={item} onPress={() => setTab(item)} style={[styles.tab, tab === item && styles.tabActive]}><Text style={[styles.tabText, tab === item && styles.tabTextActive]}>{item}</Text>{item === 'Joined' && <View style={[styles.count, tab === item && styles.countActive]}><Text style={[styles.countText, tab === item && styles.countTextActive]}>{joined.length}</Text></View>}</Pressable>)}</View>}
-        {tab === 'Discover' && <><View style={styles.search}><Icon name="search-outline" color={C.ink40} /><TextInput value={query} onChangeText={setQuery} placeholder="Search teams, area, or level" placeholderTextColor={C.ink40} style={styles.searchInput} /></View><ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.filters}>{['For you', 'Nearby', 'My level', 'Open spots'].map((item) => <Pressable key={item} onPress={() => setFilter(item)} style={[styles.filter, filter === item && styles.filterActive]}><Text style={filter === item ? styles.filterActiveText : styles.filterText}>{item}</Text></Pressable>)}</ScrollView><View style={styles.sectionHead}><View style={styles.discoverSectionCopy}><Text numberOfLines={1} style={styles.eyebrow}>NEAREST TO {userLocation.label.toUpperCase()}</Text><Text style={styles.h2}>{discoverTeams.length} teams to explore</Text></View><Pressable accessibilityLabel="Change team search location" onPress={() => setLocationOpen(true)} style={styles.discoveryLocationChange}><Icon name="location-outline" size={14} color={C.teal} /><Text style={styles.discoveryLocationChangeText}>Change</Text></Pressable></View>{discoverTeams.map((team) => <TeamCard key={team.id} team={team} requested={requested.includes(team.id)} requesting={requesting.includes(team.id)} cancelling={cancellingRequests.includes(team.id)} onJoin={() => openJoinRequest(team)} onCancel={() => cancelJoinRequest(team)} onOpen={() => setSelected(team)} />)}{!discoverTeams.length && <View style={styles.empty}><Icon name="people-outline" size={35} color={C.ink40} /><Text style={styles.emptyTitle}>No teams found</Text><Text style={styles.footText}>Try another filter or change your search location.</Text></View>}</>}
-        {tab === 'Joined' && <><View style={styles.joinedIntro}><View style={styles.joinedIcon}><Icon name="chatbubbles" color={C.teal} /></View><View style={styles.joinedIntroCopy}><Text style={styles.joinedIntroTitle}>Your team conversations</Text><Text style={styles.footText}>Jump into chat, or open a team for its roster and matches.</Text></View></View>{invitations.length > 0 && <><View style={styles.sectionHead}><View><Text style={styles.eyebrow}>ACTION REQUIRED</Text><Text style={styles.h2}>Team invitations</Text></View><Text style={styles.sectionLink}>{invitations.length} pending</Text></View>{invitations.map((invitation) => <TeamInvitationCard key={invitation.id} invitation={invitation} onAccept={() => respondInvitation(invitation, true)} onDecline={() => respondInvitation(invitation, false)} />)}</>}<View style={styles.sectionHead}><View><Text style={styles.eyebrow}>TEAM INBOX</Text><Text style={styles.h2}>Your teams</Text></View></View>{joined.map((team) => <TeamCard key={team.id} team={team} joined summary={chatSafetyStatus?.eligible ? conversationSummaries[team.id] : undefined} onOpen={() => setSelected(team)} onChat={() => openTeamChat(team)} />)}<Pressable onPress={() => setTab('Discover')} style={styles.exploreButton}><Icon name="compass-outline" color={C.teal} /><View style={styles.exploreCopy}><Text style={styles.exploreTitle}>Find another team</Text><Text style={styles.footText}>Browse public teams with open spots.</Text></View><Icon name="arrow-forward" color={C.teal} /></Pressable></>}
+        {tab === 'Discover' && <><View style={styles.search}><Icon name="search-outline" color={C.ink40} /><TextInput value={query} onChangeText={setQuery} placeholder="Search teams, area, or level" placeholderTextColor={C.ink40} style={styles.searchInput} /></View><ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.filters}>{['For you', 'Nearby', 'My level', 'Open spots'].map((item) => <Pressable key={item} onPress={() => setFilter(item)} style={[styles.filter, filter === item && styles.filterActive]}><Text style={filter === item ? styles.filterActiveText : styles.filterText}>{item}</Text></Pressable>)}</ScrollView><View style={styles.sectionHead}><View style={styles.discoverSectionCopy}><Text numberOfLines={1} style={styles.eyebrow}>NEAREST TO {userLocation.label.toUpperCase()}</Text><Text style={styles.h2}>{discoverTeams.length} teams to explore</Text></View><Pressable accessibilityLabel="Change team search location" onPress={() => setLocationOpen(true)} style={styles.discoveryLocationChange}><Icon name="location-outline" size={14} color={C.teal} /><Text style={styles.discoveryLocationChangeText}>Change</Text></Pressable></View><View {...webLayout('two-columns')}>{discoverTeams.map((team) => <TeamCard key={team.id} team={team} requested={requested.includes(team.id)} requesting={requesting.includes(team.id)} cancelling={cancellingRequests.includes(team.id)} onJoin={() => openJoinRequest(team)} onCancel={() => cancelJoinRequest(team)} onOpen={() => setSelected(team)} />)}</View>{!discoverTeams.length && <View style={styles.empty}><Icon name="people-outline" size={35} color={C.ink40} /><Text style={styles.emptyTitle}>No teams found</Text><Text style={styles.footText}>Try another filter or change your search location.</Text></View>}</>}
+        {tab === 'Joined' && <><View style={styles.joinedIntro}><View style={styles.joinedIcon}><Icon name="chatbubbles" color={C.teal} /></View><View style={styles.joinedIntroCopy}><Text style={styles.joinedIntroTitle}>Your team conversations</Text><Text style={styles.footText}>Jump into chat, or open a team for its roster and matches.</Text></View></View>{invitations.length > 0 && <><View style={styles.sectionHead}><View><Text style={styles.eyebrow}>ACTION REQUIRED</Text><Text style={styles.h2}>Team invitations</Text></View><Text style={styles.sectionLink}>{invitations.length} pending</Text></View>{invitations.map((invitation) => <TeamInvitationCard key={invitation.id} invitation={invitation} onAccept={() => respondInvitation(invitation, true)} onDecline={() => respondInvitation(invitation, false)} />)}</>}<View style={styles.sectionHead}><View><Text style={styles.eyebrow}>TEAM INBOX</Text><Text style={styles.h2}>Your teams</Text></View></View><View {...webLayout('two-columns')}>{joined.map((team) => <TeamCard key={team.id} team={team} joined summary={chatSafetyStatus?.eligible ? conversationSummaries[team.id] : undefined} onOpen={() => setSelected(team)} onChat={() => openTeamChat(team)} />)}</View><Pressable onPress={() => setTab('Discover')} style={styles.exploreButton}><Icon name="compass-outline" color={C.teal} /><View style={styles.exploreCopy}><Text style={styles.exploreTitle}>Find another team</Text><Text style={styles.footText}>Browse public teams with open spots.</Text></View><Icon name="arrow-forward" color={C.teal} /></Pressable></>}
       </ScrollView>
       <LocationPicker visible={locationOpen} onClose={() => setLocationOpen(false)} />
 
       {/* Slide-up Create Team sheet */}
-      {creating && (
+      {Platform.OS === 'web' ? (
+        <Modal visible={creating} transparent animationType="fade" onRequestClose={closeCreate}>
+          <View {...webDialog('backdrop')} style={{ flex: 1, backgroundColor: 'rgba(14,35,33,.5)' }}>
+            <SafeAreaView {...webDialog('surface')} style={styles.safe}>
+              <TeamForm onBack={closeCreate} onSave={createTeam} />
+            </SafeAreaView>
+          </View>
+        </Modal>
+      ) : creating && (
         <Animated.View
           style={[
             StyleSheet.absoluteFillObject,

@@ -1,5 +1,7 @@
+import Modal from './ResponsiveModal';
+import { webDialog } from '../utils/webLayout';
 import React, { useEffect, useMemo, useState } from 'react';
-import { Modal, Pressable, StyleSheet, Text, View } from 'react-native';
+import { Pressable, StyleSheet, Text, View } from 'react-native';
 import Ionicons from '@expo/vector-icons/Ionicons';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
@@ -91,9 +93,9 @@ export default function AppDatePickerModal({
   const changeMonth = (amount) => setMonthCursor((current) => new Date(Date.UTC(current.getUTCFullYear(), current.getUTCMonth() + amount, 1)));
 
   return <Modal visible={visible} transparent animationType="slide" onRequestClose={onClose} statusBarTranslucent>
-    <Pressable accessibilityRole="button" accessibilityLabel="Close date picker" onPress={onClose} style={styles.backdrop}>
-      <Pressable onPress={(event) => event.stopPropagation()} style={[styles.sheet, { backgroundColor: C.paper, paddingBottom: Math.max(insets.bottom, 18) }]}>
-        <View style={[styles.handle, { backgroundColor: C.line }]} />
+    <Pressable {...webDialog('backdrop')} accessibilityRole="button" accessibilityLabel="Close date picker" onPress={onClose} style={styles.backdrop}>
+      <Pressable {...webDialog('surface')} onPress={(event) => event.stopPropagation()} style={[styles.sheet, { backgroundColor: C.paper, paddingBottom: Math.max(insets.bottom, 18) }]}>
+        <View {...webDialog('handle')} style={[styles.handle, { backgroundColor: C.line }]} />
         <View style={styles.header}><View style={styles.flex}><Text style={[styles.eyebrow, { color: C.teal }]}>{eyebrow}</Text><Text style={[styles.title, { color: C.ink }]}>{title}</Text></View><Pressable accessibilityRole="button" accessibilityLabel="Close date picker" onPress={onClose} style={[styles.close, { backgroundColor: C.surface }]}><Ionicons name="close" size={20} color={C.ink} /></Pressable></View>
         <View style={styles.calendar}>
           <View style={styles.monthNav}><Pressable accessibilityRole="button" accessibilityLabel="Previous month" accessibilityState={{ disabled: Boolean(previousDisabled) }} disabled={Boolean(previousDisabled)} onPress={() => changeMonth(-1)} style={[styles.monthButton, { backgroundColor: C.surface, borderColor: C.line }, previousDisabled && styles.disabled]}><Ionicons name="chevron-back" size={19} color={C.teal} /></Pressable><Text style={[styles.month, { color: C.ink }]}>{monthCursor.toLocaleDateString('en-PH', { timeZone: 'UTC', month: 'long', year: 'numeric' })}</Text><Pressable accessibilityRole="button" accessibilityLabel="Next month" accessibilityState={{ disabled: Boolean(nextDisabled) }} disabled={Boolean(nextDisabled)} onPress={() => changeMonth(1)} style={[styles.monthButton, { backgroundColor: C.surface, borderColor: C.line }, nextDisabled && styles.disabled]}><Ionicons name="chevron-forward" size={19} color={C.teal} /></Pressable></View>

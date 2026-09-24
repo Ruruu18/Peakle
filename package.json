@@ -93,5 +93,9 @@
   },
   "overrides": {
     "postcss": "8.5.25"
+  },
+  "allowScripts": {
+    "@sentry/cli@2.55.0": true,
+    "puppeteer@25.4.0": true
   }
 }

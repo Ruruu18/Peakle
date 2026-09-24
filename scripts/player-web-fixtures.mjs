@@ -21,7 +21,7 @@ const team = { id: teamId, name: 'Community Clan', tag: 'COM', status: 'active',
 export async function installBackend(page, baseUrl) {
   const requests = [];
   const matches = new Map();
-  const controls = { failMatchWrites: false, denyAccountAccess: false };
+  const controls = { failMatchWrites: false, denyAccountAccess: false, layoutFixtures: false };
   const groupMessages = [];
   const division = { id: divisionId, competition_id: competitionId, name: 'Community Singles', format: 'singles', participant_division: 'open', skill_category: 'open', entry_type: 'player', capacity: 16, fee_amount: 0, status: 'registration', competition_entries: [], competition_bracket_matches: [] };
   const competition = { id: competitionId, venue_id: venueId, name: 'Community Beta Cup', kind: 'tournament', status: 'registration', starts_on: iso(24).slice(0, 10), venues: venue, competition_divisions: [division] };
@@ -66,7 +66,9 @@ export async function installBackend(page, baseUrl) {
       }
       let data = [];
       if (resource === 'profiles') { if (request.method() === 'PATCH') Object.assign(profile, body); data = [profile]; }
-      if (resource === 'venues') data = [venue];
+      if (resource === 'venues') data = controls.layoutFixtures && !url.searchParams.has('id')
+        ? Array.from({ length: 6 }, (_, index) => ({ ...venue, id: index ? `33333333-3333-4333-8333-33333333333${index}` : venue.id, name: index ? `Community Courts ${index + 1}` : venue.name }))
+        : [venue];
       if (resource === 'courts') data = [court];
       if (resource === 'bookings') data = url.searchParams.has('or') ? [] : [booking];
       if (resource === 'teams') data = [team];
