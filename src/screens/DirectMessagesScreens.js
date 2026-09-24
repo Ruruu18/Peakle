@@ -666,17 +666,29 @@ export function InboxScreen({ navigation }) {
   );
 }
 
+// Messenger-style typing bubble: pops in, then the dots rise and darken in a
+// continuous wave with a short rest between cycles.
 function AnimatedTypingDots({ colors }) {
-  const values = useRef([0, 1, 2].map(() => new Animated.Value(0.35))).current;
+  const useNativeDriver = Platform.OS !== 'web';
+  const entrance = useRef(new Animated.Value(0)).current;
+  const values = useRef([0, 1, 2].map(() => new Animated.Value(0))).current;
   useEffect(() => {
-    const animation = Animated.loop(Animated.stagger(130, values.map((value) => Animated.sequence([
-      Animated.timing(value, { toValue: 1, duration: 220, easing: Easing.out(Easing.quad), useNativeDriver: Platform.OS !== 'web' }),
-      Animated.timing(value, { toValue: 0.35, duration: 220, easing: Easing.in(Easing.quad), useNativeDriver: Platform.OS !== 'web' }),
-    ]))));
-    animation.start();
-    return () => animation.stop();
-  }, [values]);
-  return <View style={[styles.typingBubble, { backgroundColor: colors.surface, borderColor: colors.line }]}>{values.map((value, index) => <Animated.View key={index} style={[styles.typingDot, { backgroundColor: colors.ink40, opacity: value, transform: [{ translateY: value.interpolate({ inputRange: [0.35, 1], outputRange: [1.5, -1.5] }) }] }]} />)}</View>;
+    Animated.spring(entrance, { toValue: 1, friction: 6, tension: 140, useNativeDriver }).start();
+    const wave = Animated.loop(Animated.sequence([
+      Animated.stagger(160, values.map((value) => Animated.sequence([
+        Animated.timing(value, { toValue: 1, duration: 280, easing: Easing.out(Easing.quad), useNativeDriver }),
+        Animated.timing(value, { toValue: 0, duration: 280, easing: Easing.in(Easing.quad), useNativeDriver }),
+      ]))),
+      Animated.delay(260),
+    ]));
+    wave.start();
+    return () => wave.stop();
+  }, [entrance, values, useNativeDriver]);
+  return (
+    <Animated.View style={[styles.typingBubble, { backgroundColor: colors.surface, borderColor: colors.line, opacity: entrance, transform: [{ scale: entrance.interpolate({ inputRange: [0, 1], outputRange: [0.6, 1] }) }] }]}>
+      {values.map((value, index) => <Animated.View key={index} style={[styles.typingDot, { backgroundColor: colors.ink70, opacity: value.interpolate({ inputRange: [0, 1], outputRange: [0.35, 0.9] }), transform: [{ translateY: value.interpolate({ inputRange: [0, 1], outputRange: [0, -4] }) }] }]} />)}
+    </Animated.View>
+  );
 }
 
 function ChatSafetyGate({ status, busy, onConfirm, colors }) {
@@ -749,8 +761,9 @@ function DirectMessageInteractionModal({ message, mode, peer, seen, colors, onMo
             <View style={[styles.messageInteractionBottomRow, message.mine && styles.messageInteractionBottomRowMine]}>
               <View style={[styles.directReactionPicker, { backgroundColor: colors.surface }]}>
                 {DIRECT_REACTION_OPTIONS.map((emoji) => <Pressable key={emoji} accessibilityLabel={`React ${emoji}`} onPress={() => { onReact(message.id, emoji); onClose(); }} style={({ pressed }) => [styles.directReactionOption, pressed && { backgroundColor: colors.tealWash }]}><Text style={styles.directReactionOptionText}>{emoji}</Text></Pressable>)}
+                <View style={[styles.messageInteractionDivider, { backgroundColor: colors.line }]} />
+                <Pressable accessibilityLabel="More message actions" onPress={() => onModeChange('actions')} style={({ pressed }) => [styles.messageInteractionMore, { backgroundColor: colors.paper }, pressed && { backgroundColor: colors.tealWash }]}><Icon name="ellipsis-horizontal" size={20} color={colors.ink} /></Pressable>
               </View>
-              <Pressable accessibilityLabel="More message actions" onPress={() => onModeChange('actions')} style={[styles.messageInteractionMore, { backgroundColor: colors.surface }]}><Icon name="ellipsis-horizontal" size={22} color={colors.ink} /></Pressable>
             </View>
           </View>
         ) : (
@@ -1276,23 +1289,24 @@ const styles = StyleSheet.create({
   directSeenReceipt: { minHeight: 24, marginTop: 3, marginRight: 3, flexDirection: 'row', alignItems: 'center', justifyContent: 'flex-end', gap: 4 },
   directSeenText: { fontSize: 8, fontWeight: '700' },
   remoteTypingRow: { marginTop: 9, flexDirection: 'row', alignItems: 'flex-end', gap: 7 },
-  typingBubble: { width: 51, height: 35, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 5, borderRadius: 15, borderBottomLeftRadius: 5, borderWidth: 1 },
-  typingDot: { width: 6, height: 6, borderRadius: 3 },
+  typingBubble: { width: 62, height: 38, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 5, borderRadius: 19, borderWidth: 1, transformOrigin: 'left bottom' },
+  typingDot: { width: 8, height: 8, borderRadius: 4 },
   messageInteractionBackdrop: { flex: 1, paddingHorizontal: 18, justifyContent: 'center', backgroundColor: 'rgba(5,14,13,.58)' },
   messageInteractionBackdropBottom: { paddingHorizontal: 10, justifyContent: 'flex-end' },
-  messageInteractionCard: { maxWidth: '92%', alignSelf: 'flex-start' },
-  messageInteractionCardMine: { alignSelf: 'flex-end', alignItems: 'flex-end' },
-  directReactionPicker: { minHeight: 54, paddingHorizontal: 7, flexDirection: 'row', alignItems: 'center', gap: 1, borderRadius: 28, ...Platform.select({ ios: { shadowColor: '#000000', shadowOpacity: .2, shadowRadius: 18, shadowOffset: { width: 0, height: 8 } }, android: { elevation: 8 } }) },
-  directReactionOption: { width: 43, height: 46, alignItems: 'center', justifyContent: 'center', borderRadius: 23 },
+  messageInteractionCard: { width: '100%', maxWidth: 520, alignSelf: 'center', alignItems: 'flex-start' },
+  messageInteractionCardMine: { alignItems: 'flex-end' },
+  directReactionPicker: { maxWidth: '100%', flexShrink: 1, minHeight: 54, paddingHorizontal: 7, flexDirection: 'row', alignItems: 'center', gap: 1, borderRadius: 28, ...Platform.select({ ios: { shadowColor: '#000000', shadowOpacity: .2, shadowRadius: 18, shadowOffset: { width: 0, height: 8 } }, android: { elevation: 8 } }) },
+  directReactionOption: { width: 42, minWidth: 30, flexShrink: 1, height: 46, alignItems: 'center', justifyContent: 'center', borderRadius: 23 },
   directReactionOptionText: { fontSize: 25 },
   messageInteractionPreviewRow: { maxWidth: '100%', flexDirection: 'row', alignItems: 'center', gap: 8 },
   messageInteractionPreviewRowMine: { flexDirection: 'row-reverse' },
   messageInteractionPreview: { maxWidth: '82%', paddingHorizontal: 14, paddingVertical: 11, borderRadius: 18, borderBottomLeftRadius: 5 },
   messageInteractionPreviewMine: { borderBottomLeftRadius: 18, borderBottomRightRadius: 5 },
   messageInteractionPreviewText: { fontSize: 12, lineHeight: 18 },
-  messageInteractionBottomRow: { marginTop: 6, flexDirection: 'row', alignItems: 'center', gap: 6 },
+  messageInteractionBottomRow: { maxWidth: '100%', marginTop: 8, flexDirection: 'row', alignItems: 'center' },
   messageInteractionBottomRowMine: { justifyContent: 'flex-end' },
-  messageInteractionMore: { width: 43, height: 43, alignItems: 'center', justifyContent: 'center', borderRadius: 22, ...Platform.select({ ios: { shadowColor: '#000000', shadowOpacity: .18, shadowRadius: 12, shadowOffset: { width: 0, height: 6 } }, android: { elevation: 7 } }) },
+  messageInteractionDivider: { width: 1, height: 26, marginHorizontal: 4 },
+  messageInteractionMore: { width: 38, height: 38, flexShrink: 0, alignItems: 'center', justifyContent: 'center', borderRadius: 19 },
   directActionSheet: { marginBottom: 10, paddingHorizontal: 14, paddingTop: 8, paddingBottom: 12, borderRadius: 24, ...Platform.select({ ios: { shadowColor: '#000000', shadowOpacity: .22, shadowRadius: 20, shadowOffset: { width: 0, height: 9 } }, android: { elevation: 10 } }) },
   directActionHandle: { width: 42, height: 4, alignSelf: 'center', borderRadius: 2 },
   directActionTitle: { marginTop: 12, fontSize: 18, fontWeight: '900' },
