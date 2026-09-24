@@ -695,12 +695,12 @@ function MessageRelationshipGate({ peer, permission, busy, onFollow, colors }) {
   const alreadyFollowing = permission?.isFollowing;
   const followsYou = permission?.followsYou;
   const requestPending = permission?.followRequestPending;
-  const teammateUnavailable = permission?.sharesTeam && permission?.peerChatEligible === false;
+  const peerUnavailable = permission?.peerChatEligible === false && (permission?.sharesTeam || (alreadyFollowing && followsYou));
   const title = permission?.blocked
     ? 'Private messaging is unavailable.'
-    : teammateUnavailable
-      ? `${peer?.name || 'This teammate'} cannot use private chat yet.`
-    : followsYou
+    : peerUnavailable
+      ? `${peer?.name || (permission?.sharesTeam ? 'This teammate' : 'This player')} cannot use private chat yet.`
+    : followsYou && !alreadyFollowing
     ? `Follow ${peer?.name || 'this player'} back to chat.`
     : requestPending
       ? 'Follow request sent.'
@@ -709,9 +709,9 @@ function MessageRelationshipGate({ peer, permission, busy, onFollow, colors }) {
       : 'Follow each other to chat.';
   const body = permission?.blocked
     ? 'One of these accounts has blocked private messages between you.'
-    : teammateUnavailable
-      ? 'Team membership is confirmed, but private chat requires the teammate account to complete the chat-safety setup.'
-    : followsYou
+    : peerUnavailable
+      ? `${permission?.sharesTeam ? 'Team membership' : 'You follow each other'}, but private chat requires ${peer?.name || 'their account'} to complete the chat-safety setup.`
+    : followsYou && !alreadyFollowing
     ? 'They already follow you. Follow them back to open a private conversation.'
     : requestPending
       ? `${peer?.name || 'This player'} can accept or delete your request from their notifications.`
