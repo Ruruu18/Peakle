@@ -18,7 +18,7 @@ const venue = { id: venueId, name: 'Community Courts', active: true, verificatio
 const booking = { id: '88888888-8888-4888-8888-888888888888', user_id: userId, venue_id: venueId, court_id: courtId, status: 'confirmed', payment_status: 'paid', total_amount: 0, starts_at: iso(-1), ends_at: iso(3), venues: venue, courts: court };
 const team = { id: teamId, name: 'Community Clan', tag: 'COM', status: 'active', capacity: 12, member_count: 2, skill_level: 'Open', location: 'Manila', is_discoverable: true, created_at: iso(-48), team_members: [{ user_id: userId, role: 'creator', profiles: profile }, { user_id: otherId, role: 'member', profiles: { display_name: 'Alex Player' } }] };
 
-export async function installBackend(page, baseUrl) {
+export async function installBackend(page, baseUrl, handleRequest) {
   const requests = [];
   const matches = new Map();
   const controls = { failMatchWrites: false, denyAccountAccess: false, layoutFixtures: false };
@@ -37,6 +37,7 @@ export async function installBackend(page, baseUrl) {
       const resource = url.pathname.split('/').at(-1);
       const body = request.postData() ? JSON.parse(request.postData()) : {};
       requests.push({ resource, method: request.method(), body });
+      if (handleRequest && await handleRequest({ request, url, resource, body, reply })) return;
       if (controls.denyAccountAccess && url.pathname.startsWith('/rest/v1/')) {
         return void reply(request, { code: 'PT403', message: 'Account access is suspended or this session has been revoked. Please sign in again or contact support@peakle.app.' }, 403);
       }

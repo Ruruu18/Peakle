@@ -41,6 +41,7 @@ import {
   followPlayer,
   getDirectConversation,
   getDirectMessagePermission,
+  getPublicPlayerProfile,
   getDirectMessage,
   listDirectConversations,
   listFollowingPlayers,
@@ -786,6 +787,15 @@ function DirectChatMessage({ message, grouped, active, interactive, peer, seen, 
 }
 
 export function DirectChatScreen({ route, navigation }) {
+  const target = route?.params?.conversationId
+    ? `conversation:${route.params.conversationId}`
+    : `player:${route?.params?.player?.id || route?.params?.playerId || ''}`;
+  // Tab screens stay mounted. A different recipient needs fresh chat state,
+  // including the conversation id and any unsent draft.
+  return <DirectChatConversation key={target} route={route} navigation={navigation} />;
+}
+
+function DirectChatConversation({ route, navigation }) {
   const { isDark } = useTheme();
   const colors = isDark ? DARK_C : LIGHT_C;
   const { user } = useAuth();
@@ -861,11 +871,13 @@ export function DirectChatScreen({ route, navigation }) {
       if (!status.eligible) return;
       let id = conversationId;
       if (!id && routePlayer?.id) {
-        const [found, permission] = await Promise.all([
+        const [found, permission, profile] = await Promise.all([
           findDirectConversation(routePlayer.id),
           getDirectMessagePermission(routePlayer.id),
+          getPublicPlayerProfile(routePlayer.id).catch(() => null),
         ]);
         setMessagePermission(permission);
+        if (profile) setPeer(playerFromRoute(profile));
         if (found) {
           id = found.id;
           setConversationId(found.id);

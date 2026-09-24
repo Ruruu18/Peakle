@@ -1,6 +1,7 @@
 import Modal from '../components/ResponsiveModal';
 import { webLayout, webDialog } from '../utils/webLayout';
 import React, { useCallback, useEffect, useRef, useState } from 'react';
+import { searchRegisteredPlayers } from '../services/nearbyPlayers';
 import {
   ActivityIndicator,
   Animated,
@@ -288,19 +289,46 @@ function NearbyLobby({ players, invited, outgoingInvites, onToggle, onMessage, f
   const [searchQuery, setSearchQuery] = useState('');
   const nearbyPlayers = players.filter((player) => !player.isTeammate);
   const visiblePlayers = players.filter((player) => player.isTeammate || player.isAcceptedInvite || visible);
+  const [searchResults, setSearchResults] = useState([]);
+  const [searching, setSearching] = useState(false);
+  const [searchError, setSearchError] = useState('');
   const normalizedQuery = searchQuery.trim().toLocaleLowerCase();
-  const filteredPlayers = normalizedQuery
+  // Nearby discovery is limited to 25 km by design; name search reaches
+  // registered players in any city so they can still be invited.
+  useEffect(() => {
+    if (normalizedQuery.length < 2) {
+      setSearchResults([]);
+      setSearching(false);
+      setSearchError('');
+      return undefined;
+    }
+    let active = true;
+    setSearching(true);
+    const timer = setTimeout(() => {
+      searchRegisteredPlayers(normalizedQuery)
+        .then((rows) => { if (active) { setSearchResults(rows); setSearchError(''); } })
+        .catch(() => { if (active) { setSearchResults([]); setSearchError('Player search is unavailable right now. Try again in a moment.'); } })
+        .finally(() => { if (active) setSearching(false); });
+    }, 300);
+    return () => { active = false; clearTimeout(timer); };
+  }, [normalizedQuery]);
+  const localMatches = normalizedQuery
     ? visiblePlayers.filter((player) => `${player.name} ${(player.teamNames || []).join(' ')}`.toLocaleLowerCase().includes(normalizedQuery))
+    : visiblePlayers;
+  const filteredPlayers = normalizedQuery
+    ? [...localMatches, ...searchResults.filter((result) => !localMatches.some((player) => player.id === result.id))]
     : visiblePlayers;
   return (
     <View style={styles.nearbyCard}>
-      <View style={styles.nearbyHead}><View style={styles.flex}><Text style={styles.sectionLabel}>REGISTERED PLAYERS</Text><Text style={styles.nearbySubtitle}>{visible ? 'Search your teammates and online players within 25 km. Your exact position stays private.' : 'Your accepted teammates appear here. Go visible to also find nearby players.'}</Text></View><Pressable disabled={loading} accessibilityRole="switch" accessibilityState={{ checked: visible }} accessibilityLabel={visible ? 'Stop showing me to nearby players' : 'Show me to nearby players'} onPress={() => onVisibility(!visible)} style={[styles.visibilityButton, visible && styles.visibilityButtonOn, loading && styles.disabled]}><View style={[styles.visibilityDot, visible && styles.visibilityDotOn]} /><Text style={[styles.visibilityText, visible && styles.visibilityTextOn]}>{loading ? 'WAIT' : visible ? 'VISIBLE' : 'GO VISIBLE'}</Text></Pressable></View>
+      <View style={styles.nearbyHead}><View style={styles.flex}><Text style={styles.sectionLabel}>REGISTERED PLAYERS</Text><Text style={styles.nearbySubtitle}>{visible ? 'Online players within 25 km appear below. Search by name to find registered players in any city. Your exact position stays private.' : 'Your accepted teammates appear here. Search by name to find players in any city, or go visible to see who is online nearby.'}</Text></View><Pressable disabled={loading} accessibilityRole="switch" accessibilityState={{ checked: visible }} accessibilityLabel={visible ? 'Stop showing me to nearby players' : 'Show me to nearby players'} onPress={() => onVisibility(!visible)} style={[styles.visibilityButton, visible && styles.visibilityButtonOn, loading && styles.disabled]}><View style={[styles.visibilityDot, visible && styles.visibilityDotOn]} /><Text style={[styles.visibilityText, visible && styles.visibilityTextOn]}>{loading ? 'WAIT' : visible ? 'VISIBLE' : 'GO VISIBLE'}</Text></Pressable></View>
       {!!error && <View style={styles.nearbyError}><Icon name="alert-circle-outline" size={16} color={C.brick} /><Text style={styles.nearbyErrorText}>{error}</Text></View>}
-      <View style={styles.playerSearch}><Icon name="search" size={17} color={C.ink40} /><TextInput accessibilityLabel="Search registered players" value={searchQuery} onChangeText={setSearchQuery} placeholder="Search teammates or nearby players" placeholderTextColor={C.ink40} autoCapitalize="none" autoCorrect={false} clearButtonMode="while-editing" returnKeyType="search" style={styles.playerSearchInput} /></View>
+      <View style={styles.playerSearch}><Icon name="search" size={17} color={C.ink40} /><TextInput accessibilityLabel="Search registered players" value={searchQuery} onChangeText={setSearchQuery} placeholder="Search players by name, any city" placeholderTextColor={C.ink40} autoCapitalize="none" autoCorrect={false} clearButtonMode="while-editing" returnKeyType="search" style={styles.playerSearchInput} /></View>
       {(visible || visiblePlayers.length > 0) && <View style={styles.nearbyCountRow}><View style={styles.nearbyCount}><Icon name="people" size={11} color={C.teal} /><Text style={styles.nearbyCountText}>{filteredPlayers.length} {filteredPlayers.length === 1 ? 'PLAYER' : 'PLAYERS'} FOUND</Text></View></View>}
       {!normalizedQuery && visible && !nearbyPlayers.length && !players.some((player) => player.isTeammate) && !error && <View style={styles.nearbyEmpty}><Icon name="navigate-outline" size={22} color={C.ink40} /><Text style={styles.nearbyEmptyTitle}>No players available yet</Text><Text style={styles.nearbyEmptyText}>Use a different account on the second device, choose Registered, and turn on visibility.</Text></View>}
       {!normalizedQuery && !visible && !visiblePlayers.length && !error && <View style={styles.nearbyEmpty}><Icon name="people-outline" size={22} color={C.ink40} /><Text style={styles.nearbyEmptyTitle}>No teammates found</Text><Text style={styles.nearbyEmptyText}>Accepted team members appear here automatically. Go visible to find other nearby players.</Text></View>}
-      {!!normalizedQuery && !filteredPlayers.length && <View style={styles.nearbyEmpty}><Icon name="search-outline" size={22} color={C.ink40} /><Text style={styles.nearbyEmptyTitle}>No matching player</Text><Text style={styles.nearbyEmptyText}>Try another teammate name, or go visible to include nearby registered players.</Text></View>}
+      {!!searchError && <View style={styles.nearbyError}><Icon name="alert-circle-outline" size={16} color={C.brick} /><Text style={styles.nearbyErrorText}>{searchError}</Text></View>}
+      {!!normalizedQuery && searching && !filteredPlayers.length && <View style={styles.nearbyEmpty}><ActivityIndicator color={C.teal} /><Text style={styles.nearbyEmptyText}>Searching all Peakle players…</Text></View>}
+      {!!normalizedQuery && !searching && !filteredPlayers.length && <View style={styles.nearbyEmpty}><Icon name="search-outline" size={22} color={C.ink40} /><Text style={styles.nearbyEmptyTitle}>No matching player</Text><Text style={styles.nearbyEmptyText}>{normalizedQuery.length < 2 ? 'Type at least 2 letters to search players in every city.' : 'No registered player matches that name. Check the spelling and try again.'}</Text></View>}
       {filteredPlayers.map((player, index) => {
         const added = invited.includes(player.id);
         const latestInvite = outgoingInvites.find((invite) => invite.recipient_id === player.id && invite.match_payload?.setupId);
@@ -317,7 +345,7 @@ function NearbyLobby({ players, invited, outgoingInvites, onToggle, onMessage, f
               showLoadingIndicator={false}
               style={styles.nearbyAvatar}
             />
-            <View style={styles.nearbyCopy}><Text style={styles.nearbyName}>{player.name}</Text><Text style={styles.nearbyMeta}>{accepted ? 'Accepted · in your lineup' : player.isTeammate ? `${player.teamNames?.join(', ') || 'Your team'} · teammate${player.distance ? ` · ${player.distance} away` : ''}` : `★ ${player.rating} · ${player.distance} away${player.distanceAccuracy ? ` (±${player.distanceAccuracy})` : ''} · online`}</Text></View>
+            <View style={styles.nearbyCopy}><Text style={styles.nearbyName}>{player.name}</Text><Text style={styles.nearbyMeta}>{accepted ? 'Accepted · in your lineup' : player.isTeammate ? `${player.teamNames?.join(', ') || 'Your team'} · teammate${player.distance ? ` · ${player.distance} away` : ''}` : player.isSearchResult ? `★ ${player.rating}${player.area ? ` · ${player.area}` : ''} · registered player` : `★ ${player.rating} · ${player.distance} away${player.distanceAccuracy ? ` (±${player.distanceAccuracy})` : ''} · online`}</Text></View>
             {PRIVATE_MESSAGES_ENABLED ? <Pressable accessibilityLabel={`Message ${player.name} privately`} onPress={() => onMessage(player)} style={({ pressed }) => [styles.nearbyMessageButton, pressed && styles.pressed]}><Icon name="chatbubble-outline" size={16} color={C.teal} /></Pressable> : null}
             <Pressable disabled={disabled} accessibilityLabel={`${accepted ? 'Remove' : pending ? 'Cancel invitation for' : disabled ? 'Lineup full for' : 'Invite'} ${player.name}`} accessibilityHint={accepted ? 'Removes this player from your match after confirmation' : undefined} hitSlop={accepted ? 6 : 0} onPress={() => onToggle(player, latestInvite)} style={({ pressed }) => [styles.inviteButton, pending && styles.inviteButtonAdded, accepted && styles.inviteButtonRemove, disabled && styles.inviteButtonDisabled, pressed && !disabled && styles.pressed]}>
               <Icon name={accepted ? 'person-remove-outline' : pending ? 'time-outline' : disabled ? 'remove' : 'add'} size={accepted ? 18 : 15} color={accepted ? C.brick : pending ? C.teal : disabled ? C.ink40 : '#0E2321'} />

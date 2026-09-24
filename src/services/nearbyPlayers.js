@@ -107,6 +107,29 @@ export async function listNearbyOnlinePlayers(location, radiusKm = 25) {
   });
 }
 
+// Name search across every registered player, independent of distance or
+// online presence, so players in other cities can still be found and invited.
+export async function searchRegisteredPlayers(query) {
+  const clean = (query || '').trim();
+  if (clean.length < 2) return [];
+  if (DEMO_MODE) {
+    const needle = clean.toLocaleLowerCase();
+    return DEMO_NEARBY_PLAYERS.filter((player) => player.name.toLocaleLowerCase().includes(needle));
+  }
+  const { data, error } = await requireSupabase().rpc('search_registered_players', { p_query: clean });
+  if (error) throw error;
+  return (data || []).map((player) => ({
+    id: player.id,
+    name: player.display_name || 'Peakle player',
+    avatar: player.avatar_url,
+    initials: initials(player.display_name),
+    rating: player.skill_rating ?? 'Unrated',
+    area: player.home_area || null,
+    isSearchResult: true,
+    color: '#1C6B66',
+  }));
+}
+
 export async function sendMatchInvite(recipientId, matchPayload) {
   const client = requireSupabase();
   const { data: auth, error: authError } = await client.auth.getUser();

@@ -222,7 +222,10 @@ export default function PublicProfileScreen({ navigation, route }) {
   };
 
   const openChat = () => {
-    navigation.navigate('DirectChat', { player, ownerTab: route.params?.ownerTab || 'Home' });
+    navigation.navigate('DirectChat', {
+      player: { ...player, ...profileDetails, id: player.id, name: playerName },
+      ownerTab: route.params?.ownerTab || 'Home',
+    });
   };
 
   const playerName = profileDetails.name || player.name || 'Peakle player';

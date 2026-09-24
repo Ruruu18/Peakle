@@ -15,6 +15,7 @@ import {
   updateNearbyLiveMatch,
   handoffNearbyLiveScorer,
   cancelMatchInvite,
+  searchRegisteredPlayers,
 } from '../nearbyPlayers';
 
 jest.mock('../../lib/supabase', () => ({ requireSupabase: jest.fn() }));
@@ -511,5 +512,36 @@ describe('updateNearbyLiveMatch', () => {
   it('propagates an error', async () => {
     requireSupabase.mockReturnValue({ rpc: jest.fn(async () => ({ data: null, error: new Error('stale revision') })) });
     await expect(updateNearbyLiveMatch('m1', 1, {})).rejects.toThrow('stale revision');
+  });
+});
+
+describe('searchRegisteredPlayers', () => {
+  it('does not call supabase for queries shorter than 2 characters', async () => {
+    const client = { rpc: jest.fn() };
+    requireSupabase.mockReturnValue(client);
+    expect(await searchRegisteredPlayers(' a ')).toEqual([]);
+    expect(await searchRegisteredPlayers(undefined)).toEqual([]);
+    expect(client.rpc).not.toHaveBeenCalled();
+  });
+
+  it('searches every registered player by trimmed name and maps rows without distance', async () => {
+    const client = { rpc: jest.fn(async () => ({
+      data: [
+        { id: 'p1', display_name: 'Maria Santos', avatar_url: 'm.png', skill_rating: 3.5, home_area: 'Manila' },
+        { id: 'p2', display_name: null, avatar_url: null, skill_rating: null, home_area: null },
+      ],
+      error: null,
+    })) };
+    requireSupabase.mockReturnValue(client);
+    const result = await searchRegisteredPlayers('  mar ');
+    expect(client.rpc).toHaveBeenCalledWith('search_registered_players', { p_query: 'mar' });
+    expect(result[0]).toEqual({ id: 'p1', name: 'Maria Santos', avatar: 'm.png', initials: 'MS', rating: 3.5, area: 'Manila', isSearchResult: true, color: '#1C6B66' });
+    expect(result[1]).toMatchObject({ name: 'Peakle player', rating: 'Unrated', area: null, isSearchResult: true });
+    expect(result[0]).not.toHaveProperty('distanceKm');
+  });
+
+  it('propagates RPC errors', async () => {
+    requireSupabase.mockReturnValue({ rpc: jest.fn(async () => ({ data: null, error: new Error('missing function') })) });
+    await expect(searchRegisteredPlayers('maria')).rejects.toThrow('missing function');
   });
 });

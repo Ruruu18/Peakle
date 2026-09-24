@@ -125,6 +125,19 @@ export function AuthProvider({ children }) {
   const [passwordRecovery, setPasswordRecovery] = useState(false);
   const [authLinkError, setAuthLinkError] = useState('');
 
+  useEffect(() => {
+    let active = true;
+    // Session events can supersede startup profile reads. Device preferences
+    // still need to load, including when the device has no active session.
+    AsyncStorage.getItem(LAST_SIGN_IN_METHOD_KEY).then((method) => {
+      if (active && (method === 'google' || method === 'email')) {
+        // A selection made while storage was loading takes precedence.
+        setLastSignInMethod((current) => current || method);
+      }
+    }).catch(() => {});
+    return () => { active = false; };
+  }, []);
+
   const handleAccessRevocation = (error) => {
     if (!isAccountAccessError(error)) return;
     ++authGeneration.current;
@@ -144,12 +157,10 @@ export function AuthProvider({ children }) {
     Promise.all([
       withTimeout(supabase.auth.getSession(), 6000, 'Session restore timed out.'),
       AsyncStorage.getItem(PENDING_VERIFICATION_EMAIL_KEY).catch(() => ''),
-      AsyncStorage.getItem(LAST_SIGN_IN_METHOD_KEY).catch(() => null),
       AsyncStorage.getItem(REMEMBERED_EMAIL_KEY).catch(() => ''),
-    ]).then(async ([{ data }, pendingEmail, storedSignInMethod, storedEmail]) => {
+    ]).then(async ([{ data }, pendingEmail, storedEmail]) => {
       if (!active || authGeneration.current !== startupGeneration) return;
       const authUser = data.session?.user;
-      const localSignInMethod = storedSignInMethod === 'google' || storedSignInMethod === 'email' ? storedSignInMethod : null;
       if (authUser) {
         setPendingVerificationEmail('');
         AsyncStorage.removeItem(PENDING_VERIFICATION_EMAIL_KEY).catch(() => {});
@@ -178,7 +189,6 @@ export function AuthProvider({ children }) {
         setUser(provisionalUser);
         setHydrated(true);
       }
-      setLastSignInMethod(localSignInMethod);
       if (authUser) {
         try {
           const currentUser = await withTimeout(
