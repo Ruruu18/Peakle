@@ -475,7 +475,8 @@ export function AuthProvider({ children }) {
       display_name: profile.name,
       avatar_url: savedAvatar,
       home_area: profile.location,
-      skill_rating: null,
+      // skill_rating is intentionally omitted: authenticated users lack column
+      // SELECT on it, and an upsert touching it fails with 403 (42501).
       play_preference: profile.preference,
       onboarding_completed: true,
     };
