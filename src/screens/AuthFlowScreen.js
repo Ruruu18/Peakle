@@ -30,6 +30,7 @@ import Ionicons from '@expo/vector-icons/Ionicons';
 import * as Google from 'expo-auth-session/providers/google';
 import * as WebBrowser from 'expo-web-browser';
 import { useAuth } from '../context/AuthContext';
+import { clearAppHandoff, isStandaloneWebApp, readAppHandoff } from '../lib/authLinks';
 import ProfilePhotoPicker from '../components/ProfilePhotoPicker';
 import ResilientImage from '../components/ResilientImage';
 import { LEGAL_DOCUMENTS } from '../content/legalDocuments';
@@ -282,9 +283,67 @@ function LastUsedBadge() {
   return <View pointerEvents="none" accessibilityElementsHidden importantForAccessibility="no-hide-descendants" style={styles.lastUsedBadge}><Text style={styles.lastUsedBadgeText}>Last used</Text></View>;
 }
 
-function GoogleButton({ label, onSuccess, onExpoGoSignIn, onError, onBeforeStart, dark = false, simple = false, lastUsed = false, disabled = false }) {
-  const { rememberSignInMethod } = useAuth();
+// Home Screen web app on iOS: Google sign-in runs in Safari, which shows a
+// PIN the player types here to bring the session into this app.
+function SafariHandoffModal({ handoffId, onClose }) {
+  const { finishSafariGoogleSignIn, startSafariGoogleSignIn } = useAuth();
+  const [pin, setPin] = useState('');
+  const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
+  const submit = async () => {
+    if (busy || pin.length !== 6) return;
+    setBusy(true);
+    setError('');
+    try {
+      await finishSafariGoogleSignIn(handoffId, pin);
+      onClose();
+    } catch (failure) {
+      setError(failure.message || 'Google sign-in could not be completed.');
+      setBusy(false);
+    }
+  };
+  return (
+    <Modal transparent animationType="fade" visible onRequestClose={onClose}>
+      <View style={styles.handoffBackdrop}>
+        <View style={styles.handoffCard}>
+          <Text style={styles.authEyebrow}>CONTINUE IN SAFARI</Text>
+          <Text style={styles.handoffTitle}>Enter the code from Safari</Text>
+          <Text style={styles.authSubtitle}>Sign in with Google in Safari. Safari will show a 6-digit code. Come back here and type it below.</Text>
+          <View style={[styles.field, styles.fieldDark, styles.handoffField]}>
+            <TextInput
+              accessibilityLabel="6-digit code from Safari"
+              autoFocus
+              value={pin}
+              onChangeText={(value) => setPin(value.replace(/\D/g, '').slice(0, 6))}
+              onSubmitEditing={submit}
+              keyboardType="number-pad"
+              inputMode="numeric"
+              autoComplete="one-time-code"
+              textContentType="oneTimeCode"
+              maxLength={6}
+              placeholder="000000"
+              placeholderTextColor="#60746D"
+              style={[styles.input, styles.inputDark, styles.handoffInput]}
+            />
+          </View>
+          {error ? <Text style={styles.googleError}>{error}</Text> : null}
+          <Pressable accessibilityRole="button" disabled={busy || pin.length !== 6} onPress={submit} style={({ pressed }) => [styles.primary, styles.authPrimary, styles.handoffSubmit, (busy || pin.length !== 6) && styles.disabledButton, pressed && styles.pressed]}>
+            <Text style={styles.authPrimaryText}>{busy ? 'Signing in…' : 'Continue'}</Text>
+          </Pressable>
+          <View style={styles.handoffActions}>
+            <Pressable accessibilityRole="button" onPress={() => startSafariGoogleSignIn(handoffId)} style={styles.forgot}><Text style={styles.authLink}>Open Safari again</Text></Pressable>
+            <Pressable accessibilityRole="button" onPress={onClose} style={styles.forgot}><Text style={styles.authLink}>Cancel</Text></Pressable>
+          </View>
+        </View>
+      </View>
+    </Modal>
+  );
+}
+
+function GoogleButton({ label, onSuccess, onExpoGoSignIn, onError, onBeforeStart, dark = false, simple = false, lastUsed = false, disabled = false }) {
+  const { rememberSignInMethod, startSafariGoogleSignIn } = useAuth();
+  const [busy, setBusy] = useState(false);
+  const [handoffId, setHandoffId] = useState(() => (Platform.OS === 'web' && isStandaloneWebApp() ? readAppHandoff() : null));
   const isExpoGo = Platform.OS === 'web' || Constants.executionEnvironment === ExecutionEnvironment.StoreClient;
   const iosClientId = process.env.EXPO_PUBLIC_GOOGLE_IOS_CLIENT_ID;
   const androidClientId = process.env.EXPO_PUBLIC_GOOGLE_ANDROID_CLIENT_ID;
@@ -322,6 +381,10 @@ function GoogleButton({ label, onSuccess, onExpoGoSignIn, onError, onBeforeStart
     if (canStart === false) return;
     await rememberSignInMethod('google');
     onError('');
+    if (Platform.OS === 'web' && isStandaloneWebApp()) {
+      setHandoffId(startSafariGoogleSignIn());
+      return;
+    }
     if (isExpoGo) {
       setBusy(true);
       try { await onExpoGoSignIn(); }
@@ -342,6 +405,7 @@ function GoogleButton({ label, onSuccess, onExpoGoSignIn, onError, onBeforeStart
         {simple ? <View style={styles.methodIconSpacer} /> : null}
       </Pressable>
       {lastUsed ? <LastUsedBadge /> : null}
+      {handoffId ? <SafariHandoffModal handoffId={handoffId} onClose={() => { clearAppHandoff(); setHandoffId(null); }} /> : null}
     </View>
   );
 }
@@ -1006,6 +1070,7 @@ const styles = createMobileStyleSheet({
   featurePanel: { position: 'absolute', left: 18, right: 18, top: 22, bottom: 22, paddingHorizontal: 15, paddingTop: 13, borderWidth: 1, borderColor: 'rgba(255,255,255,.16)', borderRadius: 18, borderBottomLeftRadius: 7, borderBottomRightRadius: 7, backgroundColor: '#0A1F1C' }, featurePanelEyebrow: { marginBottom: 4, color: '#758A82', fontSize: 7, fontWeight: '900', letterSpacing: 1 }, welcomeFeature: { flex: 1, minHeight: 48, flexDirection: 'row', alignItems: 'center', gap: 11 }, welcomeFeatureBorder: { borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: '#314943' }, welcomeFeatureIcon: { width: 34, height: 34, borderRadius: 10, alignItems: 'center', justifyContent: 'center', backgroundColor: C.optic }, welcomeFeatureIconMuted: { backgroundColor: '#29443E' }, welcomeFeatureCopy: { flex: 1 }, welcomeFeatureTitle: { color: C.surface, fontSize: 11, fontWeight: '900' }, welcomeFeatureBody: { marginTop: 2, color: '#91A39D', fontSize: 8, lineHeight: 11 },
   welcomeBottom: { paddingHorizontal: 24, paddingTop: 2, paddingBottom: Platform.OS === 'ios' ? 30 : 22 }, accentButton: { minHeight: 56, paddingHorizontal: 18, borderRadius: 15, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', backgroundColor: C.optic }, accentText: { color: C.ink, fontSize: 14, fontWeight: '900' }, loginLink: { minHeight: 42, alignItems: 'center', justifyContent: 'center' }, loginPrompt: { color: '#8FA39C', fontSize: 11, fontWeight: '600' }, loginText: { color: C.surface, fontWeight: '900' },
   formScroll: { flex: 1, overflow: 'hidden' }, formContent: { flexGrow: 1, justifyContent: 'flex-start', paddingHorizontal: 22, paddingTop: 18, paddingBottom: 32 }, formTop: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }, back: { width: 43, height: 43, borderRadius: 22, borderWidth: 1, borderColor: C.line, backgroundColor: C.surface, alignItems: 'center', justifyContent: 'center' }, backDark: { borderColor: '#2E4C46', backgroundColor: '#14332F' }, formHeading: { marginTop: 34 }, eyebrow: { color: C.teal, fontSize: 9, fontWeight: '900', letterSpacing: 1.2 }, authEyebrow: { color: C.optic, fontSize: 9, fontWeight: '900', letterSpacing: 1.2 }, h1: { marginTop: 7, color: C.ink, fontSize: 35, lineHeight: 40, fontWeight: '900', letterSpacing: -1.2 }, authH1: { marginTop: 7, color: C.surface, fontSize: 35, lineHeight: 40, fontWeight: '900', letterSpacing: -1.2 }, subtitle: { marginTop: 10, color: C.ink70, fontSize: 13, lineHeight: 20 }, authSubtitle: { maxWidth: 340, marginTop: 10, color: '#B8C6C1', fontSize: 13, lineHeight: 20 }, authDivider: { height: 1, marginVertical: 24, backgroundColor: '#35504B' }, kitchen: { height: 8, marginVertical: 27 }, solid: { height: 2, backgroundColor: C.ink }, dashed: { marginTop: 4, borderTopWidth: 1, borderStyle: 'dashed', borderColor: C.ink40 }, solidDark: { backgroundColor: 'rgba(255,255,255,.32)' }, dashedDark: { borderColor: 'rgba(255,255,255,.22)' }, fieldWrap: { marginBottom: 17 }, label: { marginBottom: 7, color: C.ink40, fontSize: 8, fontWeight: '900', letterSpacing: 1 }, labelDark: { color: '#8FA39C' }, field: { minHeight: 55, paddingHorizontal: 15, flexDirection: 'row', alignItems: 'center', gap: 10, borderWidth: 1, borderColor: C.line, borderRadius: 14, backgroundColor: C.surface }, fieldDark: { borderColor: '#2E4C46', backgroundColor: '#14332F' }, fieldFocused: { borderColor: C.optic, borderWidth: 1.5 }, fieldError: { borderColor: C.brick }, input: { flex: 1, color: C.ink, fontSize: 14, paddingVertical: 0, outlineStyle: 'none' }, inputDark: { color: C.surface }, error: { marginTop: 5, color: C.brick, fontSize: 9 }, loginOptions: { marginTop: -5, marginBottom: 18, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }, forgot: { minHeight: 32, justifyContent: 'center' }, checkboxRow: { minHeight: 32, flexDirection: 'row', alignItems: 'center', gap: 8 }, checkbox: { width: 20, height: 20, borderRadius: 6, borderWidth: 1, borderColor: '#60746D', alignItems: 'center', justifyContent: 'center', backgroundColor: '#14332F' }, checkboxChecked: { borderColor: C.optic, backgroundColor: C.optic }, checkboxLabel: { color: '#B8C6C1', fontSize: 11, fontWeight: '700' }, consentRow: { padding: 12, flexDirection: 'row', alignItems: 'flex-start', gap: 10, borderWidth: 1, borderColor: '#2E4C46', borderRadius: 13, backgroundColor: '#14332F' }, consentRowError: { borderColor: C.brick }, consentText: { flex: 1, color: '#9DAFA9', fontSize: 9, lineHeight: 14 }, consentLink: { color: C.surface, fontWeight: '900' }, consentError: { marginTop: 5, color: C.brick, fontSize: 9, lineHeight: 13 }, link: { color: C.teal, fontSize: 11, fontWeight: '800' }, authLink: { color: C.optic, fontSize: 11, fontWeight: '800' }, primary: { minHeight: 56, paddingHorizontal: 18, borderRadius: 15, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', backgroundColor: C.ink }, authPrimary: { backgroundColor: C.optic }, accountSubmit: { marginTop: 16 }, primaryText: { color: C.surface, fontSize: 14, fontWeight: '900' }, authPrimaryText: { color: C.ink, fontSize: 14, fontWeight: '900' }, switchRow: { marginTop: 21, flexDirection: 'row', justifyContent: 'center', gap: 5 }, switchCopy: { color: C.ink40, fontSize: 11 }, switchCopyDark: { color: '#8FA39C', fontSize: 11 }, switchLink: { color: C.teal, fontSize: 11, fontWeight: '900' }, switchLinkDark: { color: C.surface, fontSize: 11, fontWeight: '900' },
+  handoffBackdrop: { flex: 1, padding: 16, alignItems: 'center', justifyContent: 'center', backgroundColor: 'rgba(5,18,16,.72)' }, handoffCard: { width: '100%', maxWidth: 400, padding: 22, borderRadius: 22, backgroundColor: C.ink }, handoffTitle: { marginTop: 7, color: C.surface, fontSize: 26, lineHeight: 31, fontWeight: '900', letterSpacing: -0.6 }, handoffField: { marginTop: 18 }, handoffInput: { fontSize: 24, fontWeight: '900', letterSpacing: 8, textAlign: 'center' }, handoffSubmit: { marginTop: 14, justifyContent: 'center' }, handoffActions: { marginTop: 8, flexDirection: 'row', justifyContent: 'space-between' },
   googleButtonWrap: { position: 'relative', minHeight: 55, overflow: 'visible' }, googleButton: { minHeight: 55, paddingHorizontal: Platform.OS === 'ios' ? 16 : 12, flexDirection: 'row', alignItems: 'center', gap: 12, borderWidth: 1, borderColor: '#747775', borderRadius: 14, backgroundColor: '#FFFFFF', overflow: 'hidden' }, googleButtonDark: { borderColor: '#2E4C46', backgroundColor: '#14332F' }, googleMark: { width: 20, height: 20 }, googleText: { flex: 1, color: '#1F1F1F', fontSize: 14, fontWeight: '600' }, googleTextDark: { color: C.surface }, googleError: { marginTop: 7, color: C.brick, fontSize: 9, lineHeight: 13, textAlign: 'center' }, orRow: { marginVertical: 18, flexDirection: 'row', alignItems: 'center', gap: 9 }, orLine: { flex: 1, height: 1, backgroundColor: C.line }, orLineDark: { backgroundColor: '#2E4C46' }, orText: { color: C.ink40, fontSize: 7, fontWeight: '900', letterSpacing: .7 }, orTextDark: { color: '#8FA39C' },
   legalConsentRow: { marginTop: 15, paddingHorizontal: 2, flexDirection: 'row', alignItems: 'flex-start', gap: 10 },
   legalCheckboxError: { borderColor: C.brick },
