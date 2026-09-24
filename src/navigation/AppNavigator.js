@@ -20,9 +20,7 @@ import HelpSupportScreen from '../screens/HelpSupportScreen';
 import SupportChatScreen from '../screens/SupportChatScreen';
 import CommunityChatScreen from '../screens/CommunityChatScreen';
 import { PRIVATE_MESSAGES_ENABLED } from '../config/features';
-// Inbox now doubles as the community-chats hub on every platform (see its
-// "Community" segment), so it loads everywhere; only the 1:1 DM thread
-// screen stays native-only, matching PRIVATE_MESSAGES_ENABLED.
+// Inbox hosts both private messages and community chats (its segments).
 const { DirectChatScreen, InboxScreen } = require('../screens/DirectMessagesScreens');
 import PublicProfileScreen from '../screens/PublicProfileScreen';
 import ConnectionsScreen from '../screens/ConnectionsScreen';
@@ -136,7 +134,7 @@ function PeakleTabBar({ state, descriptors, navigation }) {
     : { background: '#F3F5EF', surface: colors.surface, line: colors.line, activeText: colors.ink, activeLabel: colors.ink, centerActiveLabel: colors.ink, muted: colors.ink40, active: colors.optic, kitchenLine: colors.teal };
   // Exclude routes that should never show a tab
   const desktopRoutes = ['Home', 'Book', 'Play', 'Team', 'Leaderboard', 'Activities', 'Inbox', 'Profile', 'HelpSupport'];
-  const desktopLabels = { Leaderboard: 'Leaderboard', Activities: 'Activities', Inbox: 'Community chats', HelpSupport: 'Help & support' };
+  const desktopLabels = { Leaderboard: 'Leaderboard', Activities: 'Activities', Inbox: 'Messages', HelpSupport: 'Help & support' };
   const visibleRoutes = desktop
     ? desktopRoutes.map((name) => state.routes.find((route) => route.name === name)).filter(Boolean)
     : state.routes.filter((route) => !alwaysHiddenRoutes.has(route.name));

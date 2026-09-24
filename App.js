@@ -34,6 +34,7 @@ const linking = {
       OpenPlayActivity: 'sessions/:sessionId?', Privacy: 'privacy', LegalDocument: 'legal/:documentKey',
       AccountDeletion: 'account-deletion', PaymentHistory: 'payment-history',
       HelpSupport: 'help', SupportChat: 'support', Inbox: 'chats', CommunityChat: 'chats/:eventKind/:eventId', PublicProfile: 'players/:userId',
+      DirectChat: 'chats/direct/:conversationId?',
       Connections: 'connections', Leaderboard: 'leaderboard',
       CompetitionDivision: 'competitions/:competitionId/divisions/:divisionId',
       Book: { path: 'explore', alias: ['booking/:paymentBookingId/payment-result'] },

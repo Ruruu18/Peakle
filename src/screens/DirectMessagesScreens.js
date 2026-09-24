@@ -788,7 +788,11 @@ export function DirectChatScreen({ route, navigation }) {
   const { isDark } = useTheme();
   const colors = isDark ? DARK_C : LIGHT_C;
   const { user } = useAuth();
-  const routePlayer = useMemo(() => playerFromRoute(route?.params?.player), [route?.params?.player]);
+  // Web URLs only carry the player id; the conversation lookup fills in the rest.
+  const routePlayer = useMemo(
+    () => playerFromRoute(route?.params?.player || (route?.params?.playerId ? { id: route.params.playerId } : null)),
+    [route?.params?.player, route?.params?.playerId],
+  );
   const [conversationId, setConversationId] = useState(route?.params?.conversationId || null);
   const [conversation, setConversation] = useState(null);
   const [peer, setPeer] = useState(routePlayer);

@@ -5,6 +5,7 @@ export function webNavigationState(state) {
     routes: state.routes.map((route) => {
       const params = { ...route.params };
       if (route.name === 'PublicProfile') params.userId ||= params.player?.id;
+      if (route.name === 'DirectChat' && !params.conversationId) params.playerId ||= params.player?.id;
       if (route.name === 'ActivityDetails') {
         params.activityType ||= params.activity?.type;
         params.activityId ||= params.activity?.sourceId;
