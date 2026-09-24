@@ -139,7 +139,11 @@ async function parkSafariHandoff(handoffId, url) {
     const code = params.get('code');
     const verifier = window.localStorage.getItem(verifierKey);
     if (!code || !verifier) throw new Error('Google sign-in did not finish. Start again from the Peakle app.');
-    const { error } = await client.rpc('put_auth_handoff', { p_id: handoffId, p_auth_code: code, p_code_verifier: verifier });
+    const { error } = await withTimeout(
+      client.rpc('put_auth_handoff', { p_id: handoffId, p_auth_code: code, p_code_verifier: verifier }),
+      20000,
+      'Google sign-in took too long. Start again from the Peakle app.',
+    );
     if (error) throw error;
   } finally {
     window.localStorage.removeItem(GOOGLE_HANDOFF_KEY);
