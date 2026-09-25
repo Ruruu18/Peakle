@@ -37,6 +37,7 @@ import {
   listTeams,
 } from '../services/database';
 import { listMyCommunityChats } from '../services/communityChat';
+import { ACCOUNT_MENU_NAV, HeaderAvatar } from '../components/AccountMenu';
 import {
   findDirectConversation,
   followPlayer,
@@ -574,9 +575,9 @@ export function InboxScreen({ navigation }) {
       <ScreenHeader
         eyebrow="CONVERSATIONS"
         title="Chats"
-        onBack={() => navigation.goBack()}
+        onBack={ACCOUNT_MENU_NAV ? null : () => navigation.goBack()}
         colors={colors}
-        action={onMessages ? <Pressable accessibilityLabel="New private message" hitSlop={8} onPress={() => setComposeOpen(true)} style={[styles.composeButton, { backgroundColor: colors.optic }]}><Icon name="create-outline" size={21} color="#0E2321" /></Pressable> : null}
+        action={<>{onMessages ? <Pressable accessibilityLabel="New private message" hitSlop={8} onPress={() => setComposeOpen(true)} style={[styles.composeButton, { backgroundColor: colors.optic }]}><Icon name="create-outline" size={21} color="#0E2321" /></Pressable> : null}<HeaderAvatar /></>}
       />
       {PRIVATE_MESSAGES_ENABLED ? (
         <View style={styles.segmentRow}>

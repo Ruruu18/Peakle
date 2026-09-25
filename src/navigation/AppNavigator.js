@@ -31,6 +31,8 @@ import { useTheme } from '../context/ThemeContext';
 import { useAuth } from '../context/AuthContext';
 import { useNearbyPlayersContext } from '../context/NearbyPlayersContext';
 import LeaveMatchDialog from '../components/LeaveMatchDialog';
+import ProfilePhoto from '../components/ProfilePhoto';
+import { ACCOUNT_MENU_NAV, AccountMenuProvider, AccountMenuSheet, useAccountMenu } from '../components/AccountMenu';
 import useDesktopLayout, { DESKTOP_SIDEBAR_WIDTH } from '../hooks/useDesktopLayout';
 
 const NotificationTestScreen = Platform.OS === 'web' ? null : require('../screens/NotificationTestScreen').default;
@@ -131,7 +133,8 @@ function PeakleTabBar({ state, descriptors, navigation }) {
   const insets = useSafeAreaInsets();
   const desktop = useDesktopLayout();
   const { isDark } = useTheme();
-  const { signOut } = useAuth();
+  const { signOut, user } = useAuth();
+  const { setOpen: setAccountMenuOpen } = useAccountMenu();
   const { joinedInvite, leave } = useNearbyPlayersContext();
   const [leaveDialogOpen, setLeaveDialogOpen] = useState(false);
   const [leavingMatch, setLeavingMatch] = useState(false);
@@ -143,27 +146,46 @@ function PeakleTabBar({ state, descriptors, navigation }) {
     ? { background: '#0E2321', surface: '#17302D', line: '#304743', activeText: colors.ink, activeLabel: colors.ink, centerActiveLabel: colors.surface, muted: '#9FB3AC', active: colors.optic, kitchenLine: colors.optic }
     : { background: '#F3F5EF', surface: colors.surface, line: colors.line, activeText: colors.ink, activeLabel: colors.ink, centerActiveLabel: colors.ink, muted: colors.ink40, active: colors.optic, kitchenLine: colors.teal };
   // Exclude routes that should never show a tab
-  const desktopRoutes = ['Home', 'Book', 'Play', 'Team', 'Leaderboard', 'Activities', 'Inbox', 'Profile', 'HelpSupport'];
-  const desktopLabels = { Leaderboard: 'Leaderboard', Activities: 'Activities', Inbox: 'Messages', HelpSupport: 'Help & support' };
-  const visibleRoutes = desktop
-    ? desktopRoutes.map((name) => state.routes.find((route) => route.name === name)).filter(Boolean)
+  const desktopRoutes = ACCOUNT_MENU_NAV
+    ? ['Home', 'Book', 'Play', 'Team', 'Leaderboard', 'Activities', 'Inbox']
+    : ['Home', 'Book', 'Play', 'Team', 'Leaderboard', 'Activities', 'Inbox', 'Profile', 'HelpSupport'];
+  const desktopLabels = { Leaderboard: 'Leaderboard', Activities: 'Activities', Inbox: ACCOUNT_MENU_NAV ? 'Chats' : 'Messages', HelpSupport: 'Help & support' };
+  const mobileRoutes = ACCOUNT_MENU_NAV ? ['Home', 'Book', 'Play', 'Team', 'Inbox'] : null;
+  const visibleRoutes = desktop || mobileRoutes
+    ? (desktop ? desktopRoutes : mobileRoutes).map((name) => state.routes.find((route) => route.name === name)).filter(Boolean)
     : state.routes.filter((route) => !alwaysHiddenRoutes.has(route.name));
+  const chatUnread = Number(state.routes.find((route) => route.name === 'Team')?.params?.unreadCount || 0);
   const activeProfileSection = currentRoute.name === 'Profile' ? (currentRoute.params?.openTab || 'Overview')
     : SETTINGS_ROUTES.has(currentRoute.name) ? 'Settings'
     : null;
-  const mobileOwner = currentRoute.name === 'Pickleball'
+  const legacyMobileOwner = currentRoute.name === 'Pickleball'
     ? (currentRoute.params?.ownerTab || ({ Ratings: 'Profile', Privacy: 'Profile', 'Find play': 'Play', Compete: 'Book' }[currentRoute.params?.openTab]))
     : currentRoute.name === 'Leaderboard' ? 'Home'
     : ['Privacy', 'HelpSupport', 'SupportChat', 'NotificationTest', 'Connections'].includes(currentRoute.name) ? 'Profile'
     : ['Inbox', 'DirectChat', 'CommunityChat'].includes(currentRoute.name) ? (currentRoute.params?.ownerTab || 'Team')
     : ['Activities', 'ActivityDetails', 'OpenPlayActivity'].includes(currentRoute.name) ? 'Home'
     : null;
+  // Account screens have no tab once Profile moves behind the avatar; chats all belong to Chats.
+  const mobileOwner = !ACCOUNT_MENU_NAV ? legacyMobileOwner
+    : ['Inbox', 'DirectChat', 'CommunityChat'].includes(currentRoute.name) ? 'Inbox'
+    : legacyMobileOwner === 'Profile' ? null
+    : legacyMobileOwner;
   const contextualOwner = desktop ? ({
     ActivityDetails: 'Activities', OpenPlayActivity: 'Activities',
     Privacy: 'Profile', LegalDocument: 'Profile', AccountDeletion: 'Profile',
     PaymentHistory: 'Profile', PublicProfile: 'Profile', Connections: 'Profile',
     SupportChat: 'HelpSupport', CommunityChat: 'Inbox', CompetitionDivision: 'Book',
   }[currentRoute.name] || mobileOwner) : mobileOwner;
+  const guardedNavigate = (name, params) => {
+    if (currentRoute.name === 'Play' && joinedInvite) {
+      if (leaveDialogOpen) return;
+      setPendingRoute({ name, params });
+      setLeaveError('');
+      setLeaveDialogOpen(true);
+      return;
+    }
+    navigation.navigate(name, params);
+  };
   return (
     <View dataSet={Platform.OS === 'web' ? { playerNavigation: desktop ? 'sidebar' : 'bottom' } : undefined} style={[styles.tabOuter, { paddingBottom: Math.max(insets.bottom, 9), backgroundColor: theme.background }, desktop && [styles.sidebar, { backgroundColor: theme.surface, borderColor: theme.line }]]}>
       {desktop ? <View style={styles.sidebarBrand}><Image source={BALL_IMAGE} style={[styles.sidebarLogo, { tintColor: isDark ? colors.optic : colors.ink }]} /><Text style={[styles.sidebarWordmark, { color: isDark ? '#F3F5EF' : colors.ink }]}>Peakle</Text><Text style={styles.sidebarBeta}>BETA</Text></View> : null}
@@ -185,7 +207,7 @@ function PeakleTabBar({ state, descriptors, navigation }) {
             const event = navigation.emit({ type: 'tabPress', target: route.key, canPreventDefault: true });
             if (!routeFocused && !event.defaultPrevented) navigation.navigate(route.name, route.params);
           };
-          const badge = route.name === 'Team' ? Number(route.params?.unreadCount || 0) : 0;
+          const badge = route.name === (ACCOUNT_MENU_NAV ? 'Inbox' : 'Team') ? chatUnread : 0;
           if (desktop && route.name === 'Profile') return PROFILE_SECTIONS.map((section) => {
             const sectionFocused = activeProfileSection ? activeProfileSection === section.tab : focused && section.tab === 'Overview';
             const onSectionPress = () => {
@@ -205,7 +227,9 @@ function PeakleTabBar({ state, descriptors, navigation }) {
           return <TabBarItem key={route.key} focused={focused} label={label} onPress={onPress} play={play} routeName={route.name} theme={theme} badge={badge} />;
         })}
       </View>
-      {desktop ? <View style={[styles.sidebarFooter, { borderColor: theme.line }]}><Pressable accessibilityRole="button" accessibilityLabel="Log out" onPress={() => signOut()} style={({ hovered, pressed }) => [styles.sidebarLink, styles.sidebarLogOut, (hovered || pressed) && { backgroundColor: theme.background }]}><AppIcon name="log-out-outline" size={21} color="#B6472E" /><Text style={[styles.sidebarLabel, { color: '#B6472E' }]}>Log out</Text></Pressable><Text style={[styles.sidebarFootnote, { color: theme.muted }]}>Your community. Your court.</Text></View> : null}
+      {desktop && ACCOUNT_MENU_NAV ? <View style={[styles.sidebarFooter, { borderColor: theme.line }]}><Pressable accessibilityRole="button" accessibilityLabel="Open your account menu" onPress={() => setAccountMenuOpen(true)} style={({ hovered, pressed }) => [styles.sidebarLink, styles.sidebarAccount, { backgroundColor: SETTINGS_ROUTES.has(currentRoute.name) || currentRoute.name === 'Profile' ? theme.active : hovered || pressed ? theme.background : 'transparent' }]}><ProfilePhoto photo={user?.picture || user?.avatar} name={user?.name} size={30} /><Text numberOfLines={1} style={[styles.sidebarLabel, styles.sidebarAccountName, { color: SETTINGS_ROUTES.has(currentRoute.name) || currentRoute.name === 'Profile' || !isDark ? colors.ink : '#F3F5EF' }]}>{user?.name?.trim() || 'Your account'}</Text><AppIcon name="ellipsis-horizontal" size={18} color={theme.muted} /></Pressable><Text style={[styles.sidebarFootnote, { color: theme.muted }]}>Your community. Your court.</Text></View> : null}
+      {desktop && !ACCOUNT_MENU_NAV ? <View style={[styles.sidebarFooter, { borderColor: theme.line }]}><Pressable accessibilityRole="button" accessibilityLabel="Log out" onPress={() => signOut()} style={({ hovered, pressed }) => [styles.sidebarLink, styles.sidebarLogOut, (hovered || pressed) && { backgroundColor: theme.background }]}><AppIcon name="log-out-outline" size={21} color="#B6472E" /><Text style={[styles.sidebarLabel, { color: '#B6472E' }]}>Log out</Text></Pressable><Text style={[styles.sidebarFootnote, { color: theme.muted }]}>Your community. Your court.</Text></View> : null}
+      {ACCOUNT_MENU_NAV ? <AccountMenuSheet onNavigate={guardedNavigate} onSignOut={() => signOut()} /> : null}
       <LeaveMatchDialog
         visible={leaveDialogOpen}
         hostName={joinedInvite?.sender?.display_name}
@@ -239,6 +263,7 @@ function PeakleTabBar({ state, descriptors, navigation }) {
 function WorkspaceNavigator({ children, initialRouteName, isDark, workspaceKey }) {
   const desktop = useDesktopLayout();
   return (
+    <AccountMenuProvider>
     <Tab.Navigator
       key={workspaceKey}
       initialRouteName={initialRouteName}
@@ -259,6 +284,7 @@ function WorkspaceNavigator({ children, initialRouteName, isDark, workspaceKey }
     >
       {children}
     </Tab.Navigator>
+    </AccountMenuProvider>
   );
 }
 
@@ -282,7 +308,7 @@ function PlayerWorkspace({ isDark }) {
       <Tab.Screen name="SupportChat" component={SupportChatScreen} />
       <Tab.Screen name="CommunityChat" component={CommunityChatScreen} />
       {Platform.OS !== 'web' ? <Tab.Screen name="NotificationTest" component={NotificationTestScreen} /> : null}
-      <Tab.Screen name="Inbox" component={InboxScreen} />
+      <Tab.Screen name="Inbox" component={InboxScreen} options={ACCOUNT_MENU_NAV ? { tabBarLabel: 'Chats', lazy: false } : undefined} />
       {PRIVATE_MESSAGES_ENABLED ? <Tab.Screen name="DirectChat" component={DirectChatScreen} /> : null}
       <Tab.Screen name="PublicProfile" component={PublicProfileScreen} />
       <Tab.Screen name="Connections" component={ConnectionsScreen} />
@@ -309,6 +335,8 @@ const styles = StyleSheet.create({
   sidebarBadge: { minWidth: 19, paddingHorizontal: 5, paddingVertical: 3, borderRadius: 10, backgroundColor: '#B6472E' },
   sidebarFooter: { marginTop: 'auto', paddingTop: 22, paddingBottom: 16, borderTopWidth: 1 },
   sidebarLogOut: { marginBottom: 14 },
+  sidebarAccount: { marginBottom: 14, gap: 10 },
+  sidebarAccountName: { flex: 1, minWidth: 0 },
   sidebarFootnote: { fontSize: 11, lineHeight: 17, textAlign: 'center' },
   tabOuter: { backgroundColor: 'transparent', paddingHorizontal: 12, paddingTop: 5 },
   tabBar: { height: 76, paddingHorizontal: 5, borderWidth: 1, borderColor: colors.line, borderRadius: 25, flexDirection: 'row', backgroundColor: colors.surface, ...Platform.select({ ios: { shadowColor: colors.ink, shadowOpacity: 0.16, shadowRadius: 24, shadowOffset: { width: 0, height: 10 } }, android: { elevation: 11 } }) },

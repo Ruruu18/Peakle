@@ -54,7 +54,6 @@ input:not([type="checkbox"]):not([type="radio"]):focus, textarea:focus { outline
   [data-desktop-layout="profile-meta"] { flex-direction: column; align-items: flex-start; gap: 10px; }
   [data-desktop-layout="profile-meta-label"] { flex-basis: auto !important; }
   [data-desktop-layout="profile-content"] > :first-child { margin-top: 0; }
-  [data-desktop-layout="leaderboard"] { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.1fr); align-items: start; gap: 24px; }
   [data-desktop-layout="court-grid"] { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); align-items: start; gap: 20px; }
   [data-desktop-layout="court-grid"] > * { margin-bottom: 0; }
   [data-desktop-layout="two-columns"] { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 20px; }

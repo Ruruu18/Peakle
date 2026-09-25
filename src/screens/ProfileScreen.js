@@ -37,6 +37,7 @@ import { PH_LOCATIONS, formatLocation, locationMatchesSearch, parseLocation } fr
 import { peekCachedData, readCachedData, withTimeout, writeCachedData } from '../lib/asyncData';
 import { profileScreenCacheKey } from '../lib/cacheKeys';
 import { supabase } from '../lib/supabase';
+import { ACCOUNT_MENU_NAV } from '../components/AccountMenu';
 
 const LIGHT_C = {
   ink: '#0E2321', paper: '#F3F5EF', surface: '#FFFFFF', optic: '#D6E94A',
@@ -752,6 +753,7 @@ function ProfileScreen({ navigation, route }) {
       <StatusBar style={isDark ? 'light' : 'dark'} backgroundColor={C.paper} />
       <ScrollView contentContainerStyle={[styles.content, compactPhone && styles.contentCompact]} showsVerticalScrollIndicator={false}>
         <View style={styles.topbar}>
+          {ACCOUNT_MENU_NAV && <Pressable accessibilityRole="button" accessibilityLabel="Go back" hitSlop={8} onPress={() => (navigation.canGoBack() ? navigation.goBack() : navigation.navigate('Home'))} style={[styles.topActionButton, styles.topBackButton]}><Icon name="arrow-back" size={19} /></Pressable>}
           <View style={styles.topbarCopy}><Text numberOfLines={1} style={styles.eyebrow}>YOUR GAME</Text><Text numberOfLines={1} style={styles.h1}>Player profile</Text></View>
           <View style={styles.topActions}><Pressable accessibilityLabel="Notifications" onPress={() => setNotificationsOpen(true)} style={styles.topActionButton}><Icon name="notifications-outline" size={19} />{unreadCount > 0 && <View style={styles.noticeDot} />}</Pressable></View>
         </View>
@@ -772,7 +774,7 @@ function ProfileScreen({ navigation, route }) {
         {hasOrganizerAccess && <OrganizerPortalShortcut onOpen={openOrganizerPortal} />}
         </View>
         <View {...webLayout('profile-content')}>
-        {!desktop && <View style={[styles.tabs, compactPhone && styles.tabsCompact]}>{['Overview', 'Matches', 'Settings'].map((item) => <Pressable key={item} onPress={() => setTab(item)} style={[styles.tab, tab === item && styles.tabActive]}><Text style={[styles.tabText, tab === item && styles.tabTextActive]}>{item}</Text></Pressable>)}</View>}
+        {(!desktop || ACCOUNT_MENU_NAV) && <View style={[styles.tabs, compactPhone && styles.tabsCompact]}>{['Overview', 'Matches', 'Settings'].map((item) => <Pressable key={item} onPress={() => setTab(item)} style={[styles.tab, tab === item && styles.tabActive]}><Text style={[styles.tabText, tab === item && styles.tabTextActive]}>{item}</Text></Pressable>)}</View>}
         {tab === 'Overview' && <Overview matches={recordedMatches} onAchievement={setAchievement} onSeeMatches={() => setTab('Matches')} onMatch={setSelectedMatch} onStartFocus={() => {
           navigation.navigate('Play', { focusChallengeToken: Date.now(), focusChallenge: { id: 'return-depth-7-of-10', title: 'Return depth', instruction: 'Land 7 of your first 10 returns past mid-court.', target: 7, attempts: 10 } });
         }} />}
@@ -805,6 +807,7 @@ const shadow = Platform.select({ ios: { shadowColor: C.ink, shadowOpacity: .08, 
 const lightStyles = createMobileStyleSheet({
   safe: { flex: 1, backgroundColor: C.paper }, content: { paddingHorizontal: 20, paddingTop: 18, paddingBottom: 126 }, contentCompact: { paddingHorizontal: 16, paddingTop: 22 }, flex: { flex: 1 },
   topbar: { minHeight: 44, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 12 }, topbarCopy: { flex: 1, minWidth: 0 }, topActions: { height: 40, flexDirection: 'row', flexShrink: 0, gap: 6 }, eyebrow: { color: C.ink40, fontSize: 10, lineHeight: 15, fontWeight: '800', letterSpacing: 1 }, h1: { marginTop: 2, color: C.ink, fontSize: 26, lineHeight: 31, fontWeight: '900', letterSpacing: -.55 }, h2: { marginTop: 3, color: C.ink, fontSize: 21, lineHeight: 27, fontWeight: '800', letterSpacing: -.4 },
+  topBackButton: { flexShrink: 0 },
   topActionButton: { width: 40, height: 40, borderRadius: 13, borderWidth: 1, borderColor: C.line, backgroundColor: C.surface, alignItems: 'center', justifyContent: 'center' },
   iconButton: { width: 43, height: 43, borderRadius: 22, borderWidth: 1, borderColor: C.line, backgroundColor: C.surface, alignItems: 'center', justifyContent: 'center' }, noticeDot: { position: 'absolute', right: 9, top: 8, width: 7, height: 7, borderRadius: 4, borderWidth: 1, borderColor: C.surface, backgroundColor: C.brick },
   kitchen: { height: 7, marginTop: 18, marginBottom: 22 }, headerLine: { marginTop: 10, marginBottom: 16 }, headerLineCompact: { marginTop: 14, marginBottom: 21 }, solid: { height: 2, backgroundColor: C.ink }, dashed: { marginTop: 4, borderTopWidth: 1, borderStyle: 'dashed', borderColor: C.ink40 }, solidQuiet: { backgroundColor: C.line }, dashedQuiet: { borderColor: C.line },

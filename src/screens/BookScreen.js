@@ -43,6 +43,7 @@ import { requireSupabase } from '../lib/supabase';
 import { peekCachedData, readCachedData, withTimeout, writeCachedData } from '../lib/asyncData';
 import { BOOKING_VENUES_CACHE_KEY, bookingsCacheKey } from '../lib/cacheKeys';
 import ResilientImage from '../components/ResilientImage';
+import { HeaderAvatar } from '../components/AccountMenu';
 
 const LIGHT_C = {
   ink: '#0E2321', paper: '#F3F5EF', surface: '#FFFFFF', optic: '#D6E94A',
@@ -219,6 +220,7 @@ function Header({ title = 'Explore courts', subtitle = null, onBack, action }) {
         {onBack && <Pressable accessibilityRole="button" accessibilityLabel="Go back" hitSlop={6} onPress={onBack} style={styles.iconButton}><Icon name="arrow-back" /></Pressable>}
         <View style={styles.headerCopy}>{subtitle ? <Text numberOfLines={1} style={styles.eyebrow}>{subtitle}</Text> : null}<Text numberOfLines={1} style={[styles.h1, compact && styles.headerTitleCompact]}>{title}</Text></View>
         {headerAction}
+        {!onBack ? <HeaderAvatar size={36} /> : null}
       </View>
       <View style={styles.headerCourtDivider}><View style={styles.headerCourtLine} /><View style={styles.headerCourtDash} /></View>
       <LocationPicker visible={locationOpen} onClose={() => setLocationOpen(false)} />

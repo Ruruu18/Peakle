@@ -34,6 +34,7 @@ import { HOME_VENUES_CACHE_KEY, homeDashboardCacheKey, playerActivitiesCacheKey 
 import { skillCategoryForRating } from '../utils/skillCategories';
 import { listDiscoverablePlayerActivities } from '../services/playerActivities';
 import { followPlayer, listPlayerSuggestions } from '../services/directMessages';
+import { ACCOUNT_MENU_NAV, useAccountMenu } from '../components/AccountMenu';
 
 const C = {
   ink: '#0E2321', paper: '#F3F5EF', surface: '#FFFFFF', optic: '#D6E94A',
@@ -459,6 +460,7 @@ export default function HomeScreen() {
   const [extendingBookingId, setExtendingBookingId] = useState(null);
   const toastAnim = useRef(new Animated.Value(0)).current;
   const displayName = user?.name?.trim() || 'Player';
+  const { setOpen: setAccountMenuOpen } = useAccountMenu();
   const notices = useMemo(() => operationNotifications.map(presentNotification), [operationNotifications]);
   // Players who accepted our follow request now follow each other with us, so
   // they no longer belong in "People you may know".
@@ -796,7 +798,7 @@ export default function HomeScreen() {
       <ScrollView style={styles.scroll} contentContainerStyle={[styles.content, compactHeader && styles.contentCompact, tablet && styles.contentTablet, desktop && styles.contentDesktop]} showsVerticalScrollIndicator={false}>
         <View style={[styles.header, compactHeader && styles.headerCompact]}>
           <View style={styles.headerProfileGroup}>
-            <ProfilePhoto photo={user?.picture || user?.avatar} name={displayName} size={40} />
+            {ACCOUNT_MENU_NAV && !desktop ? <Pressable accessibilityRole="button" accessibilityLabel="Open your account menu" hitSlop={6} onPress={() => setAccountMenuOpen(true)} style={({ pressed }) => pressed && styles.pressed}><ProfilePhoto photo={user?.picture || user?.avatar} name={displayName} size={40} /></Pressable> : <ProfilePhoto photo={user?.picture || user?.avatar} name={displayName} size={40} />}
             <View style={styles.headerIdentityCopy}>
               <Eyebrow numberOfLines={1}>{greetingFor(now).toUpperCase()}</Eyebrow>
               <Text numberOfLines={1} style={[styles.h1, compactHeader && styles.h1Compact, isDark && darkStyles.text]}>{displayName}</Text>

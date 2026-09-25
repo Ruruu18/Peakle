@@ -51,6 +51,7 @@ import { teamScreenCacheKey } from '../lib/cacheKeys';
 import { TEAM_SKILL_LEVELS, skillCategoryForRating } from '../utils/skillCategories';
 import { listDirectConversations } from '../services/directMessages';
 import { speakScoreAnnouncement, stopScoreAnnouncement } from '../utils/scoreAccessibility';
+import { ACCOUNT_MENU_NAV, HeaderAvatar } from '../components/AccountMenu';
 
 const LIGHT_C = { ink: '#0E2321', paper: '#F3F5EF', surface: '#FFFFFF', optic: '#D6E94A', teal: '#1C6B66', brick: '#B6472E', ink70: '#3C4A45', ink40: '#7C8983', line: '#DDE3DA' };
 let C = LIGHT_C;
@@ -2354,11 +2355,12 @@ export default function TeamScreen({ navigation, route }) {
             <Text numberOfLines={1} style={styles.h1}>Teams</Text>
           </View>
           <View style={styles.headerActions}>
-            <Pressable accessibilityLabel="Open chats" onPress={() => navigation.navigate('Inbox')} style={styles.inboxButton}>
+            {!ACCOUNT_MENU_NAV && <Pressable accessibilityLabel="Open chats" onPress={() => navigation.navigate('Inbox')} style={styles.inboxButton}>
               <Icon name="chatbubbles-outline" size={18} color={C.teal} />
               {directConversations.reduce((total, item) => total + Number(item.unreadCount || 0), 0) > 0 && <View style={styles.inboxBadge}><Text style={styles.inboxBadgeText}>{Math.min(99, directConversations.reduce((total, item) => total + Number(item.unreadCount || 0), 0))}</Text></View>}
-            </Pressable>
+            </Pressable>}
             <Pressable accessibilityLabel="Create team" onPress={openCreate} style={styles.createButton}><Icon name="add" size={20} color="#000000" /></Pressable>
+            <HeaderAvatar size={40} />
           </View>
         </View>
         <KitchenLine style={styles.headerLine} />

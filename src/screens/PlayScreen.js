@@ -49,6 +49,7 @@ import { parseVoiceMatchCommand } from '../utils/voiceMatchCommands';
 import { evenSidePlayerFromCurrentServer, playerForSideOut, resolveRallyState } from '../utils/liveMatchScoring';
 import { DEMO_MODE } from '../config/demoMode';
 import { DEMO_LIVE_MATCH } from '../config/demoData';
+import { HeaderAvatar } from '../components/AccountMenu';
 
 const BALL_IMAGE = require('../../public/images/ball.png');
 
@@ -364,7 +365,7 @@ function PlayChoiceScreen({ onFindPlay, onSetupMatch, unfinishedMatch, onResume 
       <Header
         eyebrow="YOUR GAME"
         title="Play"
-        action={<View accessibilityElementsHidden importantForAccessibility="no-hide-descendants" style={styles.playHeaderBall}><Image source={BALL_IMAGE} style={styles.playHeaderBallImage} resizeMode="contain" /></View>}
+        action={<><View accessibilityElementsHidden importantForAccessibility="no-hide-descendants" style={styles.playHeaderBall}><Image source={BALL_IMAGE} style={styles.playHeaderBallImage} resizeMode="contain" /></View><HeaderAvatar size={36} style={styles.playHeaderAvatar} /></>}
       />
 
       <View style={styles.choiceIntro}>
@@ -2443,6 +2444,7 @@ const lightStyles = createMobileStyleSheet({
   resumeCard: { marginTop: 14, padding: 13, flexDirection: 'row', alignItems: 'center', gap: 10, borderRadius: 17, borderWidth: 1, borderColor: '#B9D22C', backgroundColor: '#FAFCEB' }, resumeIcon: { width: 40, height: 40, borderRadius: 12, alignItems: 'center', justifyContent: 'center', backgroundColor: C.optic }, resumeEyebrow: { color: C.teal, fontSize: 7, fontWeight: '900', letterSpacing: .7 }, resumeTitle: { marginTop: 2, color: C.ink, fontSize: 10, fontWeight: '900' }, resumeMeta: { marginTop: 2, color: C.ink40, fontSize: 7, lineHeight: 11 }, resumeButton: { minHeight: 34, paddingHorizontal: 10, flexDirection: 'row', alignItems: 'center', gap: 4, borderRadius: 10, backgroundColor: C.teal }, resumeButtonText: { color: C.surface, fontSize: 8, fontWeight: '900' },
   header: { minHeight: 44, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 10 }, headerCopy: { flex: 1, minWidth: 0 }, headerBack: { width: 40, height: 40, flexShrink: 0, alignItems: 'center', justifyContent: 'center', borderRadius: 13, borderWidth: 1, borderColor: C.line, backgroundColor: C.surface },
   eyebrow: { color: C.ink40, fontSize: 9, lineHeight: 13, fontWeight: '900', letterSpacing: .9 }, h1: { color: C.ink, fontSize: 22, lineHeight: 27, fontWeight: '900', letterSpacing: -.45 },
+  playHeaderAvatar: { marginLeft: 10 },
   playHeaderBall: { width: 40, height: 40, flexShrink: 0, alignItems: 'center', justifyContent: 'center', borderRadius: 13, backgroundColor: C.optic }, playHeaderBallImage: { width: 26, height: 26 },
   kitchen: { height: 7, marginTop: 18, marginBottom: 20 }, headerLine: { marginTop: 10, marginBottom: 16 }, solid: { height: 2, backgroundColor: C.ink }, dashed: { marginTop: 4, borderTopWidth: 1, borderStyle: 'dashed', borderColor: C.ink40 }, solidLight: { backgroundColor: 'rgba(255,255,255,.78)' }, dashedLight: { borderColor: 'rgba(255,255,255,.38)' },
   liveChip: { minHeight: 34, paddingHorizontal: 10, flexDirection: 'row', alignItems: 'center', gap: 6, borderRadius: 18, backgroundColor: '#E5F0ED' }, liveDot: { width: 7, height: 7, borderRadius: 4, backgroundColor: C.teal }, liveChipText: { color: C.teal, fontSize: 8, fontWeight: '900', letterSpacing: .7 }, joinedChip: { minHeight: 34, paddingHorizontal: 10, flexDirection: 'row', alignItems: 'center', gap: 5, borderRadius: 18, backgroundColor: C.optic }, joinedChipText: { color: '#0E2321', fontSize: 8, fontWeight: '900', letterSpacing: .7 },

@@ -52,7 +52,15 @@ export async function checkDesktopLayouts(page, backend, baseUrl, artifacts) {
     await go('/profile');
     await checkGrid('profile', 2);
     await go('/leaderboard');
-    await checkGrid('leaderboard', 2);
+    await page.waitForSelector('[data-testid="leaderboard-table"]');
+    const leaderboard = await page.evaluate(() => {
+      const standing = document.querySelector('[data-testid="leaderboard-standing"]').getBoundingClientRect();
+      const table = document.querySelector('[data-testid="leaderboard-table"]').getBoundingClientRect();
+      const content = document.querySelector('[data-desktop-layout="leaderboard"]').getBoundingClientRect();
+      return { standingBottom: standing.bottom, tableTop: table.top, tableWidth: table.width, contentWidth: content.width };
+    });
+    assert.ok(leaderboard.tableTop > leaderboard.standingBottom, 'Leaderboard: personal standing appears above the rankings');
+    assert.ok(Math.abs(leaderboard.tableWidth - leaderboard.contentWidth) < 2, 'Leaderboard: rankings use the available desktop width');
     await go('/explore');
     await page.waitForSelector('::-p-text(Community Courts 6)');
     await checkGrid('court-grid', width >= 1440 ? 3 : 2);
