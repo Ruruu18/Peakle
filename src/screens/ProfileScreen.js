@@ -753,7 +753,7 @@ function ProfileScreen({ navigation, route }) {
       <StatusBar style={isDark ? 'light' : 'dark'} backgroundColor={C.paper} />
       <ScrollView contentContainerStyle={[styles.content, compactPhone && styles.contentCompact]} showsVerticalScrollIndicator={false}>
         <View style={styles.topbar}>
-          {ACCOUNT_MENU_NAV && <Pressable accessibilityRole="button" accessibilityLabel="Go back" hitSlop={8} onPress={() => (navigation.canGoBack() ? navigation.goBack() : navigation.navigate('Home'))} style={[styles.topActionButton, styles.topBackButton]}><Icon name="arrow-back" size={19} /></Pressable>}
+          {ACCOUNT_MENU_NAV && !desktop && <Pressable accessibilityRole="button" accessibilityLabel="Go back" hitSlop={8} onPress={() => (navigation.canGoBack() ? navigation.goBack() : navigation.navigate('Home'))} style={[styles.topActionButton, styles.topBackButton]}><Icon name="arrow-back" size={19} /></Pressable>}
           <View style={styles.topbarCopy}><Text numberOfLines={1} style={styles.eyebrow}>YOUR GAME</Text><Text numberOfLines={1} style={styles.h1}>Player profile</Text></View>
           <View style={styles.topActions}><Pressable accessibilityLabel="Notifications" onPress={() => setNotificationsOpen(true)} style={styles.topActionButton}><Icon name="notifications-outline" size={19} />{unreadCount > 0 && <View style={styles.noticeDot} />}</Pressable></View>
         </View>
@@ -774,7 +774,7 @@ function ProfileScreen({ navigation, route }) {
         {hasOrganizerAccess && <OrganizerPortalShortcut onOpen={openOrganizerPortal} />}
         </View>
         <View {...webLayout('profile-content')}>
-        {(!desktop || ACCOUNT_MENU_NAV) && <View style={[styles.tabs, compactPhone && styles.tabsCompact]}>{['Overview', 'Matches', 'Settings'].map((item) => <Pressable key={item} onPress={() => setTab(item)} style={[styles.tab, tab === item && styles.tabActive]}><Text style={[styles.tabText, tab === item && styles.tabTextActive]}>{item}</Text></Pressable>)}</View>}
+        {!desktop && <View style={[styles.tabs, compactPhone && styles.tabsCompact]}>{['Overview', 'Matches', 'Settings'].map((item) => <Pressable key={item} onPress={() => setTab(item)} style={[styles.tab, tab === item && styles.tabActive]}><Text style={[styles.tabText, tab === item && styles.tabTextActive]}>{item}</Text></Pressable>)}</View>}
         {tab === 'Overview' && <Overview matches={recordedMatches} onAchievement={setAchievement} onSeeMatches={() => setTab('Matches')} onMatch={setSelectedMatch} onStartFocus={() => {
           navigation.navigate('Play', { focusChallengeToken: Date.now(), focusChallenge: { id: 'return-depth-7-of-10', title: 'Return depth', instruction: 'Land 7 of your first 10 returns past mid-court.', target: 7, attempts: 10 } });
         }} />}

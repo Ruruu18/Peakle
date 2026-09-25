@@ -13,6 +13,7 @@ import { StatusBar } from 'expo-status-bar';
 import Ionicons from '@expo/vector-icons/Ionicons';
 import ScrollView from '../components/FocusResetScrollView';
 import ProfilePhoto from '../components/ProfilePhoto';
+import LeaderboardPodium from '../components/LeaderboardPodium';
 import useResponsiveWidth from '../hooks/useResponsiveWidth';
 import { webLayout } from '../utils/webLayout';
 import { useTheme } from '../context/ThemeContext';
@@ -77,79 +78,36 @@ function RankHero({ data, format, areaLabel, palette }) {
   const record = `${player?.wins || 0}–${player?.losses || 0}`;
 
   return (
-    <View style={[styles.hero, { backgroundColor: palette.hero }]}>
-      <View pointerEvents="none" style={styles.heroCourt}>
-        <View style={styles.heroCourtLine} />
-        <View style={[styles.heroCourtLine, styles.heroCourtLineMiddle]} />
-        <View style={[styles.heroCourtLine, styles.heroCourtLineVertical]} />
-      </View>
+    <View style={[styles.hero, { backgroundColor: palette.surface, borderColor: palette.line }]}>
       <View style={styles.heroTop}>
         <View style={styles.heroIdentity}>
-          <View style={styles.heroAvatar}>
-            <ProfilePhoto photo={player?.avatar} name={player?.name} size={54} />
-          </View>
+          <ProfilePhoto photo={player?.avatar} name={player?.name} size={40} />
           <View style={styles.heroCopy}>
-            <Text style={styles.heroEyebrow}>YOUR {format.toUpperCase()} STANDING</Text>
-            <Text numberOfLines={1} style={styles.heroName}>{player?.name || 'Player'}</Text>
+            <Text style={[styles.heroName, { color: palette.ink }]}>Your standing</Text>
+            <Text numberOfLines={1} style={[styles.heroContext, { color: palette.ink40 }]}>{format === 'singles' ? 'Singles' : 'Doubles'} · {areaLabel}</Text>
           </View>
         </View>
-      </View>
-
-      <View style={styles.heroRankRow}>
-        <Text style={styles.heroRank}>{ranked ? `#${player.rank}` : '—'}</Text>
         <View style={styles.heroRankCopy}>
-          <Text style={styles.heroRankLabel}>{ranked ? `IN ${areaLabel.toUpperCase()}` : 'NOT RANKED YET'}</Text>
-          <Text style={styles.heroRankHint}>{ranked ? 'Based on verified match results' : 'Complete a verified match to enter the standings'}</Text>
+          <Text style={[styles.heroRank, { color: palette.teal }]}>{ranked ? `#${player.rank}` : '—'}</Text>
+          <Text style={[styles.heroContext, { color: palette.ink40 }]}>{ranked ? 'Rank' : 'Unranked'}</Text>
         </View>
       </View>
 
-      <View style={styles.heroStats}>
+      <View style={[styles.heroStats, { borderColor: palette.line }]}>
         <View style={styles.heroStat}>
-          <Text style={styles.heroStatValue}>{rating}</Text>
-          <Text style={styles.heroStatLabel}>RATING</Text>
+          <Text style={[styles.heroStatValue, { color: palette.ink }]}>{rating}</Text>
+          <Text style={[styles.heroStatLabel, { color: palette.ink40 }]}>Rating</Text>
         </View>
-        <View style={styles.heroStatDivider} />
         <View style={styles.heroStat}>
-          <Text style={styles.heroStatValue}>{record}</Text>
-          <Text style={styles.heroStatLabel}>RECORD</Text>
+          <Text style={[styles.heroStatValue, { color: palette.ink }]}>{record}</Text>
+          <Text style={[styles.heroStatLabel, { color: palette.ink40 }]}>Win–loss</Text>
         </View>
-        <View style={styles.heroStatDivider} />
         <View style={styles.heroStat}>
-          <Text style={styles.heroStatValue}>{player?.verifiedMatches || 0}</Text>
-          <Text style={styles.heroStatLabel}>VERIFIED</Text>
+          <Text style={[styles.heroStatValue, { color: palette.ink }]}>{player?.verifiedMatches || 0}</Text>
+          <Text style={[styles.heroStatLabel, { color: palette.ink40 }]}>Verified</Text>
         </View>
       </View>
-    </View>
-  );
-}
-
-function PodiumPlayer({ player, currentUserId, place, palette }) {
-  const champion = player.rank === 1;
-  const isYou = player.id === currentUserId;
-  return (
-    <View style={[styles.podiumPlayer, champion && styles.podiumChampion]}>
-      <View style={[styles.placeBadge, { backgroundColor: champion ? palette.optic : palette.wash, borderColor: champion ? palette.optic : palette.line }]}>
-        <Text style={[styles.placeText, { color: champion ? LIGHT.ink : palette.ink }]}>{place}</Text>
-      </View>
-      <View style={[styles.podiumAvatar, { borderColor: champion ? palette.optic : palette.line }]}>
-        <ProfilePhoto photo={player.avatar} name={player.name} size={champion ? 60 : 50} />
-      </View>
-      <Text numberOfLines={1} style={[styles.podiumName, { color: palette.ink }]}>{isYou ? 'You' : player.name}</Text>
-      <Text style={[styles.podiumRating, { color: palette.ink }]}>{player.rating.toFixed(3)}</Text>
-      <Text style={[styles.podiumMeta, { color: palette.ink40 }]}>{player.wins}–{player.losses}</Text>
-    </View>
-  );
-}
-
-function Podium({ players, currentUserId, palette }) {
-  if (!players.length) return null;
-  const ordered = players.length === 3 ? [players[1], players[0], players[2]] : players;
-  return (
-    <View style={[styles.podiumCard, { backgroundColor: palette.surface, borderColor: palette.line }]}>
-      <View style={styles.podiumGlow} />
-      {ordered.map((player) => (
-        <PodiumPlayer key={player.id} player={player} currentUserId={currentUserId} place={player.rank} palette={palette} />
-      ))}
+      {!ranked ? <Text style={[styles.heroHint, { color: palette.ink40 }]}>Complete a verified match to earn your place.</Text> : null}
     </View>
   );
 }
@@ -303,21 +261,20 @@ export default function LeaderboardScreen({ navigation, route }) {
           <>
             <View {...webLayout('leaderboard')}>
             <View>
-            <RankHero data={data} format={format} areaLabel={areaLabel} palette={palette} />
-
             {standings.length ? <>
                 <View style={styles.sectionHead}>
                   <View>
-                    <Text style={[styles.sectionEyebrow, { color: palette.teal }]}>THE PODIUM</Text>
                     <Text style={[styles.sectionTitle, { color: palette.ink }]}>Top competitors</Text>
+                    <Text style={[styles.podiumContext, { color: palette.ink40 }]}>{format === 'singles' ? 'Singles' : 'Doubles'} · {areaLabel}</Text>
                   </View>
                   <View style={[styles.livePill, { backgroundColor: palette.wash }]}>
                     <View style={[styles.liveDot, { backgroundColor: palette.teal }]} />
                     <Text style={[styles.liveText, { color: palette.teal }]}>VERIFIED</Text>
                   </View>
                 </View>
-                <Podium players={topThree} currentUserId={data.user.id} palette={palette} />
+                <LeaderboardPodium players={topThree} currentUserId={data.user?.id} isDark={isDark} wide={wide} />
             </> : null}
+            <RankHero data={data} format={format} areaLabel={areaLabel} palette={palette} />
             </View>
             <View>
             {standings.length ? <>
@@ -359,53 +316,34 @@ const styles = StyleSheet.create({
   scopeBar: { minHeight: 66, padding: 7, flexDirection: 'row', alignItems: 'center', borderWidth: 1, borderRadius: 20, ...shadow },
   scopeControls: { flexDirection: 'row', gap: 3 },
   control: { minHeight: 46, paddingHorizontal: 11, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 5, borderRadius: 14 },
-  controlText: { fontSize: 10, fontWeight: '900' },
+  controlText: { fontSize: 12, fontWeight: '600' },
   scopeDivider: { width: 1, height: 30, marginHorizontal: 10 },
   areaCopy: { flex: 1, minWidth: 0 },
   areaLabel: { fontSize: 7, lineHeight: 10, fontWeight: '900', letterSpacing: 0.8 },
   areaValue: { marginTop: 2, fontSize: 11, lineHeight: 15, fontWeight: '800' },
   formatBar: { height: 48, marginTop: 10, padding: 4, flexDirection: 'row', gap: 4, borderWidth: 1, borderRadius: 16 },
   formatControl: { flex: 1, alignItems: 'center', justifyContent: 'center', borderRadius: 12 },
-  formatText: { fontSize: 11, fontWeight: '900' },
-  hero: { minHeight: 264, marginTop: 18, overflow: 'hidden', padding: 20, borderRadius: 27, borderBottomLeftRadius: 12, borderBottomRightRadius: 12, ...shadow },
-  heroCourt: { position: 'absolute', right: -34, bottom: -34, width: 190, height: 190, opacity: 0.13, borderWidth: 2, borderColor: '#F3F5EF', transform: [{ rotate: '-8deg' }] },
-  heroCourtLine: { position: 'absolute', top: '50%', right: 0, left: 0, height: 2, backgroundColor: '#F3F5EF' },
-  heroCourtLineMiddle: { top: '27%' },
-  heroCourtLineVertical: { top: 0, bottom: 0, left: '50%', width: 2, height: '100%' },
-  heroTop: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
+  formatText: { fontSize: 14, fontWeight: '600' },
+  hero: { marginTop: 24, padding: 16, borderWidth: 1, borderRadius: 16, borderBottomLeftRadius: 10, borderBottomRightRadius: 10 },
+  heroTop: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 12 },
   heroIdentity: { flex: 1, minWidth: 0, flexDirection: 'row', alignItems: 'center' },
-  heroAvatar: { padding: 2, borderWidth: 2, borderColor: 'rgba(214,233,74,.9)', borderRadius: 31 },
   heroCopy: { flex: 1, minWidth: 0, marginLeft: 11 },
-  heroEyebrow: { color: 'rgba(243,245,239,.58)', fontSize: 7, lineHeight: 11, fontWeight: '900', letterSpacing: 0.9 },
-  heroName: { marginTop: 2, color: '#FFFFFF', fontSize: 14, lineHeight: 19, fontWeight: '900' },
-  verifiedBadge: { minHeight: 29, paddingHorizontal: 9, flexDirection: 'row', alignItems: 'center', gap: 4, borderRadius: 15, backgroundColor: LIGHT.optic },
-  verifiedText: { color: LIGHT.ink, fontSize: 6, fontWeight: '900', letterSpacing: 0.55 },
-  heroRankRow: { marginTop: 24, flexDirection: 'row', alignItems: 'flex-end' },
-  heroRank: { color: '#FFFFFF', fontSize: 55, lineHeight: 60, fontWeight: '900', letterSpacing: -2.8, fontVariant: ['tabular-nums'] },
-  heroRankCopy: { flex: 1, minWidth: 0, marginLeft: 15, paddingBottom: 7 },
-  heroRankLabel: { color: LIGHT.optic, fontSize: 8, lineHeight: 12, fontWeight: '900', letterSpacing: 0.75 },
-  heroRankHint: { marginTop: 3, color: 'rgba(243,245,239,.58)', fontSize: 8, lineHeight: 12 },
-  heroStats: { minHeight: 64, marginTop: 18, paddingHorizontal: 13, flexDirection: 'row', alignItems: 'center', borderRadius: 18, backgroundColor: 'rgba(255,255,255,.075)' },
+  heroName: { fontSize: 14, lineHeight: 20, fontWeight: '600' },
+  heroContext: { marginTop: 3, fontSize: 11, lineHeight: 16 },
+  heroRank: { fontSize: 28, lineHeight: 32, fontWeight: '600', letterSpacing: -1, fontVariant: ['tabular-nums'] },
+  heroRankCopy: { alignItems: 'flex-end' },
+  heroStats: { marginTop: 16, paddingTop: 14, flexDirection: 'row', borderTopWidth: 1 },
   heroStat: { flex: 1, alignItems: 'center' },
-  heroStatValue: { color: '#FFFFFF', fontSize: 17, lineHeight: 21, fontWeight: '900', fontVariant: ['tabular-nums'] },
-  heroStatLabel: { marginTop: 2, color: 'rgba(243,245,239,.48)', fontSize: 6, fontWeight: '900', letterSpacing: 0.75 },
-  heroStatDivider: { width: 1, height: 27, backgroundColor: 'rgba(243,245,239,.14)' },
+  heroStatValue: { fontSize: 18, lineHeight: 23, fontWeight: '600', fontVariant: ['tabular-nums'] },
+  heroStatLabel: { marginTop: 4, fontSize: 11, lineHeight: 16 },
+  heroHint: { marginTop: 14, fontSize: 12, lineHeight: 18 },
+  podiumContext: { marginTop: 4, fontSize: 12, lineHeight: 18 },
   sectionHead: { marginTop: 30, marginBottom: 11, flexDirection: 'row', alignItems: 'flex-end', justifyContent: 'space-between' },
   sectionEyebrow: { fontSize: 8, lineHeight: 12, fontWeight: '900', letterSpacing: 0.95 },
-  sectionTitle: { marginTop: 2, fontSize: 22, lineHeight: 28, fontWeight: '800', letterSpacing: -0.45 },
+  sectionTitle: { marginTop: 2, fontSize: 20, lineHeight: 26, fontWeight: '600', letterSpacing: -0.4 },
   livePill: { minHeight: 27, marginBottom: 3, paddingHorizontal: 9, flexDirection: 'row', alignItems: 'center', gap: 5, borderRadius: 14 },
   liveDot: { width: 5, height: 5, borderRadius: 3 },
-  liveText: { fontSize: 6, fontWeight: '900', letterSpacing: 0.65 },
-  podiumCard: { minHeight: 190, overflow: 'hidden', paddingHorizontal: 8, paddingTop: 18, flexDirection: 'row', alignItems: 'flex-end', borderWidth: 1, borderRadius: 24, borderBottomLeftRadius: 10, borderBottomRightRadius: 10, ...shadow },
-  podiumGlow: { position: 'absolute', top: -80, left: '30%', width: 180, height: 180, borderRadius: 90, backgroundColor: 'rgba(214,233,74,.10)' },
-  podiumPlayer: { flex: 1, minWidth: 0, minHeight: 152, paddingBottom: 17, alignItems: 'center', justifyContent: 'flex-end' },
-  podiumChampion: { minHeight: 172 },
-  placeBadge: { minWidth: 25, height: 25, marginBottom: -6, zIndex: 2, paddingHorizontal: 7, alignItems: 'center', justifyContent: 'center', borderWidth: 1, borderRadius: 13 },
-  placeText: { fontSize: 9, fontWeight: '900' },
-  podiumAvatar: { padding: 2, borderWidth: 2, borderRadius: 36 },
-  podiumName: { maxWidth: '92%', marginTop: 8, fontSize: 10, lineHeight: 14, fontWeight: '900' },
-  podiumRating: { marginTop: 3, fontSize: 14, lineHeight: 18, fontWeight: '900', fontVariant: ['tabular-nums'] },
-  podiumMeta: { marginTop: 1, fontSize: 7, lineHeight: 10, fontWeight: '700' },
+  liveText: { fontSize: 9, fontWeight: '600', letterSpacing: 0.5 },
   standingsHead: { marginTop: 32 },
   ratingColumnLabel: { marginRight: 9, marginBottom: 5, fontSize: 7, fontWeight: '900', letterSpacing: 0.7 },
   standingsCard: { overflow: 'hidden', paddingHorizontal: 10, borderWidth: 1, borderRadius: 23, borderBottomLeftRadius: 10, borderBottomRightRadius: 10, ...shadow },

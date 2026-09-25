@@ -12,6 +12,7 @@ import { StatusBar } from 'expo-status-bar';
 import Ionicons from '@expo/vector-icons/Ionicons';
 import ScrollView from '../components/FocusResetScrollView';
 import ProfilePhoto from '../components/ProfilePhoto';
+import LeaderboardPodium from '../components/LeaderboardPodium';
 import useResponsiveWidth from '../hooks/useResponsiveWidth';
 import { webLayout } from '../utils/webLayout';
 import { useTheme } from '../context/ThemeContext';
@@ -31,7 +32,7 @@ const DARK = {
   bronze: '#DDB497', bronzeWash: '#3E332D',
 };
 
-function ScopeControl({ active, icon, label, onPress, palette }) {
+function ScopeControl({ active, icon, label, onPress, palette, compact }) {
   return (
     <Pressable
       accessibilityRole="button"
@@ -44,7 +45,7 @@ function ScopeControl({ active, icon, label, onPress, palette }) {
         pressed && styles.pressed,
       ]}
     >
-      <Ionicons name={icon} size={15} color={active ? palette.ink : palette.muted} />
+      {!compact ? <Ionicons name={icon} size={15} color={active ? palette.ink : palette.muted} /> : null}
       <Text style={[styles.controlText, { color: active ? palette.ink : palette.muted }]}>{label}</Text>
     </Pressable>
   );
@@ -67,13 +68,44 @@ function FormatControl({ active, label, onPress, palette }) {
   );
 }
 
-function YourStanding({ player, formatLabel, areaLabel, palette, wide }) {
+function YourStanding({ player, formatLabel, areaLabel, palette, wide, featured }) {
   const ranked = player?.rank != null;
   const stats = [
     { label: 'Rating', value: player?.rating != null ? player.rating.toFixed(3) : '—' },
     { label: 'Win–loss', value: `${player?.wins || 0}–${player?.losses || 0}` },
     { label: 'Verified', value: player?.verifiedMatches || 0 },
   ];
+
+  if (featured) {
+    return (
+      <View testID="leaderboard-standing" style={[styles.featuredStanding, { backgroundColor: palette.surface, borderColor: palette.line }]}>
+        <View style={styles.featuredHeading}>
+          <Text style={[styles.personalTitle, { color: palette.ink }]}>Your standing</Text>
+          <Ionicons name="person-outline" size={17} color={palette.muted} />
+        </View>
+        <View style={styles.featuredIdentity}>
+          <ProfilePhoto photo={player?.avatar} name={player?.name} size={38} />
+          <View style={styles.personalCopy}>
+            <Text numberOfLines={1} style={[styles.personalTitle, { color: palette.ink }]}>{player?.name || 'Player'}</Text>
+            <Text numberOfLines={1} style={[styles.personalContext, { color: palette.muted }]}>{formatLabel} · {areaLabel}</Text>
+          </View>
+        </View>
+        <View style={styles.featuredRankRow}>
+          <Text style={[styles.featuredRank, { color: palette.ink }]}>{ranked ? `#${player.rank}` : '—'}</Text>
+          <Text style={[styles.featuredRankLabel, { color: palette.muted }]}>{ranked ? 'Your rank' : 'Unranked'}</Text>
+        </View>
+        <View style={[styles.featuredStats, { borderColor: palette.line }]}>
+          {stats.map(({ label, value }) => (
+            <View key={label} style={styles.featuredStat}>
+              <Text style={[styles.personalStatValue, { color: palette.ink }]}>{value}</Text>
+              <Text style={[styles.personalStatLabel, { color: palette.muted }]}>{label}</Text>
+            </View>
+          ))}
+        </View>
+        {!ranked ? <Text style={[styles.unrankedHint, { color: palette.muted }]}>Complete a verified match to earn your place.</Text> : null}
+      </View>
+    );
+  }
 
   return (
     <View testID="leaderboard-standing" style={[styles.personalCard, wide && styles.personalCardWide, { backgroundColor: palette.surface, borderColor: palette.line }]}>
@@ -259,8 +291,8 @@ export default function LeaderboardScreen({ navigation, route }) {
             <FormatControl active={format === 'singles'} label="Singles" onPress={() => changeFormat('singles')} palette={palette} />
           </View>
           <View accessibilityLabel="Ranking area" style={[styles.scopeControls, { backgroundColor: palette.control }]}>
-            <ScopeControl active={effectiveScope === 'local'} icon="location-outline" label="Local" onPress={() => changeScope('local')} palette={palette} />
-            <ScopeControl active={effectiveScope === 'global'} icon="globe-outline" label="Global" onPress={() => changeScope('global')} palette={palette} />
+            <ScopeControl active={effectiveScope === 'local'} icon="location-outline" label="Local" onPress={() => changeScope('local')} palette={palette} compact={width < 360} />
+            <ScopeControl active={effectiveScope === 'global'} icon="globe-outline" label="Global" onPress={() => changeScope('global')} palette={palette} compact={width < 360} />
           </View>
         </View>
 
@@ -284,7 +316,21 @@ export default function LeaderboardScreen({ navigation, route }) {
 
         {!loading && !error && data ? (
           <View {...webLayout('leaderboard')}>
-            <YourStanding player={data.user} formatLabel={formatLabel} areaLabel={areaLabel} palette={palette} wide={wide} />
+            <View style={[styles.overview, wide && standings.length > 0 && styles.overviewWide]}>
+              {standings.length ? (
+                <View style={styles.podiumSection}>
+                  <View style={styles.podiumHeading}>
+                    <View style={styles.sectionCopy}>
+                      <Text accessibilityRole="header" style={[styles.sectionTitle, { color: palette.ink }]}>Top competitors</Text>
+                      <Text style={[styles.sectionMeta, { color: palette.muted }]}>{formatLabel} · {areaLabel}</Text>
+                    </View>
+                    <Text style={[styles.podiumRatingLabel, { color: palette.muted }]}>PLAYER RATING</Text>
+                  </View>
+                  <LeaderboardPodium players={standings.slice(0, 3)} currentUserId={data.user?.id} isDark={isDark} wide={wide} />
+                </View>
+              ) : null}
+              <YourStanding player={data.user} formatLabel={formatLabel} areaLabel={areaLabel} palette={palette} wide={wide} featured={wide && standings.length > 0} />
+            </View>
             <View style={styles.sectionHead}>
               <View style={styles.sectionCopy}>
                 <Text accessibilityRole="header" style={[styles.sectionTitle, { color: palette.ink }]}>{formatLabel} standings</Text>
@@ -317,14 +363,27 @@ const styles = StyleSheet.create({
   content: { paddingHorizontal: 20, paddingBottom: 36 },
   contentWide: { paddingHorizontal: 32, paddingBottom: 48 },
   intro: { fontSize: 13, lineHeight: 20, marginBottom: 20 },
-  filters: { borderBottomWidth: 1, marginBottom: 24, gap: 12, paddingBottom: 12 },
+  filters: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', borderBottomWidth: 1, marginBottom: 24, gap: 8, paddingBottom: 0 },
   filtersWide: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingBottom: 0 },
-  formatBar: { flexDirection: 'row', gap: 28 },
+  formatBar: { flexDirection: 'row', gap: 18 },
   formatControl: { minHeight: 48, alignItems: 'center', justifyContent: 'center', borderBottomWidth: 2, paddingHorizontal: 2 },
-  formatText: { fontSize: 15, lineHeight: 22, fontWeight: '600' },
-  scopeControls: { flexDirection: 'row', alignSelf: 'flex-start', borderRadius: 9, padding: 3 },
-  scopeControl: { minHeight: 40, paddingHorizontal: 15, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6, borderRadius: 7, borderWidth: 1, borderColor: 'transparent' },
+  formatText: { fontSize: 14, lineHeight: 22, fontWeight: '600' },
+  scopeControls: { flexDirection: 'row', borderRadius: 9, padding: 3 },
+  scopeControl: { minHeight: 40, paddingHorizontal: 9, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 5, borderRadius: 7, borderWidth: 1, borderColor: 'transparent' },
   controlText: { fontSize: 12, lineHeight: 18, fontWeight: '600' },
+  overview: { gap: 24 },
+  overviewWide: { flexDirection: 'row', alignItems: 'center', gap: 36 },
+  podiumSection: { flex: 1, minWidth: 0 },
+  podiumHeading: { flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 12 },
+  podiumRatingLabel: { fontSize: 9, lineHeight: 14, fontWeight: '600', letterSpacing: 0.7 },
+  featuredStanding: { width: 272, padding: 22, borderWidth: 1, borderRadius: 16, borderBottomLeftRadius: 10, borderBottomRightRadius: 10 },
+  featuredHeading: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 12 },
+  featuredIdentity: { marginTop: 24, flexDirection: 'row', alignItems: 'center', gap: 10 },
+  featuredRankRow: { flexDirection: 'row', alignItems: 'baseline', gap: 10, marginTop: 26, marginBottom: 24 },
+  featuredRank: { fontSize: 54, lineHeight: 60, fontWeight: '600', letterSpacing: -2.5, fontVariant: ['tabular-nums'] },
+  featuredRankLabel: { fontSize: 11, lineHeight: 16 },
+  featuredStats: { flexDirection: 'row', borderTopWidth: 1, paddingTop: 20, gap: 8 },
+  featuredStat: { flex: 1, gap: 5 },
   personalCard: { padding: 16, borderWidth: 1, borderRadius: 12 },
   personalCardWide: { padding: 22, flexDirection: 'row', alignItems: 'center', flexWrap: 'wrap', columnGap: 24 },
   personalIdentity: { flexDirection: 'row', alignItems: 'center', gap: 12 },
