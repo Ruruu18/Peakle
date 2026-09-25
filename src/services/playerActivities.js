@@ -93,6 +93,7 @@ export async function listDiscoverablePlayerActivities() {
     feeAmount: session.feeAmount,
     capacity: session.capacity,
     registeredCount: session.registeredCount,
+    registration: session.registration,
     availability: session.registeredCount >= session.capacity ? 'WAITLIST' : `${session.capacity - session.registeredCount} SPOTS`,
   }));
   const publicCompetitions = (competitions.data || [])

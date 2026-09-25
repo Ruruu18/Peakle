@@ -21,6 +21,9 @@ const ICONS_BY_KIND = {
   follow_request: 'person-add-outline',
   follow_accepted: 'people-outline',
   community_announcement: 'megaphone-outline',
+  game_invite: 'calendar-outline',
+  game_response: 'checkmark-circle-outline',
+  game_update: 'calendar-clear-outline',
 };
 
 export function presentNotification(notice) {

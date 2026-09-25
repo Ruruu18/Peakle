@@ -38,13 +38,16 @@ import useRallyBallAnimation from '../hooks/useRallyBallAnimation';
 import { useAuth } from '../context/AuthContext';
 import { createDarkStyleSheet, DARK_CONTENT_COLORS, useTheme } from '../context/ThemeContext';
 import { listMyBookings, listTeams, loadUnfinishedMatch, saveCompletedMatch, saveUnfinishedMatch } from '../services/database';
+import { areaFromLocationLabel, courtKey, loadRecentCourts, rememberCourt } from '../services/playCourts';
+import CourtPickerSheet from '../components/CourtPickerSheet';
+import { useUserLocation } from '../context/LocationContext';
 import { listFollowingPlayers } from '../services/directMessages';
 import { useNearbyPlayersContext } from '../context/NearbyPlayersContext';
 import { createMobileStyleSheet } from '../utils/mobileStyles';
 import { announceScoreForVoiceOver, speakScoreAnnouncement, stopScoreAnnouncement } from '../utils/scoreAccessibility';
 import useShoutScoring from '../hooks/useShoutScoring';
 import useMatchDraft from '../hooks/useMatchDraft';
-import { PRIVATE_MESSAGES_ENABLED, NATIVE_VOICE_SCORING_ENABLED } from '../config/features';
+import { COURT_BOOKING_ENABLED, PRIVATE_MESSAGES_ENABLED, NATIVE_VOICE_SCORING_ENABLED } from '../config/features';
 import { parseVoiceMatchCommand } from '../utils/voiceMatchCommands';
 import { evenSidePlayerFromCurrentServer, playerForSideOut, resolveRallyState } from '../utils/liveMatchScoring';
 import { DEMO_MODE } from '../config/demoMode';
@@ -90,6 +93,11 @@ function playableCourtsFromBookings(bookings) {
     .sort((a, b) => new Date(a.starts_at) - new Date(b.starts_at))
     .map((booking) => ({
       id: booking.court_id,
+      source: 'booking',
+      venueId: booking.venue_id || booking.venues.id || null,
+      courtId: booking.court_id,
+      courtName: booking.courts.name,
+      area: booking.venues.area || '',
       bookingId: booking.id,
       bookingStartsAt: booking.starts_at,
       bookingEndsAt: booking.ends_at,
@@ -437,7 +445,7 @@ function PlayChoiceScreen({ onFindPlay, onSetupMatch, unfinishedMatch, onResume 
   );
 }
 
-function SetupScreen({ courts, courtsLoading, courtsError, onRefreshCourts, onBookCourt, nearbyPlayers, nearbyPresence, currentUserName, currentUserId, currentUserAvatar, onStart, focusChallenge, onBackToChoices, showBackToChoices = true, onFindPlay, onMessagePlayer, onLeaveJoined, unfinishedMatch, onResume, openNearbyPlayersToken }) {
+function SetupScreen({ courts, courtsLoading, courtsError, onRefreshCourts, onBookCourt, recentCourts = [], defaultCourtArea = '', nearbyPlayers, nearbyPresence, currentUserName, currentUserId, currentUserAvatar, onStart, focusChallenge, onBackToChoices, showBackToChoices = true, onFindPlay, onMessagePlayer, onLeaveJoined, unfinishedMatch, onResume, openNearbyPlayersToken, scheduledGame = null }) {
   const [followingPlayers, setFollowingPlayers] = useState([]);
   const [teammates, setTeammates] = useState([]);
   const [rosterError, setRosterError] = useState('');
@@ -476,6 +484,7 @@ function SetupScreen({ courts, courtsLoading, courtsError, onRefreshCourts, onBo
   const [players, setPlayers] = useState(() => emptyLineup(currentUserName));
   const [invited, setInvited] = useState([]);
   const [court, setCourt] = useState(null);
+  const [scheduledProfiles, setScheduledProfiles] = useState([]);
   const [bookingClock, setBookingClock] = useState(Date.now());
   const [scorerSource, setScorerSource] = useState('host');
   const [scorer, setScorer] = useState(currentUserName || 'You');
@@ -517,6 +526,24 @@ function SetupScreen({ courts, courtsLoading, courtsError, onRefreshCourts, onBo
     return () => clearTimeout(timer);
   }, [currentUserName, openNearbyPlayersToken]);
 
+  const handledScheduledGame = useRef(null);
+  useEffect(() => {
+    if (!scheduledGame?.token || handledScheduledGame.current === scheduledGame.token) return;
+    handledScheduledGame.current = scheduledGame.token;
+    const others = (scheduledGame.players || []).filter((player) => player.id && player.id !== currentUserId);
+    const me = currentUserName || 'You';
+    const names = others.map((player) => player.name);
+    setMatchType(scheduledGame.matchType);
+    setMode(scheduledGame.mode);
+    setCourt(scheduledGame.court || null);
+    setScheduledProfiles(others);
+    setPlayers(scheduledGame.matchType === 'singles'
+      ? [[me, ''], [names[0] || '', '']]
+      : [[me, names[0] || ''], [names[1] || '', names[2] || '']]);
+    setInvited([]);
+    setSetupStage(1);
+  }, [currentUserId, currentUserName, scheduledGame?.token]);
+
   const updatePlayer = (team, index, value) => {
     setPlayers((current) => current.map((group, groupIndex) => (
       groupIndex === team ? group.map((name, nameIndex) => nameIndex === index ? value : name) : group
@@ -531,13 +558,18 @@ function SetupScreen({ courts, courtsLoading, courtsError, onRefreshCourts, onBo
   const joinedInvite = nearbyPresence.joinedInvite;
   const joinedSender = joinedInvite?.sender;
   const acceptedProfiles = nearbyPresence.outgoingInvites.filter((invite) => invite.status === 'accepted' && invite.match_payload?.setupId === setupId).map((invite) => invite.recipient).filter(Boolean);
-  const registeredPlayers = [{ id: currentUserId, name: currentUserName, avatar: currentUserAvatar }, ...acceptedProfiles.map((profile) => ({ id: profile.id, name: profile.display_name, avatar: profile.avatar_url }))];
+  // Players who RSVP'd to a scheduled game count as registered; ranked results
+  // still need each of them to confirm the score before ratings move.
+  const registeredPlayers = [{ id: currentUserId, name: currentUserName, avatar: currentUserAvatar }, ...acceptedProfiles.map((profile) => ({ id: profile.id, name: profile.display_name, avatar: profile.avatar_url })), ...scheduledProfiles]
+    .filter((profile, index, rows) => !profile.id || rows.findIndex((candidate) => candidate.id === profile.id) === index);
   const registeredScorerCandidates = registeredPlayers.filter((profile) => profile.id && profile.id !== currentUserId && onCourtScorers.some((name) => normalizedPlayerName(name) === normalizedPlayerName(profile.name)));
   const scorerIsValid = scorerSource === 'host'
     ? Boolean(currentUserId && scorerId === currentUserId)
     : registeredScorerCandidates.some((profile) => profile.id === scorerId);
-  const bookingActive = Boolean(joinedInvite) || isCourtBookingActive(court, bookingClock);
-  const canStart = !joinedInvite && !courtsLoading && !courtsError && Boolean(court) && bookingActive && scorerIsValid && missingPlayerCount === 0 && !hasDuplicatePlayers;
+  const bookingActive = !COURT_BOOKING_ENABLED || Boolean(joinedInvite) || isCourtBookingActive(court, bookingClock);
+  // Without booking, the court list is optional help; it never blocks a match.
+  const courtCheckPending = COURT_BOOKING_ENABLED && (courtsLoading || Boolean(courtsError));
+  const canStart = !joinedInvite && !courtCheckPending && Boolean(court) && bookingActive && scorerIsValid && missingPlayerCount === 0 && !hasDuplicatePlayers;
   const acceptedInvitePlayers = acceptedProfiles.map((profile) => ({
     id: profile.id,
     name: profile.display_name,
@@ -565,7 +597,7 @@ function SetupScreen({ courts, courtsLoading, courtsError, onRefreshCourts, onBo
     ? 'Each player needs a unique name.'
     : missingPlayerCount > 0
       ? `Add ${missingPlayerCount} more ${missingPlayerCount === 1 ? 'player' : 'players'} to complete the lineup.`
-      : courtsError
+      : COURT_BOOKING_ENABLED && courtsError
         ? 'Your court booking could not be verified. Try again before continuing.'
       : !court
         ? 'Choose where you are playing.'
@@ -585,12 +617,13 @@ function SetupScreen({ courts, courtsLoading, courtsError, onRefreshCourts, onBo
   const stageMessage = [
     'Choose the kind of match you want to play.',
     hasDuplicatePlayers ? 'Each player needs a unique name.' : missingPlayerCount > 0 ? `Add ${missingPlayerCount} more ${missingPlayerCount === 1 ? 'player' : 'players'}.` : 'Your lineup is complete.',
-    courtsLoading ? 'Checking your confirmed court bookings.' : courtsError ? 'Your booking could not be verified. Try again.' : court ? `${court.name} is selected. Continue when ready.` : 'Choose a confirmed court booking.',
+    !COURT_BOOKING_ENABLED ? (court ? `${court.name} is selected. Continue when ready.` : 'Pick a court or add the one you’re playing on.')
+      : courtsLoading ? 'Checking your confirmed court bookings.' : courtsError ? 'Your booking could not be verified. Try again.' : court ? `${court.name} is selected. Continue when ready.` : 'Choose a confirmed court booking.',
     setupMessage,
   ][setupStage];
   const canContinueStage = setupStage === 0
     || (setupStage === 1 && missingPlayerCount === 0 && !hasDuplicatePlayers)
-    || (setupStage === 2 && !courtsLoading && !courtsError && Boolean(court));
+    || (setupStage === 2 && !courtCheckPending && Boolean(court));
 
   const moveToStage = (nextStage) => {
     setSetupStage(nextStage);
@@ -598,13 +631,13 @@ function SetupScreen({ courts, courtsLoading, courtsError, onRefreshCourts, onBo
   };
 
   useEffect(() => {
-    if (!court || joinedInvite) return undefined;
+    if (!COURT_BOOKING_ENABLED || !court || joinedInvite) return undefined;
     const timer = setInterval(() => setBookingClock(Date.now()), 15000);
     return () => clearInterval(timer);
   }, [court, joinedInvite]);
 
   useEffect(() => {
-    if (!court || joinedInvite) return;
+    if (!COURT_BOOKING_ENABLED || !court || joinedInvite) return;
     const bookingStillAvailable = courts.some((option) => option.bookingId === court.bookingId);
     if (!bookingStillAvailable) setCourt(null);
   }, [court, courts, joinedInvite]);
@@ -724,7 +757,7 @@ function SetupScreen({ courts, courtsLoading, courtsError, onRefreshCourts, onBo
       target,
       bestOf,
       winByTwo,
-      court: court ? { id: court.id, name: court.name, detail: court.detail } : null,
+      court: court ? { id: court.id, source: court.source, name: court.name, courtName: court.courtName, area: court.area, detail: court.detail, color: court.color } : null,
     }).catch(() => {});
   };
 
@@ -842,8 +875,16 @@ function SetupScreen({ courts, courtsLoading, courtsError, onRefreshCourts, onBo
 
       {setupStage === 2 && !joinedInvite && <View style={styles.formPart}>
       <View style={styles.fieldGroup}>
-        <Text style={styles.sectionLabel}>BOOKED COURT</Text>
-        {courtsLoading && !courts.length ? <View style={styles.bookingGateCard}><ActivityIndicator color={C.teal} /><View style={styles.flex}><Text style={styles.bookingGateTitle}>Checking your reservations</Text><Text style={styles.bookingGateText}>Peakle is confirming which courts you can use.</Text></View></View> : courtsError ?<View style={styles.bookingGateCard}><View style={styles.bookingGateIcon}><Icon name="cloud-offline-outline" color={C.brick} /></View><View style={styles.flex}><Text style={styles.bookingGateTitle}>Booking check unavailable</Text><Text style={styles.bookingGateText}>{courtsError}</Text><Pressable accessibilityRole="button" onPress={onRefreshCourts} style={styles.bookingGateLink}><Text style={styles.bookingGateLinkText}>Try again</Text></Pressable></View></View> : !courts.length ? <View style={styles.bookingGateCard}><View style={styles.bookingGateIcon}><Icon name="ticket-outline" color={C.teal} /></View><View style={styles.flex}><Text style={styles.bookingGateTitle}>Book a court first</Text><Text style={styles.bookingGateText}>A confirmed court reservation is required before you can start scoring a match.</Text><Pressable accessibilityRole="button" onPress={onBookCourt} style={styles.bookCourtButton}><Icon name="calendar-outline" size={16} color="#0E2321" /><Text style={styles.bookCourtButtonText}>Find and book a court</Text></Pressable></View></View> : <>
+        <Text style={styles.sectionLabel}>{COURT_BOOKING_ENABLED ? 'BOOKED COURT' : 'COURT'}</Text>
+        {!COURT_BOOKING_ENABLED ? <>
+          <Pressable accessibilityRole="button" accessibilityLabel={court ? `Change court. Selected: ${court.name}` : 'Choose a court'} onPress={() => setShowCourts(true)} style={({ pressed }) => [styles.courtSelect, court && styles.courtSelectChosen, pressed && styles.pressed]}>
+            <View style={[styles.courtSelectIcon, court && { backgroundColor: court.color || C.teal }]}><Icon name={court ? 'tennisball-outline' : 'location-outline'} color={court ? C.surface : C.teal} /></View>
+            <View style={styles.courtSelectCopy}><Text numberOfLines={1} style={styles.courtSelectName}>{court ? court.name : 'Where are you playing?'}</Text><Text numberOfLines={1} style={styles.courtSelectDetail}>{court ? court.detail : 'Pick a recent court or add any venue'}</Text></View>
+            <Icon name={court ? 'create-outline' : 'chevron-forward'} color={C.teal} />
+          </Pressable>
+          {!court && recentCourts.length ? <View style={styles.recentCourtRow}>{recentCourts.slice(0, 3).map((option) => <Pressable key={courtKey(option)} accessibilityRole="button" accessibilityLabel={`Use ${option.name}`} onPress={() => setCourt(option)} style={({ pressed }) => [styles.recentCourtChip, pressed && styles.pressed]}><Icon name="time-outline" size={13} color={C.teal} /><Text numberOfLines={1} style={styles.recentCourtText}>{option.name}{option.courtName ? ` · ${option.courtName}` : ''}</Text></Pressable>)}</View> : null}
+          <View style={styles.bookingVerifiedNote}><Icon name="information-circle-outline" size={15} color={C.teal} /><Text style={styles.bookingVerifiedText}>Play at any venue. The court is saved with your match history.</Text></View>
+        </> : courtsLoading && !courts.length ? <View style={styles.bookingGateCard}><ActivityIndicator color={C.teal} /><View style={styles.flex}><Text style={styles.bookingGateTitle}>Checking your reservations</Text><Text style={styles.bookingGateText}>Peakle is confirming which courts you can use.</Text></View></View> : courtsError ?<View style={styles.bookingGateCard}><View style={styles.bookingGateIcon}><Icon name="cloud-offline-outline" color={C.brick} /></View><View style={styles.flex}><Text style={styles.bookingGateTitle}>Booking check unavailable</Text><Text style={styles.bookingGateText}>{courtsError}</Text><Pressable accessibilityRole="button" onPress={onRefreshCourts} style={styles.bookingGateLink}><Text style={styles.bookingGateLinkText}>Try again</Text></Pressable></View></View> : !courts.length ? <View style={styles.bookingGateCard}><View style={styles.bookingGateIcon}><Icon name="ticket-outline" color={C.teal} /></View><View style={styles.flex}><Text style={styles.bookingGateTitle}>Book a court first</Text><Text style={styles.bookingGateText}>A confirmed court reservation is required before you can start scoring a match.</Text><Pressable accessibilityRole="button" onPress={onBookCourt} style={styles.bookCourtButton}><Icon name="calendar-outline" size={16} color="#0E2321" /><Text style={styles.bookCourtButtonText}>Find and book a court</Text></Pressable></View></View> : <>
           <Pressable accessibilityLabel="Choose a booked court" onPress={() => setShowCourts(true)} style={({ pressed }) => [styles.courtSelect, court && styles.courtSelectChosen, pressed && styles.pressed]}>
             <View style={[styles.courtSelectIcon, court && { backgroundColor: court.color }]}><Icon name={court ? 'tennisball-outline' : 'ticket-outline'} color={court ? C.surface : C.teal} /></View>
             <View style={styles.courtSelectCopy}><Text style={styles.courtSelectName}>{court ? court.name : 'Select from your bookings'}</Text><Text style={styles.courtSelectDetail}>{court ? `${court.detail} · ${court.next}` : `${courts.length} confirmed ${courts.length === 1 ? 'reservation' : 'reservations'} available`}</Text></View>
@@ -951,7 +992,9 @@ function SetupScreen({ courts, courtsLoading, courtsError, onRefreshCourts, onBo
           </Pressable>
         </View>
       </View>}
-      <CourtPicker courts={courts} visible={showCourts} selected={court} onClose={() => setShowCourts(false)} onSelect={(selected) => { setCourt(selected); setBookingClock(Date.now()); setShowCourts(false); }} />
+      {COURT_BOOKING_ENABLED
+        ? <CourtPicker courts={courts} visible={showCourts} selected={court} onClose={() => setShowCourts(false)} onSelect={(selected) => { setCourt(selected); setBookingClock(Date.now()); setShowCourts(false); }} />
+        : <CourtPickerSheet visible={showCourts} selected={court} recentCourts={recentCourts} defaultArea={defaultCourtArea} onClose={() => setShowCourts(false)} onSelect={(selected) => { setCourt(selected); setShowCourts(false); }} />}
     </ScrollView>
   );
 }
@@ -1976,6 +2019,8 @@ export default function PlayScreen({ route, navigation }) {
   const [courts, setCourts] = useState([]);
   const [courtsLoading, setCourtsLoading] = useState(true);
   const [courtsError, setCourtsError] = useState('');
+  const [recentCourts, setRecentCourts] = useState([]);
+  const { userLocation } = useUserLocation();
   const [screen, setScreen] = useState('choice');
   const [match, setMatch] = useState(null);
   const [result, setResult] = useState(null);
@@ -2057,8 +2102,15 @@ export default function PlayScreen({ route, navigation }) {
   }, [confirmLeaveJoinedMatch, navigation, nearbyPresence.joinedInvite?.id]);
 
   const refreshCourtBookings = useCallback(async () => {
-    setCourtsLoading(true);
     setCourtsError('');
+    if (!COURT_BOOKING_ENABLED) {
+      // Booking is paused: only recent and typed-in courts, never Peakle's bookable venues.
+      loadRecentCourts(user?.id).then(setRecentCourts);
+      setCourts([]);
+      setCourtsLoading(false);
+      return;
+    }
+    setCourtsLoading(true);
     try {
       setCourts(playableCourtsFromBookings(await listMyBookings()));
     } catch (error) {
@@ -2078,6 +2130,7 @@ export default function PlayScreen({ route, navigation }) {
   }, [user?.id]);
 
   const verifyActiveCourtBooking = useCallback(async (selectedCourt) => {
+    if (!COURT_BOOKING_ENABLED) return Boolean(selectedCourt?.name);
     if (!selectedCourt?.bookingId) return false;
     const bookings = await listMyBookings();
     const booking = bookings.find((item) => item.id === selectedCourt.bookingId && item.court_id === selectedCourt.id);
@@ -2090,6 +2143,10 @@ export default function PlayScreen({ route, navigation }) {
   }, [navigation]);
 
   const showCourtBookingRequired = useCallback((message = 'Book and confirm a court for the current time before starting this match.') => {
+    if (!COURT_BOOKING_ENABLED) {
+      Alert.alert('Choose a court', 'Pick or add the court you’re playing on before starting this match.');
+      return;
+    }
     Alert.alert('Active court booking required', message, [
       { text: 'Not now', style: 'cancel' },
       { text: 'Book a court', onPress: openCourtBooking },
@@ -2107,6 +2164,7 @@ export default function PlayScreen({ route, navigation }) {
       showCourtBookingRequired(error.message || 'Peakle could not verify this reservation.');
       return;
     }
+    if (!COURT_BOOKING_ENABLED) rememberCourt(user?.id, configuration.court).then(setRecentCourts);
     setMatch(Platform.OS === 'web' ? { ...configuration, clientMatchId: configuration.clientMatchId || globalThis.crypto.randomUUID() } : configuration);
     setResult(null);
     setResultSaveState('idle');
@@ -2338,6 +2396,19 @@ export default function PlayScreen({ route, navigation }) {
     setOpenPlayMode(null);
   }, [route?.params?.joinedMatchToken]);
 
+  const [scheduledGameSetup, setScheduledGameSetup] = useState(null);
+  useEffect(() => {
+    const setup = route?.params?.scheduledGame;
+    const token = route?.params?.scheduledGameToken;
+    if (!setup || !token || scheduledGameSetup?.token === token) return;
+    setMatch(null);
+    setResult(null);
+    setShowSetupBackToChoices(true);
+    setOpenPlayMode(null);
+    setScheduledGameSetup({ ...setup, token });
+    setScreen('setup');
+  }, [route?.params?.scheduledGameToken]);
+
   useEffect(() => {
     const token = route?.params?.nearbyPlayersToken;
     if (!token || handledNearbyToken.current === token) return;
@@ -2388,7 +2459,7 @@ export default function PlayScreen({ route, navigation }) {
       <StatusBar style={screen === 'live' || isDark ? 'light' : 'dark'} backgroundColor={screen === 'live' ? '#0E2321' : C.paper} />
       {openPlayMode === 'join' ? <PlayerOpenPlayScreen initialCode={route?.params?.openPlayCode || ''} initialSessionId={route?.params?.openPlaySessionId || null} navigationToken={route?.params?.openPlayToken || null} onBack={leaveOpenPlay} onDetailBack={route?.params?.openPlayDirect ? leaveOpenPlay : null} onOpenChat={(session) => navigation.navigate('CommunityChat', { eventKind: 'open_play', eventId: session.id, title: session.name, ownerTab: 'Play' })} /> : <>
       {screen === 'choice' && <PlayChoiceScreen onFindPlay={() => navigation.navigate('Pickleball', { openTab: 'Find play', ownerTab: 'Play' })} onSetupMatch={() => { setShowSetupBackToChoices(true); setScreen('setup'); }} unfinishedMatch={unfinishedMatch} onResume={resumeMatch} />}
-      {screen === 'setup' && <SetupScreen courts={courts} courtsLoading={courtsLoading} courtsError={courtsError} onRefreshCourts={refreshCourtBookings} onBookCourt={openCourtBooking} nearbyPlayers={nearbyPresence.players} nearbyPresence={nearbyPresence} currentUserName={user?.name} currentUserId={user?.id} currentUserAvatar={user?.picture} onStart={startMatch} focusChallenge={focusChallenge} onBackToChoices={showPlayChoices} showBackToChoices={showSetupBackToChoices} onFindPlay={() => navigation.navigate('Pickleball', { openTab: 'Find play', ownerTab: 'Play' })} onMessagePlayer={(player) => navigation.navigate('DirectChat', { player: { id: player.id, name: player.name, avatar: player.avatar || null, area: player.area || null }, ownerTab: 'Play' })} onLeaveJoined={confirmLeaveJoinedMatch} unfinishedMatch={unfinishedMatch} onResume={resumeMatch} openNearbyPlayersToken={route?.params?.nearbyPlayersToken} />}
+      {screen === 'setup' && <SetupScreen courts={courts} courtsLoading={courtsLoading} courtsError={courtsError} onRefreshCourts={refreshCourtBookings} onBookCourt={openCourtBooking} recentCourts={recentCourts} defaultCourtArea={areaFromLocationLabel(userLocation?.label)} nearbyPlayers={nearbyPresence.players} nearbyPresence={nearbyPresence} currentUserName={user?.name} currentUserId={user?.id} currentUserAvatar={user?.picture} onStart={startMatch} focusChallenge={focusChallenge} onBackToChoices={showPlayChoices} showBackToChoices={showSetupBackToChoices} onFindPlay={() => navigation.navigate('Pickleball', { openTab: 'Find play', ownerTab: 'Play' })} onMessagePlayer={(player) => navigation.navigate('DirectChat', { player: { id: player.id, name: player.name, avatar: player.avatar || null, area: player.area || null }, ownerTab: 'Play' })} onLeaveJoined={confirmLeaveJoinedMatch} unfinishedMatch={unfinishedMatch} onResume={resumeMatch} openNearbyPlayersToken={route?.params?.nearbyPlayersToken} scheduledGame={scheduledGameSetup} />}
       {screen === 'pregame' && match && <PreGameScreen match={match} onBack={() => setScreen('setup')} onStart={startLiveMatch} />}
       {screen === 'live' && match && <LiveMatch key={DEMO_MODE ? `demo-${route?.params?.demoLiveToken || 0}` : 'live'} match={match} sharedSession={match.sharedLiveMatchId ? nearbyPresence.sharedLiveMatch : null} currentUserId={user?.id} onSyncSharedState={syncSharedScore} onHandoffScorer={handoffSharedScorer} onFinish={finishMatch} />}
       {screen === 'result' && result && <ResultScreen result={result} saveState={resultSaveState === 'idle' ? 'saved' : resultSaveState} saveError={resultSaveError} onRetrySave={() => recordCompletedResult(result)} onRematch={!match?.sharedLiveMatchId || nearbyPresence.sharedLiveMatch?.host_id === user?.id ? () => startMatch(match) : null} onNewMatch={reset} />}
@@ -2486,6 +2557,7 @@ const lightStyles = createMobileStyleSheet({
   serverChoiceList: { width: '100%', marginTop: 18, gap: 9 }, serverChoiceRow: { minHeight: 50, padding: 7, flexDirection: 'row', alignItems: 'center', gap: 6, borderRadius: 13, borderWidth: 1, borderColor: C.line, backgroundColor: C.paper }, serverChoiceName: { minWidth: 0, flex: 1, color: C.ink, fontSize: 9, fontWeight: '900' }, serverChoiceButton: { minHeight: 35, paddingHorizontal: 9, alignItems: 'center', justifyContent: 'center', borderRadius: 10, backgroundColor: C.optic }, serverChoiceButtonText: { color: '#0E2321', fontSize: 7, fontWeight: '900' },
   saveUnfinishedButton: { width: '100%', minHeight: 50, marginTop: 18, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 7, borderRadius: 13, backgroundColor: C.optic }, saveUnfinishedText: { color: '#0E2321', fontSize: 10, fontWeight: '900' },
   courtSheet: { width: '100%', maxWidth: 420, minHeight: 220, padding: 16, overflow: 'hidden', borderRadius: 24, backgroundColor: C.paper }, courtList: { flex: 1, minHeight: 0 }, courtListContent: { paddingBottom: 6 }, sheetHandle: { alignSelf: 'center', width: 38, height: 4, marginBottom: 10, borderRadius: 2, backgroundColor: C.line }, sheetHead: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }, sheetTitle: { color: C.ink, fontSize: 22, fontWeight: '800' }, sheetClose: { width: 38, height: 38, alignItems: 'center', justifyContent: 'center', borderRadius: 19, backgroundColor: C.surface }, sheetLead: { marginTop: 4, marginBottom: 2, color: C.ink40, fontSize: 10 }, courtOption: { minHeight: 70, marginTop: 8, padding: 8, flexDirection: 'row', alignItems: 'center', gap: 9, borderRadius: 14, borderWidth: 1, borderColor: C.line, backgroundColor: C.surface }, courtOptionActive: { borderColor: C.teal, backgroundColor: '#F7FAF7' }, courtThumb: { width: 44, height: 50, alignItems: 'center', justifyContent: 'center', overflow: 'hidden', borderRadius: 10 }, courtThumbLine: { position: 'absolute', left: 6, right: 6, top: '50%', height: 1, backgroundColor: 'rgba(255,255,255,.58)' }, courtOptionCopy: { flex: 1, minWidth: 0 }, courtOptionName: { color: C.ink, fontSize: 11, fontWeight: '800' }, courtOptionDetail: { marginTop: 2, color: C.ink40, fontSize: 8 }, courtAvailable: { marginTop: 3, color: C.teal, fontSize: 8, fontWeight: '800' },
+  recentCourtRow: { marginTop: 8, flexDirection: 'row', flexWrap: 'wrap', gap: 6 }, recentCourtChip: { maxWidth: '100%', minHeight: 34, paddingHorizontal: 10, flexDirection: 'row', alignItems: 'center', gap: 5, borderRadius: 17, borderWidth: 1, borderColor: C.line, backgroundColor: C.surface }, recentCourtText: { flexShrink: 1, color: C.teal, fontSize: 10, fontWeight: '800' },
   scoringMethodSection: { marginTop: 5 },
   scoringMethodSelected: { minHeight: 27, marginTop: 18, paddingHorizontal: 8, flexDirection: 'row', alignItems: 'center', gap: 4, borderRadius: 14, backgroundColor: '#E5F0ED' },
   scoringMethodSelectedText: { color: C.teal, fontSize: 6, fontWeight: '900', letterSpacing: .55 },

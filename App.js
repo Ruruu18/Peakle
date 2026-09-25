@@ -16,6 +16,7 @@ import SupportBubble from './src/components/SupportBubble';
 import ErrorBoundary from './src/components/ErrorBoundary';
 import DemoAutopilot from './src/components/DemoAutopilot';
 import { DEMO_MODE } from './src/config/demoMode';
+import { COURT_BOOKING_ENABLED } from './src/config/features';
 import { webNavigationState } from './src/lib/webNavigation';
 import { formatPageTitle } from './src/web/BrowserNavigation';
 
@@ -42,7 +43,10 @@ const linking = {
       DirectChat: 'chats/direct/:conversationId?',
       Connections: 'connections', Leaderboard: 'leaderboard',
       CompetitionDivision: 'competitions/:competitionId/divisions/:divisionId',
-      Book: { path: 'explore', alias: ['booking/:paymentBookingId/payment-result'] },
+      // While booking is paused, old /explore links land on Schedule instead.
+      ...(COURT_BOOKING_ENABLED
+        ? { Book: { path: 'explore', alias: ['booking/:paymentBookingId/payment-result'] }, Schedule: 'schedule' }
+        : { Schedule: { path: 'schedule', alias: ['explore'] } }),
       Play: { path: 'play', alias: ['open-play/:openPlayCode'] },
     } : { Book: 'booking/:paymentBookingId/payment-result', Play: 'open-play/:openPlayCode' }),
     ...(Platform.OS !== 'web' ? { Inbox: 'messages', DirectChat: 'messages/:conversationId' } : {}),

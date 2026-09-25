@@ -22,6 +22,7 @@ import { useAuth } from '../context/AuthContext';
 import { DARK_CONTENT_COLORS, useTheme } from '../context/ThemeContext';
 import { createMobileStyleSheet } from '../utils/mobileStyles';
 import { startSupportConversation } from '../services/supportChat';
+import { COURT_BOOKING_ENABLED } from '../config/features';
 
 const LIGHT = {
   ink: '#0E2321', paper: '#F3F5EF', surface: '#FFFFFF', optic: '#D6E94A',
@@ -36,7 +37,7 @@ const BALL_IMAGE = require('../../public/images/ball.png');
 const SUPPORT_EMAIL = (process.env.EXPO_PUBLIC_SUPPORT_EMAIL || 'support@peakle.app').trim();
 const APP_VERSION = Constants.expoConfig?.version || '1.0.0';
 
-const FAQS = [
+const BOOKING_FAQS = [
   {
     id: 'booking',
     category: 'Bookings',
@@ -53,6 +54,27 @@ const FAQS = [
     actionLabel: 'View payment history',
     route: 'PaymentHistory',
   },
+];
+
+const SCHEDULE_FAQS = [
+  {
+    id: 'schedule-game',
+    category: 'Schedule',
+    question: 'How do I schedule a game with friends?',
+    answer: 'Open Schedule and tap New game. Pick a date and time, choose any court (or add your own), then invite players or open it to anyone. Invited players get a notification to accept.',
+    actionLabel: 'Open Schedule',
+    route: 'Schedule',
+  },
+  {
+    id: 'any-court',
+    category: 'Matches',
+    question: 'Can I score a match at any court?',
+    answer: 'Yes. In Play, choose a recent court, a court listed on Peakle, or add the venue you’re at. The court is saved with your match history.',
+  },
+];
+
+const FAQS = [
+  ...(COURT_BOOKING_ENABLED ? BOOKING_FAQS : SCHEDULE_FAQS),
   {
     id: 'score',
     category: 'Matches',
@@ -299,11 +321,15 @@ export default function HelpSupportScreen({ navigation }) {
 
         <Text style={[s.sectionLabel, { color: C.ink40 }]}>QUICK LINKS</Text>
         <View style={s.quickGrid}>
-          <Pressable onPress={() => navigation.navigate('PaymentHistory')} style={[s.quickCard, { backgroundColor: C.surface, borderColor: C.line }]}>
+          {COURT_BOOKING_ENABLED ? <Pressable onPress={() => navigation.navigate('PaymentHistory')} style={[s.quickCard, { backgroundColor: C.surface, borderColor: C.line }]}>
             <View style={[s.quickIcon, { backgroundColor: C.tealWash }]}><Icon name="receipt-outline" color={C.teal} /></View>
             <Text style={[s.quickTitle, { color: C.ink }]}>Payments</Text>
             <Text style={[s.quickMeta, { color: C.ink40 }]}>Receipts & refunds</Text>
-          </Pressable>
+          </Pressable> : <Pressable onPress={() => navigation.navigate('Schedule')} style={[s.quickCard, { backgroundColor: C.surface, borderColor: C.line }]}>
+            <View style={[s.quickIcon, { backgroundColor: C.tealWash }]}><Icon name="calendar-outline" color={C.teal} /></View>
+            <Text style={[s.quickTitle, { color: C.ink }]}>Schedule</Text>
+            <Text style={[s.quickMeta, { color: C.ink40 }]}>Games & events</Text>
+          </Pressable>}
           <Pressable onPress={() => navigation.navigate('NotificationTest')} style={[s.quickCard, { backgroundColor: C.surface, borderColor: C.line }]}>
             <View style={[s.quickIcon, { backgroundColor: C.tealWash }]}><Icon name="notifications-outline" color={C.teal} /></View>
             <Text style={[s.quickTitle, { color: C.ink }]}>Notifications</Text>

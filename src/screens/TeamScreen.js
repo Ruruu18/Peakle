@@ -7,7 +7,6 @@ import {
   Dimensions,
   Easing,
   KeyboardAvoidingView,
-  PanResponder,
   Platform,
   Pressable,
   StyleSheet,
@@ -33,7 +32,7 @@ import { DEMO_MODE } from '../config/demoMode';
 import { PRIVATE_MESSAGES_ENABLED } from '../config/features';
 import { DEMO_TEAM_ID, DEMO_TEAM_MESSAGE_DRIP } from '../config/demoData';
 import ProfilePhoto from '../components/ProfilePhoto';
-import ChatFocusOverlay from '../components/ChatFocusOverlay';
+import MessageFocusModal, { canCopyText, copyText, unselectable } from '../components/MessageFocusModal';
 import ResilientImage from '../components/ResilientImage';
 import LocationPicker from '../components/LocationPicker';
 import ScrollView from '../components/FocusResetScrollView';
@@ -476,61 +475,40 @@ function ChatReportModal({ message, onClose, onSubmit }) {
   );
 }
 
-function MessageInteractionModal({ message, visible, canModerate, onClose, onReact, onPin, onEdit, onDelete, onUnsend, onReport, onBlock, onModerate }) {
-  const [hoveredReaction, setHoveredReaction] = useState(-1);
-  const hoveredReactionRef = useRef(-1);
-  const chooseReactionAt = useCallback((locationX) => {
-    const index = Math.floor((locationX - 7) / 44);
-    const next = index >= 0 && index < REACTION_OPTIONS.length ? index : -1;
-    hoveredReactionRef.current = next;
-    setHoveredReaction(next);
-  }, []);
-  const reactionPan = useMemo(() => PanResponder.create({
-    onStartShouldSetPanResponder: () => false,
-    onMoveShouldSetPanResponder: (_, gesture) => Math.abs(gesture.dx) > 4,
-    onPanResponderGrant: (event) => chooseReactionAt(event.nativeEvent.locationX),
-    onPanResponderMove: (event) => chooseReactionAt(event.nativeEvent.locationX),
-    onPanResponderRelease: () => {
-      if (hoveredReactionRef.current >= 0 && message) onReact(message.id, REACTION_OPTIONS[hoveredReactionRef.current]);
-      hoveredReactionRef.current = -1;
-      setHoveredReaction(-1);
-      onClose();
-    },
-    onPanResponderTerminate: () => {
-      hoveredReactionRef.current = -1;
-      setHoveredReaction(-1);
-    },
-  }), [chooseReactionAt, message, onClose, onReact]);
-  useEffect(() => {
-    if (visible) return;
-    hoveredReactionRef.current = -1;
-    setHoveredReaction(-1);
-  }, [visible]);
+function MessageInteractionModal({ message, visible, canModerate, currentUserId, onClose, onReact, onPin, onEdit, onDelete, onUnsend, onReport, onBlock, onModerate }) {
   if (!message) return null;
-  const editableText = message.text && !/^Shared a (photo|video|GIF|sticker)$/i.test(message.text);
+  const visibleText = message.text && !/^Shared a (photo|video|GIF|sticker)$/i.test(message.text) ? message.text : null;
+  const actions = [
+    canCopyText && visibleText ? { key: 'copy', label: 'Copy', icon: 'copy-outline', onPress: () => copyText(visibleText) } : null,
+    { key: 'pin', label: message.pinned ? 'Unpin' : 'Pin', icon: message.pinned ? 'pin' : 'pin-outline', onPress: () => onPin(message.id) },
+    message.mine && visibleText ? { key: 'edit', label: 'Edit', icon: 'create-outline', onPress: () => onEdit(message) } : null,
+    !message.mine ? { key: 'report', label: 'Report', icon: 'flag-outline', destructive: true, separated: true, onPress: () => onReport(message) } : null,
+    !message.mine ? { key: 'block', label: `Block ${message.sender}`, icon: 'ban-outline', destructive: true, onPress: () => onBlock(message) } : null,
+    !message.mine && canModerate ? { key: 'moderate', label: 'Remove as moderator', icon: 'shield-outline', destructive: true, onPress: () => onModerate(message) } : null,
+    { key: 'delete', label: 'Delete for you', icon: 'trash-outline', separated: message.mine, onPress: () => onDelete(message) },
+    message.mine ? { key: 'unsend', label: 'Delete for everyone', icon: 'return-up-back-outline', destructive: true, onPress: () => onUnsend(message) } : null,
+  ].filter(Boolean);
   return (
-    <Modal visible={visible} transparent animationType="fade" onRequestClose={onClose}>
-      <View {...webDialog('backdrop')} style={styles.interactionBackdrop}>
-        <Pressable accessibilityLabel="Close message actions" onPress={onClose} style={StyleSheet.absoluteFillObject} />
-        <View {...webDialog('surface')} style={styles.messageActionSheet}>
-          <View {...webDialog('handle')} style={styles.actionSheetHandle} />
-          <Text style={styles.actionSheetTitle}>Message options</Text>
-          <View {...reactionPan.panHandlers} style={[styles.floatingReactionPicker, styles.actionSheetReactionPicker]}>{REACTION_OPTIONS.map((emoji, index) => <Pressable key={emoji} accessibilityLabel={`React ${emoji}`} onPress={() => { onReact(message.id, emoji); onClose(); }} style={[styles.floatingReactionOption, hoveredReaction === index && styles.floatingReactionOptionActive]}><Text style={styles.floatingReactionText}>{emoji}</Text></Pressable>)}</View>
-          <Pressable onPress={() => { onClose(); onPin(message.id); }} style={styles.actionSheetRow}><View style={styles.actionSheetIcon}><Icon name={message.pinned ? 'pin' : 'pin-outline'} size={20} color={C.teal} /></View><View style={styles.actionSheetCopy}><Text style={styles.actionSheetRowTitle}>{message.pinned ? 'Unpin message' : 'Pin message'}</Text><Text style={styles.actionSheetRowText}>{message.pinned ? 'Remove this from the team chat info' : 'Keep this easy for everyone to find'}</Text></View></Pressable>
-          {message.mine && editableText && <Pressable onPress={() => { onClose(); onEdit(message); }} style={styles.actionSheetRow}><View style={styles.actionSheetIcon}><Icon name="create-outline" size={20} color={C.teal} /></View><View style={styles.actionSheetCopy}><Text style={styles.actionSheetRowTitle}>Edit message</Text><Text style={styles.actionSheetRowText}>Change the text you sent</Text></View></Pressable>}
-          {!message.mine && <Pressable onPress={() => { onClose(); onReport(message); }} style={styles.actionSheetRow}><View style={[styles.actionSheetIcon, styles.actionSheetIconDanger]}><Icon name="flag-outline" size={20} color={C.brick} /></View><View style={styles.actionSheetCopy}><Text style={[styles.actionSheetRowTitle, styles.actionSheetDangerText]}>Report message</Text><Text style={styles.actionSheetRowText}>Send this message to Peakle’s safety review queue</Text></View></Pressable>}
-          {!message.mine && <Pressable onPress={() => { onClose(); onBlock(message); }} style={styles.actionSheetRow}><View style={styles.actionSheetIcon}><Icon name="ban-outline" size={20} color={C.ink70} /></View><View style={styles.actionSheetCopy}><Text style={styles.actionSheetRowTitle}>Block {message.sender}</Text><Text style={styles.actionSheetRowText}>Hide this player’s messages from your team chats</Text></View></Pressable>}
-          {!message.mine && canModerate && <Pressable onPress={() => { onClose(); onModerate(message); }} style={styles.actionSheetRow}><View style={[styles.actionSheetIcon, styles.actionSheetIconDanger]}><Icon name="shield-outline" size={20} color={C.brick} /></View><View style={styles.actionSheetCopy}><Text style={[styles.actionSheetRowTitle, styles.actionSheetDangerText]}>Remove as moderator</Text><Text style={styles.actionSheetRowText}>Remove this message for everyone and record the action</Text></View></Pressable>}
-          <Pressable onPress={() => { onClose(); onDelete(message); }} style={styles.actionSheetRow}><View style={styles.actionSheetIcon}><Icon name="trash-outline" size={20} color={C.ink70} /></View><View style={styles.actionSheetCopy}><Text style={styles.actionSheetRowTitle}>Delete for you</Text><Text style={styles.actionSheetRowText}>Other people will still see this message</Text></View></Pressable>
-          {message.mine && <Pressable onPress={() => { onClose(); onUnsend(message); }} style={styles.actionSheetRow}><View style={[styles.actionSheetIcon, styles.actionSheetIconDanger]}><Icon name="return-up-back-outline" size={20} color={C.brick} /></View><View style={styles.actionSheetCopy}><Text style={[styles.actionSheetRowTitle, styles.actionSheetDangerText]}>Delete for everyone</Text><Text style={styles.actionSheetRowText}>Remove the message for everyone in the chat</Text></View></Pressable>}
-          <Pressable onPress={onClose} style={styles.actionSheetCancel}><Text style={styles.actionSheetCancelText}>Cancel</Text></Pressable>
-        </View>
+    <MessageFocusModal
+      visible={visible}
+      mine={message.mine}
+      dark={C !== LIGHT_C}
+      reactions={REACTION_OPTIONS}
+      selectedReactions={(message.reactions || []).filter((reaction) => reaction.user_id === currentUserId).map((reaction) => reaction.emoji)}
+      onReact={(emoji) => onReact(message.id, emoji)}
+      actions={actions}
+      onClose={onClose}
+    >
+      <View style={[styles.bubble, message.mine && styles.bubbleMine, !visibleText && styles.mediaBubble, !visibleText && message.mine && styles.mediaBubbleMine]}>
+        {message.image ? <ExpoImage source={{ uri: message.image }} contentFit="cover" style={[styles.chatAttachmentImage, !visibleText && styles.chatAttachmentMediaOnly]} /> : null}
+        {!message.image && message.video ? <View style={styles.deletedMessageRow}><Icon name="videocam-outline" size={14} color={message.mine ? C.surface : C.ink70} /><Text style={[styles.bubbleText, message.mine && styles.bubbleTextMine]}>Video</Text></View> : null}
+        {visibleText ? <Text numberOfLines={12} style={[styles.bubbleText, message.mine && styles.bubbleTextMine]}>{visibleText}</Text> : null}
       </View>
-    </Modal>
+    </MessageFocusModal>
   );
 }
 
-function ChatMessage({ message, grouped, active, highlighted, seenBy, showDeliveryStatus, currentUserId, peopleById, onLayout, onToggleControls, onShowControls, onOpenActions, onReact, onShowPeople, onPreview }) {
+function ChatMessage({ message, grouped, highlighted, seenBy, showDeliveryStatus, currentUserId, peopleById, onLayout, onOpenActions, onReact, onShowPeople, onPreview }) {
   const enter = useRef(new Animated.Value(0)).current;
   useEffect(() => {
     Animated.timing(enter, { toValue: 1, duration: 190, easing: Easing.out(Easing.cubic), useNativeDriver: Platform.OS !== 'web' }).start();
@@ -546,7 +524,7 @@ function ChatMessage({ message, grouped, active, highlighted, seenBy, showDelive
   const mediaOnly = hasMedia && !visibleText;
   const status = message.deliveryState === 'uploading' ? 'Uploading…' : message.deliveryState === 'sending' ? 'Sending…' : 'Sent';
   return (
-    <Animated.View onLayout={onLayout} style={[styles.messageRow, message.mine && styles.messageRowMine, grouped && styles.messageGrouped, active && styles.messageRowActive, {
+    <Animated.View onLayout={onLayout} style={[styles.messageRow, message.mine && styles.messageRowMine, grouped && styles.messageGrouped, {
       opacity: enter,
       transform: [{ translateY: enter.interpolate({ inputRange: [0, 1], outputRange: [8, 0] }) }],
     }]}>
@@ -555,18 +533,14 @@ function ChatMessage({ message, grouped, active, highlighted, seenBy, showDelive
         <View style={[styles.bubbleActionRow, message.mine && styles.bubbleActionRowMine]}>
           {!message.mine && !grouped && <ProfilePhoto photo={message.avatar} name={message.sender} size={31} style={styles.chatAvatar} />}
           {!message.mine && grouped && <View style={styles.chatAvatarSpacer} />}
-          <Pressable accessibilityHint="Tap or long press for reactions and message options." onPress={() => onToggleControls(message.id)} onLongPress={() => onShowControls(message.id)} delayLongPress={240} style={[styles.bubble, message.mine && styles.bubbleMine, mediaOnly && styles.mediaBubble, mediaOnly && message.mine && styles.mediaBubbleMine, message.deletedAt && styles.deletedBubble, highlighted && styles.highlightedMessageBubble]}>
+          <Pressable accessibilityHint="Tap or long press for reactions and message options." disabled={Boolean(message.deletedAt || message.deliveryState)} onPress={() => onOpenActions(message.id)} onLongPress={() => onOpenActions(message.id)} delayLongPress={240} style={[styles.bubble, unselectable, message.mine && styles.bubbleMine, mediaOnly && styles.mediaBubble, mediaOnly && message.mine && styles.mediaBubbleMine, message.deletedAt && styles.deletedBubble, highlighted && styles.highlightedMessageBubble]}>
             {message.image && <PopImage uri={message.image} sticker={message.mediaKind === 'stickers'} style={[styles.chatAttachmentImage, message.mediaType === 'gif' && styles.chatAttachmentGif, mediaOnly && styles.chatAttachmentMediaOnly]} onPress={() => onPreview(message)} onLongPress={() => onOpenActions(message.id)} />}
             {message.video && <VideoAttachment uri={message.video} mediaOnly={mediaOnly} />}
-            {message.deletedAt ? <View style={styles.deletedMessageRow}><Icon name="ban-outline" size={14} color={C.ink40} /><Text style={styles.deletedMessageText}>{message.moderatedAt ? 'Message removed by a moderator' : 'Message unsent'}</Text></View> : visibleText ? <Text style={[styles.bubbleText, message.mine && styles.bubbleTextMine]}>{visibleText}</Text> : null}
+            {message.deletedAt ? <View style={styles.deletedMessageRow}><Icon name="ban-outline" size={14} color={C.ink40} /><Text style={styles.deletedMessageText}>{message.moderatedAt ? 'Message removed by a moderator' : 'Message unsent'}</Text></View> : visibleText ? <Text selectable={false} style={[styles.bubbleText, unselectable, message.mine && styles.bubbleTextMine]}>{visibleText}</Text> : null}
             {message.deliveryState && hasMedia && <View style={styles.mediaProgress}><ActivityIndicator size="small" color={C.surface} /></View>}
           </Pressable>
         </View>
         <View style={[styles.messageExtras, message.mine ? styles.messageExtrasMine : styles.messageIndent]}>
-        {active && !message.deletedAt && !message.deliveryState && <View style={styles.quickMessageActions}>
-          {REACTION_OPTIONS.map((emoji) => <Pressable key={emoji} accessibilityLabel={`React ${emoji}`} onPress={() => { onReact(message.id, emoji); onToggleControls(message.id); }} style={({ pressed }) => [styles.quickMessageAction, pressed && styles.quickMessageActionPressed]}><Text style={styles.quickMessageEmoji}>{emoji}</Text></Pressable>)}
-          <Pressable accessibilityLabel="More message actions" onPress={() => onOpenActions(message.id)} style={({ pressed }) => [styles.quickMessageAction, pressed && styles.quickMessageActionPressed]}><Icon name="ellipsis-horizontal" size={20} color={C.ink70} /></Pressable>
-        </View>}
         {reactionGroups.length > 0 && <View style={[styles.reactionSummary, message.mine && styles.reactionSummaryMine]}>{reactionGroups.map((reaction) => <Pressable key={reaction.emoji} disabled={message.deletedAt} accessibilityLabel={`${reaction.emoji} from ${peopleSummary(reaction.people)}`} onPress={() => onShowPeople(`Reacted ${reaction.emoji}`, reaction.people)} style={[styles.reactionChip, reaction.people.some((person) => person.id === currentUserId) && styles.reactionChipMine]}><Text style={styles.reactionEmoji}>{reaction.emoji}</Text><Text style={styles.reactionCount}>{reaction.people.length}</Text></Pressable>)}</View>}
         <View style={[styles.messageMetaRow, message.mine && styles.messageMetaRowMine]}>{message.pinned && <View style={styles.pinnedMessageBadge}><Icon name="pin" size={9} color={C.teal} /><Text style={styles.pinnedMessageBadgeText}>PINNED</Text></View>}<Text style={[styles.messageTime, message.mine && styles.messageTimeMine]}>{message.time}{message.editedAt ? ' · Edited' : ''}{message.mine && showDeliveryStatus && !seenBy.length ? ` · ${status}` : ''}</Text></View>
         {message.mine && <SeenReceipt people={seenBy} onPress={() => onShowPeople('Seen by', seenBy)} />}
@@ -585,7 +559,6 @@ function TeamChat({ team, messages, readStates, currentUser, typing, liveMatch, 
   }, []);
   const [editingMessage, setEditingMessage] = useState(null);
   const [selectedMessageId, setSelectedMessageId] = useState(null);
-  const [activeMessageId, setActiveMessageId] = useState(null);
   const [previewMessage, setPreviewMessage] = useState(null);
   const [peopleDetails, setPeopleDetails] = useState(null);
   const [reportingMessage, setReportingMessage] = useState(null);
@@ -661,7 +634,6 @@ function TeamChat({ team, messages, readStates, currentUser, typing, liveMatch, 
     if (suppressAutoScrollTimerRef.current) clearTimeout(suppressAutoScrollTimerRef.current);
   }, []);
   const openMessageActions = (messageId) => {
-    setActiveMessageId(null);
     setSelectedMessageId(messageId);
   };
   const publishTyping = useCallback((isTyping) => {
@@ -757,7 +729,6 @@ function TeamChat({ team, messages, readStates, currentUser, typing, liveMatch, 
         contentContainerStyle={styles.chatContent}
         showsVerticalScrollIndicator={false}
         keyboardShouldPersistTaps="handled"
-        onScrollBeginDrag={() => setActiveMessageId(null)}
         scrollEventThrottle={16}
         onScroll={({ nativeEvent }) => {
           const distanceFromBottom = nativeEvent.contentSize.height - nativeEvent.layoutMeasurement.height - nativeEvent.contentOffset.y;
@@ -769,19 +740,18 @@ function TeamChat({ team, messages, readStates, currentUser, typing, liveMatch, 
       >
         {hasEarlier && <Pressable disabled={loadingEarlier} onPress={onLoadEarlier} style={styles.loadEarlierButton}>{loadingEarlier ? <ActivityIndicator size="small" color={C.teal} /> : <Text style={styles.loadEarlierText}>Load earlier messages</Text>}</Pressable>}
         <Text style={styles.chatDay}>TODAY</Text>
-        <Pressable accessible={false} onPress={() => setActiveMessageId(null)} style={styles.chatTapArea}>
-        <ChatFocusOverlay visible={messages.some((message) => message.id === activeMessageId && !message.deletedAt && !message.deliveryState)} dark={C !== LIGHT_C} onPress={() => setActiveMessageId(null)} />
+        <View style={styles.chatTapArea}>
         {messages.map((message, index) => {
           if (message.type === 'live-match') return <View key={message.id} style={styles.autoMatchMessage}><View style={styles.autoMatchLabel}><Icon name="radio-outline" size={14} color={C.teal} /><Text style={styles.autoMatchLabelText}>Peakle Match Center posted automatically</Text></View><LiveMatchCard match={liveMatch} onPress={onWatchLive} /></View>;
           const previous = messages[index - 1];
           const grouped = previous?.sender === message.sender && previous?.mine === message.mine;
-          return <ChatMessage key={message.id} message={message} grouped={grouped} active={activeMessageId === message.id} highlighted={highlightedMessageId === message.id} seenBy={seenByMessage[message.id] || []} showDeliveryStatus={message.id === latestMineId} currentUserId={currentUserId} peopleById={peopleById} onLayout={({ nativeEvent }) => { const y = nativeEvent.layout.y; messageLayoutsRef.current[message.id] = y; revealMessage(message.id, y); }} onToggleControls={(messageId) => setActiveMessageId((current) => current === messageId ? null : messageId)} onShowControls={setActiveMessageId} onOpenActions={openMessageActions} onReact={onReact} onShowPeople={(title, people) => setPeopleDetails({ title, people })} onPreview={setPreviewMessage} />;
+          return <ChatMessage key={message.id} message={message} grouped={grouped} highlighted={highlightedMessageId === message.id} seenBy={seenByMessage[message.id] || []} showDeliveryStatus={message.id === latestMineId} currentUserId={currentUserId} peopleById={peopleById} onLayout={({ nativeEvent }) => { const y = nativeEvent.layout.y; messageLayoutsRef.current[message.id] = y; revealMessage(message.id, y); }} onOpenActions={openMessageActions} onReact={onReact} onShowPeople={(title, people) => setPeopleDetails({ title, people })} onPreview={setPreviewMessage} />;
         })}
         {typing?.length > 0 && <TypingBubble people={typing} />}
-        </Pressable>
+        </View>
       </ScrollView>
       {editingMessage && <View style={styles.editingBanner}><Icon name="create-outline" size={16} color={C.teal} /><View style={styles.editingCopy}><Text style={styles.editingTitle}>Editing message</Text><Text numberOfLines={1} style={styles.editingPreview}>{editingMessage.text}</Text></View><Pressable accessibilityLabel="Cancel editing" onPress={() => { stopTyping(); setEditingMessage(null); setDraft(''); }}><Icon name="close" color={C.ink40} /></Pressable></View>}
-      <View style={styles.composer}><Pressable accessibilityLabel="Add photo or video" onPress={showAttachmentOptions} style={styles.addAttachment}><Icon name="add" size={23} color={C.teal} /></Pressable><View style={styles.composerInput}><TextInput value={draft} onChangeText={changeDraft} onFocus={() => setActiveMessageId(null)} onBlur={stopTyping} onSubmitEditing={send} returnKeyType="send" multiline maxLength={4000} placeholder={editingMessage ? 'Edit message' : `Message ${team.name}`} placeholderTextColor={C.ink40} style={styles.chatInput} /><Pressable disabled={!draft.trim()} onPress={send} accessibilityLabel={editingMessage ? 'Save edited message' : 'Send message'} style={[styles.sendButton, !draft.trim() && styles.sendDisabled]}><Icon name={editingMessage ? 'checkmark' : 'arrow-up'} size={19} color="#0E2321" /></Pressable></View></View>
+      <View style={styles.composer}><Pressable accessibilityLabel="Add photo or video" onPress={showAttachmentOptions} style={styles.addAttachment}><Icon name="add" size={23} color={C.teal} /></Pressable><View style={styles.composerInput}><TextInput value={draft} onChangeText={changeDraft} onBlur={stopTyping} onSubmitEditing={send} returnKeyType="send" multiline maxLength={4000} placeholder={editingMessage ? 'Edit message' : `Message ${team.name}`} placeholderTextColor={C.ink40} style={styles.chatInput} /><Pressable disabled={!draft.trim()} onPress={send} accessibilityLabel={editingMessage ? 'Save edited message' : 'Send message'} style={[styles.sendButton, !draft.trim() && styles.sendDisabled]}><Icon name={editingMessage ? 'checkmark' : 'arrow-up'} size={19} color="#0E2321" /></Pressable></View></View>
       <MessageInteractionModal
         message={selectedMessage}
         visible={Boolean(selectedMessage && !selectedMessage.deletedAt && !selectedMessage.deliveryState)}
@@ -789,6 +759,7 @@ function TeamChat({ team, messages, readStates, currentUser, typing, liveMatch, 
         onReact={onReact}
         onPin={onPin}
         canModerate={canReviewRequests(team)}
+        currentUserId={currentUserId}
         onEdit={(item) => { setEditingMessage(item); setDraft(item.text || ''); }}
         onDelete={confirmDelete}
         onUnsend={confirmUnsend}

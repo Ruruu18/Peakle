@@ -1,0 +1,310 @@
+import { requireSupabase } from '../lib/supabase';
+import { DEMO_MODE } from '../config/demoMode';
+import { listDiscoverablePlayerActivities } from './playerActivities';
+import { cleanCourtText, courtLabel } from './playCourts';
+
+// Everything the Schedule tab shows is normalized to one calendar entry shape:
+//   { id, kind, sourceId, title, startsAt, endsAt, place, area, status, ... }
+// kind: 'game' (player-scheduled), 'open_play', 'competition', 'program'.
+
+export const GAME_DURATIONS = [60, 90, 120, 180];
+export const DURATION_STEP_MINUTES = 30;
+export const MIN_GAME_MINUTES = 30;
+export const MAX_GAME_MINUTES = 6 * 60;
+export const START_STEP_MINUTES = 5;
+const GAME_FIELDS = 'id,host_id,title,notes,starts_at,ends_at,match_type,mode,visibility,capacity,court_label,court_area,venue_id,court_id,status';
+const ROSTER_FIELDS = 'user_id,status,profile:profiles!scheduled_game_players_user_id_fkey(id,display_name,avatar_url)';
+
+function mapGame(row, userId) {
+  const roster = (row.scheduled_game_players || []).map((player) => ({
+    id: player.user_id,
+    status: player.status,
+    name: player.profile?.display_name || 'Player',
+    avatar: player.profile?.avatar_url || null,
+  }));
+  const me = roster.find((player) => player.id === userId);
+  const going = roster.filter((player) => player.status === 'going');
+  return {
+    id: `game:${row.id}`,
+    kind: 'game',
+    sourceId: row.id,
+    title: row.title,
+    notes: row.notes || '',
+    startsAt: row.starts_at,
+    endsAt: row.ends_at,
+    place: row.court_label,
+    area: row.court_area || '',
+    matchType: row.match_type,
+    mode: row.mode,
+    visibility: row.visibility,
+    capacity: row.capacity,
+    status: row.status,
+    hostId: row.host_id,
+    isHost: row.host_id === userId,
+    myStatus: row.host_id === userId ? 'going' : me?.status || null,
+    roster,
+    going,
+    spotsLeft: Math.max(0, row.capacity - going.length),
+    court: { id: row.court_id || `custom:${row.id}`, source: row.venue_id ? 'listed' : 'custom', name: row.court_label, courtName: '', area: row.court_area || '', venueId: row.venue_id, courtId: row.court_id, color: '#1C6B66', detail: row.court_area || 'Scheduled game' },
+  };
+}
+
+export function scheduleEntryFromActivity(activity) {
+  const registrationStatus = activity.registration?.registration_status || activity.registration?.status || null;
+  return {
+    id: activity.id,
+    kind: activity.type,
+    sourceId: activity.sourceId,
+    title: activity.title,
+    startsAt: activity.startsAt,
+    endsAt: activity.endsAt || activity.startsAt,
+    place: activity.venue?.name || 'Location shared by organizer',
+    area: activity.venue?.area || '',
+    status: activity.status || 'scheduled',
+    typeLabel: activity.typeLabel,
+    availability: activity.availability,
+    feeAmount: activity.feeAmount,
+    joined: Boolean(registrationStatus && !['cancelled', 'rejected', 'declined'].includes(registrationStatus)),
+    activity,
+  };
+}
+
+async function currentUserId(client) {
+  const { data } = await client.auth.getSession();
+  return data?.session?.user?.id || null;
+}
+
+// Games I host or was invited to (not ones I declined), plus open games anyone can join.
+export async function listScheduledGames({ from, to }) {
+  if (DEMO_MODE) return [];
+  const client = requireSupabase();
+  const userId = await currentUserId(client);
+  const { data, error } = await client
+    .from('scheduled_games')
+    .select(`${GAME_FIELDS},scheduled_game_players(${ROSTER_FIELDS})`)
+    .gte('ends_at', from)
+    .lt('starts_at', to)
+    .order('starts_at')
+    .limit(200);
+  if (error) throw error;
+  return (data || [])
+    .map((row) => mapGame(row, userId))
+    .filter((game) => game.status === 'scheduled' || game.myStatus);
+}
+
+export async function listScheduleEvents() {
+  const activities = await listDiscoverablePlayerActivities();
+  return activities.map(scheduleEntryFromActivity);
+}
+
+// The next thing on the player's own calendar, for Home's "Next up" card.
+export function nextOnMyCalendar(entries, now = Date.now()) {
+  return entries
+    .filter((entry) => isOnMyCalendar(entry) && entry.status !== 'cancelled' && new Date(entry.endsAt).getTime() > now)
+    .sort((a, b) => new Date(a.startsAt) - new Date(b.startsAt))[0] || null;
+}
+
+export function isOnMyCalendar(entry) {
+  if (entry.kind === 'game') return Boolean(entry.myStatus && entry.myStatus !== 'declined');
+  return Boolean(entry.joined);
+}
+
+const DEMO_WRITE_ERROR = 'Scheduling is turned off in the demo.';
+
+export async function createScheduledGame({ title, startsAt, durationMinutes, matchType, mode, visibility, court, notes = '', invitees = [] }) {
+  if (DEMO_MODE) throw new Error(DEMO_WRITE_ERROR);
+  const start = new Date(startsAt);
+  const end = new Date(start.getTime() + durationMinutes * 60000);
+  const capacity = matchType === 'singles' ? 2 : 4;
+  const { data, error } = await requireSupabase().rpc('create_scheduled_game', {
+    p_title: cleanCourtText(title) || `${matchType === 'singles' ? 'Singles' : 'Doubles'} game`,
+    p_starts_at: start.toISOString(),
+    p_ends_at: end.toISOString(),
+    p_match_type: matchType,
+    p_mode: mode,
+    p_visibility: visibility,
+    p_capacity: capacity,
+    p_court_label: courtLabel(court),
+    p_court_area: cleanCourtText(court?.area) || null,
+    p_venue_id: court?.venueId || null,
+    p_court_id: court?.venueId ? court.courtId || null : null,
+    p_notes: notes.trim() || null,
+    p_invitee_ids: invitees.map((player) => player.id).filter(Boolean),
+  });
+  if (error) throw error;
+  return Array.isArray(data) ? data[0] : data;
+}
+
+export async function respondToScheduledGame(gameId, going) {
+  if (DEMO_MODE) throw new Error(DEMO_WRITE_ERROR);
+  const { data, error } = await requireSupabase().rpc('respond_scheduled_game', { p_game_id: gameId, p_going: going });
+  if (error) throw error;
+  return data;
+}
+
+export async function cancelScheduledGame(gameId) {
+  if (DEMO_MODE) throw new Error(DEMO_WRITE_ERROR);
+  const { error } = await requireSupabase().rpc('cancel_scheduled_game', { p_game_id: gameId });
+  if (error) throw error;
+}
+
+// Prefills Play setup from a scheduled game: registered players fill the lineup.
+export function playSetupFromGame(game) {
+  const going = game.going.map((player) => ({ id: player.id, name: player.name, avatar: player.avatar }));
+  return {
+    matchType: game.matchType,
+    mode: game.mode,
+    court: game.court,
+    players: going,
+    scheduledGameId: game.sourceId,
+  };
+}
+
+// ---------- Calendar date helpers (Asia/Manila, the app's scheduling zone) ----------
+
+export const SCHEDULE_TIME_ZONE = 'Asia/Manila';
+
+export function dayKey(value) {
+  const parts = new Intl.DateTimeFormat('en-CA', { timeZone: SCHEDULE_TIME_ZONE, year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date(value));
+  return parts;
+}
+
+export function dateFromDayKey(key, time = '12:00') {
+  return new Date(`${key}T${time}:00+08:00`);
+}
+
+export function shiftDayKey(key, days) {
+  const date = dateFromDayKey(key);
+  date.setUTCDate(date.getUTCDate() + days);
+  return dayKey(date);
+}
+
+export function monthGrid(monthKey) {
+  // monthKey: 'YYYY-MM'. Returns 6 weeks of day keys starting on Sunday.
+  const first = dateFromDayKey(`${monthKey}-01`);
+  const weekday = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'].indexOf(new Intl.DateTimeFormat('en-US', { timeZone: SCHEDULE_TIME_ZONE, weekday: 'short' }).format(first));
+  const start = shiftDayKey(`${monthKey}-01`, -weekday);
+  return Array.from({ length: 42 }, (_, index) => shiftDayKey(start, index));
+}
+
+export function shiftMonthKey(monthKey, months) {
+  const [year, month] = monthKey.split('-').map(Number);
+  const date = new Date(Date.UTC(year, month - 1 + months, 1));
+  return `${date.getUTCFullYear()}-${String(date.getUTCMonth() + 1).padStart(2, '0')}`;
+}
+
+export function entriesByDay(entries) {
+  return entries.reduce((days, entry) => {
+    const key = dayKey(entry.startsAt);
+    (days[key] ||= []).push(entry);
+    return days;
+  }, {});
+}
+
+// 30-minute start slots from 6:00 AM to 10:00 PM, like a booking page.
+// First start time (minutes after midnight, Manila) still open on a day: at least
+// ten minutes from now, on a five-minute mark. Null when the day is over.
+export function earliestStartMinutes(key, now = Date.now()) {
+  const offset = now + 10 * 60000 - dateFromDayKey(key, '00:00').getTime();
+  if (offset < 0) return 0;
+  const minutes = (Math.floor(offset / 60000 / START_STEP_MINUTES) + 1) * START_STEP_MINUTES;
+  return minutes < 24 * 60 ? minutes : null;
+}
+
+export function clockFromMinutes(minutes) {
+  return `${String(Math.floor(minutes / 60)).padStart(2, '0')}:${String(minutes % 60).padStart(2, '0')}`;
+}
+
+// Reads a typed start time: "7", "7:10", "7.10pm", "710 pm" or "19:10". Without
+// AM/PM in the text, fallbackMeridiem ('am' or 'pm') decides; failing that, 1–5
+// means afternoon and 6–11 morning, matching when people play.
+export function parseClockInput(text, fallbackMeridiem = null) {
+  const match = String(text || '').trim().toLowerCase().match(/^(\d{1,2})(?:[:.\s]?(\d{2}))?\s*([ap])?\.?\s*m?\.?$/);
+  if (!match) return null;
+  let hour = Number(match[1]);
+  const minute = Number(match[2] || 0);
+  // "07:30" is 24-hour, so it ignores the AM/PM toggle just like "19:30" does.
+  const twentyFourHour = /^0\d$/.test(match[1]);
+  const meridiem = match[3] || (fallbackMeridiem && !twentyFourHour && hour >= 1 && hour <= 12 ? fallbackMeridiem[0] : null);
+  if (minute > 59) return null;
+  if (meridiem) {
+    if (hour < 1 || hour > 12) return null;
+    hour = (hour % 12) + (meridiem === 'p' ? 12 : 0);
+  } else if (hour > 23) {
+    return null;
+  } else if (hour >= 1 && hour <= 5) {
+    hour += 12;
+  }
+  return hour * 60 + minute;
+}
+
+// Keeps a start-time field to text that can still become a real time, in
+// 12-hour ("1:00 pm") or 24-hour ("13:00") style. Keystrokes that would go past
+// 23 hours, 59 minutes or pair an hour over 12 with AM/PM are refused, and the
+// colon is added for you ("730" -> "7:30", "193" -> "19:3").
+function clockPrefix(text) {
+  const match = text.match(/^(\d{0,2})(:?)(\d{0,2})(?:\s?([ap])(m?))?$/);
+  if (!match) return null;
+  const [, hourText, colon, minuteText, meridiem, m] = match;
+  const hour = Number(hourText);
+  if ((colon || minuteText || meridiem) && !hourText) return null;
+  if (minuteText && !colon) return null;
+  if (hour > 23 || Number(minuteText[0]) > 5) return null;
+  if (meridiem && (hour < 1 || hour > 12 || /^0/.test(hourText) || minuteText.length === 1 || (colon && !minuteText))) return null;
+  return `${hourText}${colon}${minuteText}${meridiem ? ` ${meridiem.toUpperCase()}${m ? 'M' : ''}` : ''}`;
+}
+
+export function maskClockInput(previous, next) {
+  let text = String(next || '').toLowerCase()
+    .replace(/(\d)\.(?=\d|$)/, '$1:')
+    .replace(/[^0-9:apm ]/g, '')
+    .replace(/\s+/g, ' ')
+    .replace(/^\s/, '')
+    .replace(/(\d)\s(?=\d)/, '$1:');
+  const growing = text.length > String(previous || '').length;
+  if (growing) {
+    // Place the colon once the digits can no longer be just an hour.
+    const digits = text.match(/^(\d+)(.*)$/);
+    if (digits && !digits[2].startsWith(':') && (digits[1].length > 2 || (digits[1].length === 2 && Number(digits[1]) > 23))) {
+      const split = digits[1].length === 2 || Number(digits[1].slice(0, 2)) > 23 ? 1 : 2;
+      text = `${digits[1].slice(0, split)}:${digits[1].slice(split)}${digits[2]}`;
+    }
+    return clockPrefix(text) ?? (previous || '');
+  }
+  // Deleting never gets stuck: trim back to the longest valid start.
+  while (text && clockPrefix(text) === null) text = text.slice(0, -1);
+  return text ? clockPrefix(text) : '';
+}
+
+// Reads a typed length in hours ("2", "2.5", "1,5") and snaps it to half hours.
+export function parseHoursInput(text) {
+  const hours = Number(String(text || '').trim().replace(',', '.').replace(/\s*(h|hr|hrs|hours?)$/i, ''));
+  if (!Number.isFinite(hours) || hours <= 0) return null;
+  const minutes = Math.round((hours * 60) / DURATION_STEP_MINUTES) * DURATION_STEP_MINUTES;
+  return Math.min(MAX_GAME_MINUTES, Math.max(MIN_GAME_MINUTES, minutes));
+}
+
+export function formatDuration(minutes) {
+  if (minutes < 60) return `${minutes} min`;
+  return `${Number((minutes / 60).toFixed(1))} hr`;
+}
+
+export function formatTime(value) {
+  return new Date(value).toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', timeZone: SCHEDULE_TIME_ZONE });
+}
+
+export function formatDayLabel(key, options = { weekday: 'long', month: 'long', day: 'numeric' }) {
+  return dateFromDayKey(key).toLocaleDateString('en-US', { ...options, timeZone: SCHEDULE_TIME_ZONE });
+}
+
+export function googleCalendarUrl(entry) {
+  const stamp = (value) => new Date(value).toISOString().replace(/[-:]/g, '').replace(/\.\d{3}/, '');
+  const params = new URLSearchParams({
+    action: 'TEMPLATE',
+    text: entry.title,
+    dates: `${stamp(entry.startsAt)}/${stamp(entry.endsAt || entry.startsAt)}`,
+    details: 'Scheduled on Peakle',
+    location: [entry.place, entry.area].filter(Boolean).join(', '),
+  });
+  return `https://calendar.google.com/calendar/render?${params.toString()}`;
+}

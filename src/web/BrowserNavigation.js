@@ -6,6 +6,7 @@ import { useIsFocused } from '@react-navigation/native';
 const ROUTE_TITLES = {
   Home: 'Home',
   Book: 'Explore',
+  Schedule: 'Schedule',
   Play: 'Play',
   Team: 'Teams',
   Profile: 'Profile',

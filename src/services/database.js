@@ -3,6 +3,7 @@ import { Platform } from 'react-native';
 import * as Crypto from 'expo-crypto';
 import * as ImageManipulator from 'expo-image-manipulator';
 import { requireSupabase } from '../lib/supabase';
+import { cleanCourtText, courtLabel } from './playCourts';
 import { DEMO_MODE } from '../config/demoMode';
 import {
   DEMO_VENUE_ROWS, DEMO_QUOTE, DEMO_TEAMS, DEMO_MATCHES, DEMO_TEAM_ID,
@@ -15,6 +16,31 @@ const excludeLegacyPlaceholderVenues = (venues) => (venues || []).filter((venue)
 
 function isMissingResumeState(error) {
   return error?.code === '42703' || error?.message?.includes('resume_state') && error.message.includes('does not exist');
+}
+
+function isMissingCourtLabel(error) {
+  return (error?.code === '42703' || error?.code === 'PGRST204') && /court_(label|area)/.test(error?.message || '');
+}
+
+const DEMO_VENUE_IDS = ['yard', 'rockwell', 'valley'];
+
+// A match court is either a listed Peakle court (venueId + courtId) or a court
+// the player typed in. Both keep a readable label so history never loses it.
+export function matchCourtValues(court) {
+  const demoVenueId = DEMO_VENUE_IDS.find((id) => court?.id?.startsWith(id));
+  const demoCourtNumber = court?.id?.match(/(\d+)$/)?.[1];
+  const venueId = court?.venueId || demoVenueId || null;
+  const courtId = court?.courtId || (demoVenueId && demoCourtNumber ? `${demoVenueId}-court-${demoCourtNumber}` : null);
+  return {
+    venue_id: venueId,
+    court_id: venueId ? courtId : null,
+    court_label: courtLabel(court) || null,
+    court_area: cleanCourtText(court?.area) || null,
+  };
+}
+
+function withoutCourtLabel({ court_label: _label, court_area: _area, ...values }) {
+  return values;
 }
 
 function isMissingTeamCoverColumn(error) {
@@ -1176,14 +1202,11 @@ export async function saveCompletedMatch(userId, result, userName) {
   if (deterministicMatchId) {
     await writeLocalUnfinishedMatch(userId, { ...result, resultPendingSave: true, draftSavedAt: Date.now() }).catch(() => {});
   }
-  const venueId = ['yard', 'rockwell', 'valley'].find((id) => result.court?.id?.startsWith(id));
-  const courtNumber = result.court?.id?.match(/(\d+)$/)?.[1];
   const matchValues = {
     ...(deterministicMatchId ? { id: deterministicMatchId } : {}),
     created_by: userId,
     scorer_id: userId,
-    venue_id: venueId || null,
-    court_id: venueId && courtNumber ? `${venueId}-court-${courtNumber}` : null,
+    ...matchCourtValues(result.court),
     match_type: result.matchType,
     mode: result.mode,
     visibility: result.access === 'public' ? 'public' : 'private',
@@ -1201,8 +1224,10 @@ export async function saveCompletedMatch(userId, result, userName) {
       ? client.from('matches').upsert(values, { onConflict: 'id' })
       : client.from('matches').insert(values)).select().single();
   let { data: match, error } = await persistMatch(matchValues);
+  // Older databases may lag behind the client; keep the result, drop the extras.
+  if (isMissingCourtLabel(error)) ({ data: match, error } = await persistMatch(withoutCourtLabel(matchValues)));
   if (isMissingResumeState(error)) {
-    const { resume_state: _resumeState, ...legacyMatchValues } = matchValues;
+    const { resume_state: _resumeState, ...legacyMatchValues } = withoutCourtLabel(matchValues);
     ({ data: match, error } = await persistMatch(legacyMatchValues));
   }
   if (error) throw error;
@@ -1248,15 +1273,12 @@ export async function saveCompletedMatch(userId, result, userName) {
 
 export async function saveUnfinishedMatch(userId, result, userName) {
   const client = requireSupabase();
-  const venueId = ['yard', 'rockwell', 'valley'].find((id) => result.court?.id?.startsWith(id));
-  const courtNumber = result.court?.id?.match(/(\d+)$/)?.[1];
   const resumeState = { ...result, draftSavedAt: result.draftSavedAt || Date.now(), savedMatchId: result.savedMatchId || null };
   await writeLocalUnfinishedMatch(userId, resumeState).catch(() => {});
   const values = {
     created_by: userId,
     scorer_id: userId,
-    venue_id: venueId || null,
-    court_id: venueId && courtNumber ? `${venueId}-court-${courtNumber}` : null,
+    ...matchCourtValues(result.court),
     match_type: result.matchType,
     mode: result.mode,
     visibility: result.access === 'public' ? 'public' : 'private',
@@ -1268,15 +1290,20 @@ export async function saveUnfinishedMatch(userId, result, userName) {
     ended_at: null,
     resume_state: resumeState,
   };
-  const query = result.savedMatchId
-    ? client.from('matches').update(values).eq('id', result.savedMatchId).eq('created_by', userId).eq('status', 'live')
-    : client.from('matches').insert({ ...values, ...(result.clientMatchId ? { id: result.clientMatchId } : {}) });
-  let { data, error } = await query.select().single();
-  // A retry after a lost response must reuse the same row. Never reopen a
-  // completed match if another tab has already finished it.
-  if (error?.code === '23505' && result.clientMatchId) {
-    ({ data, error } = await client.from('matches').update(values).eq('id', result.clientMatchId).eq('created_by', userId).eq('status', 'live').select().single());
-  }
+  const persist = async (row) => {
+    const query = result.savedMatchId
+      ? client.from('matches').update(row).eq('id', result.savedMatchId).eq('created_by', userId).eq('status', 'live')
+      : client.from('matches').insert({ ...row, ...(result.clientMatchId ? { id: result.clientMatchId } : {}) });
+    const response = await query.select().single();
+    // A retry after a lost response must reuse the same row. Never reopen a
+    // completed match if another tab has already finished it.
+    if (response.error?.code === '23505' && result.clientMatchId) {
+      return client.from('matches').update(row).eq('id', result.clientMatchId).eq('created_by', userId).eq('status', 'live').select().single();
+    }
+    return response;
+  };
+  let { data, error } = await persist(values);
+  if (isMissingCourtLabel(error)) ({ data, error } = await persist(withoutCourtLabel(values)));
   if (isMissingResumeState(error)) {
     const localMatch = { ...resumeState, savedMatchId: null };
     await writeLocalUnfinishedMatch(userId, localMatch);
@@ -1348,7 +1375,7 @@ export async function listMyMatches({ limit } = {}) {
       ? match.match_participants.find((player) => player.side === currentSide && player.user_id !== userId && player.position !== currentParticipant.position)
       : match.match_participants.find((player) => player.side === currentSide && player.position === 1);
     const partner = partnerRow ? playerName(partnerRow) : null;
-    return { id: match.id, opponent: opponents || 'Opponent', partner, score: normalizedGames.map((game) => `${game.homeScore}–${game.awayScore}`).join(', '), games: normalizedGames, result: homeWins > awayWins ? 'W' : 'L', date: new Date(match.ended_at).toLocaleDateString('en-US', { month: 'short', day: '2-digit' }).toUpperCase(), endedAt: match.ended_at, startedAt: match.started_at, type: `${match.mode === 'ranked' ? 'Ranked' : 'Casual'} ${match.match_type}`, rating: '—', venue: match.venues ? `${match.venues.name}${match.courts ? ` · ${match.courts.name}` : ''}` : 'Unlisted court', duration: match.started_at && match.ended_at ? `${Math.max(1, Math.round((new Date(match.ended_at) - new Date(match.started_at)) / 60000))} min` : '—', longestRally: null, sideOuts: null, serveWon: null, returnWon: null, kitchenWon: null, errors: null, takeaway: homeWins > awayWins ? 'Match completed and recorded.' : 'Review the scoring pattern from this match.', improve: 'Use the score history to plan the next match.' };
+    return { id: match.id, opponent: opponents || 'Opponent', partner, score: normalizedGames.map((game) => `${game.homeScore}–${game.awayScore}`).join(', '), games: normalizedGames, result: homeWins > awayWins ? 'W' : 'L', date: new Date(match.ended_at).toLocaleDateString('en-US', { month: 'short', day: '2-digit' }).toUpperCase(), endedAt: match.ended_at, startedAt: match.started_at, type: `${match.mode === 'ranked' ? 'Ranked' : 'Casual'} ${match.match_type}`, rating: '—', venue: match.venues ? `${match.venues.name}${match.courts ? ` · ${match.courts.name}` : ''}` : match.court_label ? `${match.court_label}${match.court_area ? ` · ${match.court_area}` : ''}` : 'Unlisted court', duration: match.started_at && match.ended_at ? `${Math.max(1, Math.round((new Date(match.ended_at) - new Date(match.started_at)) / 60000))} min` : '—', longestRally: null, sideOuts: null, serveWon: null, returnWon: null, kitchenWon: null, errors: null, takeaway: homeWins > awayWins ? 'Match completed and recorded.' : 'Review the scoring pattern from this match.', improve: 'Use the score history to plan the next match.' };
   });
 }
 

@@ -38,6 +38,7 @@ import { peekCachedData, readCachedData, withTimeout, writeCachedData } from '..
 import { profileScreenCacheKey } from '../lib/cacheKeys';
 import { supabase } from '../lib/supabase';
 import { ACCOUNT_MENU_NAV } from '../components/AccountMenu';
+import { COURT_BOOKING_ENABLED } from '../config/features';
 
 const LIGHT_C = {
   ink: '#0E2321', paper: '#F3F5EF', surface: '#FFFFFF', optic: '#D6E94A',
@@ -281,7 +282,7 @@ function Settings({ preferences, setPreference, onAction, lastLogin, showLogOut 
       <View style={styles.settingsCard}>
         <SettingRow icon="person-outline" title="Account details" detail="Name, email, and location" onPress={() => onAction('Edit profile')} border={false} />
         <SettingRow icon="shield-checkmark-outline" title="Privacy & matching" detail="Competitive profile, availability and player discovery" onPress={() => onAction('Privacy & matching')} />
-        <SettingRow icon="receipt-outline" title="Payment history" detail="Your booking receipts and refunds" onPress={() => onAction('Payment history')} />
+        {COURT_BOOKING_ENABLED ? <SettingRow icon="receipt-outline" title="Payment history" detail="Your booking receipts and refunds" onPress={() => onAction('Payment history')} /> : null}
         <SettingRow icon="analytics-outline" title="Performance rating" detail="Calculated from completed match scores" onPress={() => onAction('Performance rating')} />
         <SettingRow icon="time-outline" title="Last active" detail={formatLastLogin(lastLogin)} />
       </View>

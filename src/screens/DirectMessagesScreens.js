@@ -25,7 +25,7 @@ import { DEMO_CONVERSATION_ID, DEMO_DIRECT_MESSAGE_DRIP } from '../config/demoDa
 import { PRIVATE_MESSAGES_ENABLED } from '../config/features';
 import ScrollView from '../components/FocusResetScrollView';
 import ProfilePhoto from '../components/ProfilePhoto';
-import ChatFocusOverlay from '../components/ChatFocusOverlay';
+import MessageFocusModal, { canCopyText, copyText, unselectable } from '../components/MessageFocusModal';
 import { useAuth } from '../context/AuthContext';
 import { DARK_CONTENT_COLORS, useTheme } from '../context/ThemeContext';
 import { supabase } from '../lib/supabase';
@@ -746,42 +746,42 @@ function MessageRelationshipGate({ peer, permission, busy, onFollow, colors }) {
   );
 }
 
-function DirectMessageInteractionModal({ message, peer, seen, colors, onClose, onReact, onDetails, onReport, onBlock }) {
-  if (!message) return null;
+function DirectMessageInteractionModal({ message, peer, seen, isDark, colors, currentUserId, onClose, onReact, onDetails, onReport, onBlock }) {
+  const actions = message ? [
+    canCopyText && message.text ? { key: 'copy', label: 'Copy', icon: 'copy-outline', onPress: () => copyText(message.text) } : null,
+    { key: 'details', label: 'Message details', icon: 'information-circle-outline', onPress: () => onDetails(message, seen) },
+    !message.mine ? { key: 'report', label: 'Report message', icon: 'flag-outline', destructive: true, separated: true, onPress: () => onReport(message) } : null,
+    !message.mine ? { key: 'block', label: `Block ${peer?.name || 'player'}`, icon: 'ban-outline', destructive: true, onPress: onBlock } : null,
+  ].filter(Boolean) : [];
   return (
-    <Modal visible transparent animationType="fade" onRequestClose={onClose}>
-      <View {...webDialog('backdrop')} style={styles.messageInteractionBackdrop}>
-        <Pressable accessibilityLabel="Close message actions" onPress={onClose} style={StyleSheet.absoluteFillObject} />
-          <View style={[styles.directActionSheet, { backgroundColor: colors.surface }]}>
-            <View style={[styles.directActionHandle, { backgroundColor: colors.line }]} />
-            <Text style={[styles.directActionTitle, { color: colors.ink }]}>Message options</Text>
-            <View style={[styles.directReactionPicker, styles.directActionReactions, { backgroundColor: colors.paper, borderColor: colors.line }]}>
-              {DIRECT_REACTION_OPTIONS.map((emoji) => <Pressable key={emoji} accessibilityLabel={`React ${emoji}`} onPress={() => { onReact(message.id, emoji); onClose(); }} style={({ pressed }) => [styles.directReactionOption, pressed && { backgroundColor: colors.tealWash }]}><Text style={styles.directReactionOptionText}>{emoji}</Text></Pressable>)}
-            </View>
-            <Pressable onPress={() => { onClose(); onDetails(message, seen); }} style={[styles.directActionRow, { borderColor: colors.line }]}><View style={[styles.directActionIcon, { backgroundColor: colors.tealWash }]}><Icon name="information-circle-outline" size={20} color={colors.teal} /></View><View style={styles.directActionCopy}><Text style={[styles.directActionRowTitle, { color: colors.ink }]}>Message details</Text><Text style={[styles.directActionRowText, { color: colors.ink40 }]}>{message.mine ? (seen ? `Seen by ${peer?.name || 'player'}` : 'Sent privately') : `Received from ${peer?.name || 'player'}`}</Text></View></Pressable>
-            {!message.mine ? <Pressable onPress={() => { onClose(); onReport(message); }} style={[styles.directActionRow, { borderColor: colors.line }]}><View style={[styles.directActionIcon, { backgroundColor: colors.tealWash }]}><Icon name="flag-outline" size={20} color={colors.brick} /></View><View style={styles.directActionCopy}><Text style={[styles.directActionRowTitle, { color: colors.brick }]}>Report message</Text><Text style={[styles.directActionRowText, { color: colors.ink40 }]}>Send it to Peakle’s private safety queue</Text></View></Pressable> : null}
-            {!message.mine ? <Pressable onPress={() => { onClose(); onBlock(); }} style={[styles.directActionRow, { borderColor: colors.line }]}><View style={[styles.directActionIcon, { backgroundColor: colors.paper }]}><Icon name="ban-outline" size={20} color={colors.ink70} /></View><View style={styles.directActionCopy}><Text style={[styles.directActionRowTitle, { color: colors.ink }]}>Block {peer?.name || 'player'}</Text><Text style={[styles.directActionRowText, { color: colors.ink40 }]}>Stop private messages from this player</Text></View></Pressable> : null}
-            <Pressable onPress={onClose} style={[styles.directActionCancel, { backgroundColor: colors.paper }]}><Text style={[styles.directActionCancelText, { color: colors.ink70 }]}>Cancel</Text></Pressable>
-          </View>
-      </View>
-    </Modal>
+    <MessageFocusModal
+      visible={Boolean(message)}
+      mine={message?.mine}
+      dark={isDark}
+      reactions={DIRECT_REACTION_OPTIONS}
+      selectedReactions={(message?.reactions || []).filter((reaction) => reaction.user_id === currentUserId).map((reaction) => reaction.emoji)}
+      onReact={(emoji) => onReact(message.id, emoji)}
+      actions={actions}
+      onClose={onClose}
+    >
+      {message ? <View style={[styles.messageBubble, { backgroundColor: colors.surface, borderColor: colors.line }, message.mine && { backgroundColor: colors.teal, borderColor: colors.teal }]}><Text style={[styles.messageText, { color: message.mine ? '#FFFFFF' : colors.ink }]}>{message.text}</Text><Text style={[styles.messageTime, { color: message.mine ? 'rgba(255,255,255,.7)' : colors.ink40 }]}>{message.time}</Text></View> : null}
+    </MessageFocusModal>
   );
 }
 
-function DirectChatMessage({ message, grouped, active, interactive, peer, seen, currentUserId, colors, onToggleControls, onShowControls, onOpenActions, onReact }) {
+function DirectChatMessage({ message, grouped, interactive, peer, seen, currentUserId, colors, onOpenActions, onReact }) {
   const reactionGroups = DIRECT_REACTION_OPTIONS.map((emoji) => ({
     emoji,
     reactions: (message.reactions || []).filter((reaction) => reaction.emoji === emoji),
   })).filter((group) => group.reactions.length);
   return (
-    <View style={[styles.messageRow, message.mine && styles.messageRowMine, grouped && styles.messageGrouped, active && styles.messageRowActive]}>
+    <View style={[styles.messageRow, message.mine && styles.messageRowMine, grouped && styles.messageGrouped]}>
       <View style={[styles.directMessageBlock, message.mine && styles.directMessageBlockMine]}>
         <View style={[styles.directBubbleActionRow, message.mine && styles.directBubbleActionRowMine]}>
           {!message.mine && !grouped ? <ProfilePhoto photo={message.avatar || peer?.avatar} name={message.sender} size={30} /> : !message.mine ? <View style={styles.avatarSpacer} /> : null}
-          <Pressable accessibilityHint={interactive ? 'Tap or long press for reactions and message options.' : undefined} disabled={!interactive} onPress={() => onToggleControls(message.id)} onLongPress={() => onShowControls(message.id)} delayLongPress={240} style={[styles.messageBubble, { backgroundColor: colors.surface, borderColor: colors.line }, message.mine && { backgroundColor: colors.teal, borderColor: colors.teal }]}><Text style={[styles.messageText, { color: message.mine ? '#FFFFFF' : colors.ink }]}>{message.text}</Text><Text style={[styles.messageTime, { color: message.mine ? 'rgba(255,255,255,.7)' : colors.ink40 }]}>{message.time}</Text></Pressable>
+          <Pressable accessibilityHint={interactive ? 'Tap or long press for reactions and message options.' : undefined} disabled={!interactive} onPress={() => onOpenActions(message.id)} onLongPress={() => onOpenActions(message.id)} delayLongPress={240} style={[styles.messageBubble, unselectable, { backgroundColor: colors.surface, borderColor: colors.line }, message.mine && { backgroundColor: colors.teal, borderColor: colors.teal }]}><Text selectable={false} style={[styles.messageText, unselectable, { color: message.mine ? '#FFFFFF' : colors.ink }]}>{message.text}</Text><Text selectable={false} style={[styles.messageTime, unselectable, { color: message.mine ? 'rgba(255,255,255,.7)' : colors.ink40 }]}>{message.time}</Text></Pressable>
         </View>
         <View style={[styles.directMessageExtras, message.mine ? styles.directMessageExtrasMine : styles.directMessageExtrasPeer]}>
-          {active ? <View style={[styles.directQuickActions, message.mine && styles.directQuickActionsMine]}>{DIRECT_REACTION_OPTIONS.map((emoji) => <Pressable key={emoji} accessibilityLabel={`React ${emoji}`} onPress={() => { onReact(message.id, emoji); onToggleControls(message.id); }} style={({ pressed }) => [styles.directQuickAction, pressed && { backgroundColor: colors.tealWash }]}><Text style={styles.directQuickActionEmoji}>{emoji}</Text></Pressable>)}<Pressable accessibilityLabel="More message actions" onPress={() => onOpenActions(message.id)} style={({ pressed }) => [styles.directQuickAction, pressed && { backgroundColor: colors.tealWash }]}><Icon name="ellipsis-horizontal" size={20} color={colors.ink70} /></Pressable></View> : null}
           {reactionGroups.length ? <View style={[styles.directReactionSummary, message.mine && styles.directReactionSummaryMine]}>{reactionGroups.map((group) => { const mine = group.reactions.some((reaction) => reaction.user_id === currentUserId); return <Pressable key={group.emoji} accessibilityLabel={`${group.emoji}, ${group.reactions.length} reactions`} onPress={() => onReact(message.id, group.emoji)} style={[styles.directReactionChip, { backgroundColor: mine ? colors.tealWash : colors.surface, borderColor: mine ? colors.teal : colors.line }]}><Text style={styles.directReactionEmoji}>{group.emoji}</Text><Text style={[styles.directReactionCount, { color: colors.ink70 }]}>{group.reactions.length}</Text></Pressable>; })}</View> : null}
           {message.mine && seen ? <View accessibilityLabel={`Seen by ${peer?.name || 'player'}`} style={styles.directSeenReceipt}><ProfilePhoto photo={peer?.avatar} name={peer?.name} size={17} /><Icon name="checkmark-done" size={13} color={colors.teal} /><Text style={[styles.directSeenText, { color: colors.ink40 }]}>Seen</Text></View> : null}
         </View>
@@ -833,7 +833,6 @@ function DirectChatConversation({ route, navigation }) {
   const [responding, setResponding] = useState(false);
   const [remoteTyping, setRemoteTyping] = useState(false);
   const [reportingMessage, setReportingMessage] = useState(null);
-  const [activeMessageId, setActiveMessageId] = useState(null);
   const [selectedMessageId, setSelectedMessageId] = useState(null);
   const [safetyStatus, setSafetyStatus] = useState(null);
   const [safetyBusy, setSafetyBusy] = useState(false);
@@ -1047,7 +1046,6 @@ function DirectChatConversation({ route, navigation }) {
     }
   };
   const openMessageActions = (messageId) => {
-    setActiveMessageId(null);
     setSelectedMessageId(messageId);
   };
   const reactToMessage = async (messageId, emoji) => {
@@ -1106,29 +1104,30 @@ function DirectChatConversation({ route, navigation }) {
       {!safetyStatus?.eligible && !loading ? <ChatSafetyGate status={safetyStatus} busy={safetyBusy} onConfirm={confirmSafety} colors={colors} /> : loading ? <ChatLoadingSkeleton colors={colors} /> : relationshipLocked ? <MessageRelationshipGate peer={peer} permission={messagePermission} busy={following} onFollow={followPeer} colors={colors} /> : (
         <KeyboardAvoidingView style={styles.chatBody} behavior={Platform.OS === 'ios' ? 'padding' : undefined} keyboardVerticalOffset={8}>
           <View style={[styles.encryptionBanner, { backgroundColor: isDark ? colors.surface : '#E5F0ED', borderColor: colors.line }]}><Icon name="lock-closed-outline" size={14} color={colors.teal} /><Text style={[styles.encryptionText, { color: colors.ink70 }]}>Only you and {peer?.name || 'this player'} can view this conversation.</Text></View>
-          <ScrollView ref={scrollRef} style={styles.messages} contentContainerStyle={styles.messageContent} keyboardShouldPersistTaps="handled" onScrollBeginDrag={() => setActiveMessageId(null)} onContentSizeChange={() => scrollRef.current?.scrollToEnd({ animated: true })}>
+          <ScrollView ref={scrollRef} style={styles.messages} contentContainerStyle={styles.messageContent} keyboardShouldPersistTaps="handled" onContentSizeChange={() => scrollRef.current?.scrollToEnd({ animated: true })}>
             {!messages.length ? <View style={styles.emptyChat}><ProfilePhoto photo={peer?.avatar} name={peer?.name} size={70} /><Text style={[styles.emptyChatTitle, { color: colors.ink }]}>Message {peer?.name || 'this player'}</Text><Text style={[styles.emptyText, { color: colors.ink40 }]}>You can message because you are teammates or mutual followers. Keep personal and sensitive information private.</Text></View> : null}
-            <Pressable accessible={false} onPress={() => setActiveMessageId(null)} style={styles.messageTapArea}>
-            <ChatFocusOverlay visible={Boolean(activeMessageId) && conversation?.status === 'accepted' && !blocked && messages.some((message) => message.id === activeMessageId)} dark={isDark} onPress={() => setActiveMessageId(null)} />
+            <View style={styles.messageTapArea}>
             {messages.map((message, index) => {
               const grouped = messages[index - 1]?.senderId === message.senderId;
-              return <DirectChatMessage key={message.id} message={message} grouped={grouped} active={activeMessageId === message.id && conversation?.status === 'accepted' && !blocked} interactive={conversation?.status === 'accepted' && !blocked} peer={peer} seen={message.id === latestMine?.id && Boolean(latestMineSeen)} currentUserId={user?.id} colors={colors} onToggleControls={(messageId) => setActiveMessageId((current) => current === messageId ? null : messageId)} onShowControls={setActiveMessageId} onOpenActions={openMessageActions} onReact={reactToMessage} />;
+              return <DirectChatMessage key={message.id} message={message} grouped={grouped} interactive={conversation?.status === 'accepted' && !blocked} peer={peer} seen={message.id === latestMine?.id && Boolean(latestMineSeen)} currentUserId={user?.id} colors={colors} onOpenActions={openMessageActions} onReact={reactToMessage} />;
             })}
             {remoteTyping ? <View accessibilityLiveRegion="polite" accessibilityLabel={`${peer?.name || 'Player'} is typing`} style={styles.remoteTypingRow}><ProfilePhoto photo={peer?.avatar} name={peer?.name} size={30} /><AnimatedTypingDots colors={colors} /></View> : null}
-            </Pressable>
+            </View>
           </ScrollView>
           {incomingRequest && !blocked ? <View style={[styles.requestActions, { backgroundColor: colors.surface, borderColor: colors.line }]}><View style={styles.requestCopy}><Text style={[styles.requestTitle, { color: colors.ink }]}>Accept message request?</Text><Text style={[styles.requestText, { color: colors.ink40 }]}>Accept to reply, or decline to close it.</Text></View><Pressable disabled={responding} onPress={() => respond(false)} style={[styles.declineButton, { borderColor: colors.line }]}><Text style={[styles.declineText, { color: colors.brick }]}>Decline</Text></Pressable><Pressable disabled={responding} onPress={() => respond(true)} style={[styles.acceptButton, { backgroundColor: colors.optic }]}>{responding ? <ActivityIndicator size="small" color="#0E2321" /> : <Text style={styles.acceptText}>Accept</Text>}</Pressable></View> : null}
           {outboundRequest && !blocked ? <View style={[styles.pendingBanner, { backgroundColor: isDark ? colors.surface : '#E5F0ED', borderColor: colors.line }]}><Icon name="time-outline" color={colors.teal} /><Text style={[styles.pendingText, { color: colors.ink70 }]}>Message request sent. You can continue after {peer?.name} accepts.</Text></View> : null}
           {declined && !blocked ? <View style={[styles.pendingBanner, { backgroundColor: colors.surface, borderColor: colors.line }]}><Icon name="lock-closed-outline" color={colors.ink40} /><Text style={[styles.pendingText, { color: colors.ink70 }]}>This conversation is closed.</Text></View> : null}
           {blocked ? <View style={[styles.pendingBanner, { backgroundColor: colors.surface, borderColor: colors.line }]}><Icon name="ban-outline" color={colors.brick} /><Text style={[styles.pendingText, { color: colors.ink70 }]}>Private messaging is unavailable for this player.</Text></View> : null}
-          {!incomingRequest && !outboundRequest && !declined && !blocked ? <View style={[styles.composer, { backgroundColor: colors.surface, borderColor: colors.line }]}><View style={[styles.composerInput, { backgroundColor: colors.paper }]}><TextInput value={draft} onChangeText={changeDraft} onFocus={() => setActiveMessageId(null)} onBlur={stopTyping} onSubmitEditing={send} returnKeyType="send" multiline maxLength={4000} placeholder={`Message ${peer?.name || 'player'}`} placeholderTextColor={colors.ink40} style={[styles.input, { color: colors.ink }]} /><Pressable disabled={!draft.trim() || composerDisabled} accessibilityLabel="Send message" onPress={send} style={[styles.sendButton, { backgroundColor: colors.optic }, (!draft.trim() || composerDisabled) && styles.sendDisabled]}>{sending ? <ActivityIndicator size="small" color="#0E2321" /> : <Icon name="arrow-up" size={18} color="#0E2321" />}</Pressable></View></View> : null}
+          {!incomingRequest && !outboundRequest && !declined && !blocked ? <View style={[styles.composer, { backgroundColor: colors.surface, borderColor: colors.line }]}><View style={[styles.composerInput, { backgroundColor: colors.paper }]}><TextInput value={draft} onChangeText={changeDraft} onBlur={stopTyping} onSubmitEditing={send} returnKeyType="send" multiline maxLength={4000} placeholder={`Message ${peer?.name || 'player'}`} placeholderTextColor={colors.ink40} style={[styles.input, { color: colors.ink }]} /><Pressable disabled={!draft.trim() || composerDisabled} accessibilityLabel="Send message" onPress={send} style={[styles.sendButton, { backgroundColor: colors.optic }, (!draft.trim() || composerDisabled) && styles.sendDisabled]}>{sending ? <ActivityIndicator size="small" color="#0E2321" /> : <Icon name="arrow-up" size={18} color="#0E2321" />}</Pressable></View></View> : null}
         </KeyboardAvoidingView>
       )}
       <DirectMessageInteractionModal
         message={selectedMessage}
         peer={peer}
         seen={selectedMessage?.id === latestMine?.id && Boolean(latestMineSeen)}
+        isDark={isDark}
         colors={colors}
+        currentUserId={user?.id}
         onClose={() => setSelectedMessageId(null)}
         onReact={reactToMessage}
         onDetails={showMessageDetails}
@@ -1256,7 +1255,6 @@ const styles = StyleSheet.create({
   messageRow: { marginTop: 11, flexDirection: 'row' },
   messageRowMine: { justifyContent: 'flex-end' },
   messageGrouped: { marginTop: 4 },
-  messageRowActive: { zIndex: 2 },
   avatarSpacer: { width: 30 },
   directMessageBlock: { maxWidth: '90%', alignItems: 'flex-start' },
   directMessageBlockMine: { alignItems: 'flex-end' },
@@ -1270,10 +1268,6 @@ const styles = StyleSheet.create({
   messageBubble: { maxWidth: '100%', flexShrink: 1, paddingHorizontal: 14, paddingVertical: 10, borderRadius: 20, borderBottomLeftRadius: 5, borderWidth: 1 },
   messageText: { fontSize: 15, lineHeight: 21 },
   messageTime: { marginTop: 4, alignSelf: 'flex-end', fontSize: 7 },
-  directQuickActions: { maxWidth: '100%', marginTop: 2, flexDirection: 'row', alignItems: 'center' },
-  directQuickActionsMine: { justifyContent: 'flex-end' },
-  directQuickAction: { width: 36, minWidth: 26, flexShrink: 1, height: 36, alignItems: 'center', justifyContent: 'center', borderRadius: 18 },
-  directQuickActionEmoji: { fontSize: 22 },
   directReactionSummary: { marginTop: -3, marginLeft: 5, flexDirection: 'row', flexWrap: 'wrap', gap: 3 },
   directReactionSummaryMine: { marginLeft: 0, marginRight: 5, justifyContent: 'flex-end' },
   directReactionChip: { minHeight: 24, paddingHorizontal: 6, flexDirection: 'row', alignItems: 'center', gap: 3, borderRadius: 12, borderWidth: 1 },
@@ -1284,21 +1278,6 @@ const styles = StyleSheet.create({
   remoteTypingRow: { marginTop: 9, flexDirection: 'row', alignItems: 'flex-end', gap: 7 },
   typingBubble: { width: 62, height: 38, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 5, borderRadius: 19, borderWidth: 1, transformOrigin: 'left bottom' },
   typingDot: { width: 8, height: 8, borderRadius: 4 },
-  messageInteractionBackdrop: { flex: 1, paddingHorizontal: 10, justifyContent: 'flex-end', backgroundColor: 'rgba(5,14,13,.58)' },
-  directReactionPicker: { maxWidth: '100%', flexShrink: 1, minHeight: 54, paddingHorizontal: 7, flexDirection: 'row', alignItems: 'center', gap: 1, borderRadius: 28, ...Platform.select({ ios: { shadowColor: '#000000', shadowOpacity: .2, shadowRadius: 18, shadowOffset: { width: 0, height: 8 } }, android: { elevation: 8 } }) },
-  directReactionOption: { width: 42, minWidth: 30, flexShrink: 1, height: 46, alignItems: 'center', justifyContent: 'center', borderRadius: 23 },
-  directReactionOptionText: { fontSize: 25 },
-  directActionSheet: { marginBottom: 10, paddingHorizontal: 14, paddingTop: 8, paddingBottom: 12, borderRadius: 24, ...Platform.select({ ios: { shadowColor: '#000000', shadowOpacity: .22, shadowRadius: 20, shadowOffset: { width: 0, height: 9 } }, android: { elevation: 10 } }) },
-  directActionHandle: { width: 42, height: 4, alignSelf: 'center', borderRadius: 2 },
-  directActionTitle: { marginTop: 12, fontSize: 18, fontWeight: '900' },
-  directActionReactions: { alignSelf: 'center', marginTop: 12, marginBottom: 7, justifyContent: 'space-between', shadowOpacity: 0, elevation: 0 },
-  directActionRow: { minHeight: 68, flexDirection: 'row', alignItems: 'center', gap: 11, borderTopWidth: 1 },
-  directActionIcon: { width: 40, height: 40, alignItems: 'center', justifyContent: 'center', borderRadius: 13 },
-  directActionCopy: { flex: 1 },
-  directActionRowTitle: { fontSize: 11, fontWeight: '900' },
-  directActionRowText: { marginTop: 3, fontSize: 8, lineHeight: 12 },
-  directActionCancel: { minHeight: 48, marginTop: 8, alignItems: 'center', justifyContent: 'center', borderRadius: 14 },
-  directActionCancelText: { fontSize: 10, fontWeight: '900' },
   composer: { paddingHorizontal: 12, paddingVertical: 9, borderTopWidth: 1 },
   composerInput: { minHeight: 43, paddingLeft: 14, paddingRight: 4, flexDirection: 'row', alignItems: 'center', borderRadius: 22 },
   input: { flex: 1, maxHeight: 94, paddingVertical: 10, fontSize: 15 },

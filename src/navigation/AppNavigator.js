@@ -6,6 +6,7 @@ import Ionicons from '@expo/vector-icons/Ionicons';
 import AppIcon from '../components/AppIcon';
 import HomeScreen from '../screens/HomeScreen';
 import BookScreen from '../screens/BookScreen';
+import ScheduleScreen from '../screens/ScheduleScreen';
 import PlayScreen from '../screens/PlayScreen';
 import TeamScreen from '../screens/TeamScreen';
 import PlayerProfileScreen from '../screens/ProfileScreen';
@@ -20,7 +21,7 @@ import PaymentHistoryScreen from '../screens/PaymentHistoryScreen';
 import HelpSupportScreen from '../screens/HelpSupportScreen';
 import SupportChatScreen from '../screens/SupportChatScreen';
 import CommunityChatScreen from '../screens/CommunityChatScreen';
-import { PRIVATE_MESSAGES_ENABLED } from '../config/features';
+import { COURT_BOOKING_ENABLED, DISCOVERY_TAB, PRIVATE_MESSAGES_ENABLED } from '../config/features';
 // Inbox hosts both private messages and community chats (its segments).
 const { DirectChatScreen, InboxScreen } = require('../screens/DirectMessagesScreens');
 import PublicProfileScreen from '../screens/PublicProfileScreen';
@@ -39,8 +40,9 @@ const NotificationTestScreen = Platform.OS === 'web' ? null : require('../screen
 const { BrowserNavigationLayout, BrowserScene } = Platform.OS === 'web' ? require('../web/BrowserNavigation') : {};
 const Tab = createBottomTabNavigator();
 const colors = { ink: '#0E2321', surface: '#FFFFFF', optic: '#D6E94A', teal: '#1C6B66', ink40: '#7C8983', line: '#DDE3DA' };
-const icons = { Home: 'home-outline', Book: 'compass-outline', Play: 'tennisball-outline', Team: 'people-outline', Profile: 'person-outline', Leaderboard: 'podium-outline', Activities: 'calendar-outline', Inbox: 'chatbubbles-outline', HelpSupport: 'help-circle-outline' };
+const icons = { Home: 'home-outline', Book: 'compass-outline', Schedule: 'calendar-outline', Play: 'tennisball-outline', Team: 'people-outline', Profile: 'person-outline', Leaderboard: 'podium-outline', Activities: 'calendar-outline', Inbox: 'chatbubbles-outline', HelpSupport: 'help-circle-outline' };
 const BALL_IMAGE = require('../../public/images/ball.png');
+const BRAND_BALL_IMAGE = require('../../public/images/ball_green.png');
 // On desktop the Profile route is split into sidebar sections that map to its tabs.
 const PROFILE_SECTIONS = [
   { tab: 'Overview', label: 'Profile', icon: 'person-outline' },
@@ -117,7 +119,7 @@ function TabBarItem({ focused, label, onPress, play, routeName, theme, badge = 0
           <AppIcon name={icons[routeName]} size={20} color={focused ? theme.activeText : theme.muted} />
         )}
       </Animated.View>
-      <Text style={[styles.tabLabel, { color: focused ? (play ? theme.centerActiveLabel : theme.activeLabel) : theme.muted }, focused && styles.tabLabelActive]}>{label}</Text>
+      <Text numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.85} style={[styles.tabLabel, { color: focused ? (play ? theme.centerActiveLabel : theme.activeLabel) : theme.muted }, focused && styles.tabLabelActive]}>{label}</Text>
       {badge > 0 ? <View style={styles.tabBadge}><Text style={styles.tabBadgeText}>{badge > 99 ? '99+' : badge}</Text></View> : null}
       {!play ? (
         <Animated.View style={[styles.kitchenIndicator, { opacity: focusProgress }]}>
@@ -139,15 +141,18 @@ function PeakleTabBar({ state, descriptors, navigation }) {
   const [leavingMatch, setLeavingMatch] = useState(false);
   const [leaveError, setLeaveError] = useState('');
   const [pendingRoute, setPendingRoute] = useState(null);
-  const alwaysHiddenRoutes = new Set(['Pickleball', 'Activities', 'ActivityDetails', 'OpenPlayActivity', 'Privacy', 'LegalDocument', 'AccountDeletion', 'PaymentHistory', 'HelpSupport', 'SupportChat', 'CommunityChat', 'NotificationTest', 'Inbox', 'DirectChat', 'PublicProfile', 'Connections', 'Leaderboard', 'CompetitionDivision']);
+  const alwaysHiddenRoutes = new Set([COURT_BOOKING_ENABLED ? 'Schedule' : 'Book', 'Pickleball', 'Activities', 'ActivityDetails', 'OpenPlayActivity', 'Privacy', 'LegalDocument', 'AccountDeletion', 'PaymentHistory', 'HelpSupport', 'SupportChat', 'CommunityChat', 'NotificationTest', 'Inbox', 'DirectChat', 'PublicProfile', 'Connections', 'Leaderboard', 'CompetitionDivision']);
   const currentRoute = state.routes[state.index];
   const theme = isDark
     ? { background: '#0E2321', surface: '#17302D', line: '#304743', activeText: colors.ink, activeLabel: colors.ink, centerActiveLabel: colors.surface, muted: '#9FB3AC', active: colors.optic, kitchenLine: colors.optic }
     : { background: '#F3F5EF', surface: colors.surface, line: colors.line, activeText: colors.ink, activeLabel: colors.ink, centerActiveLabel: colors.ink, muted: colors.ink40, active: colors.optic, kitchenLine: colors.teal };
   // Exclude routes that should never show a tab
-  const desktopRoutes = ['Home', 'Book', 'Play', 'Team', 'Leaderboard', 'Activities', 'Inbox', 'Profile', 'HelpSupport'];
+  // Schedule already lists public activities, so it replaces the Activities link.
+  const desktopRoutes = COURT_BOOKING_ENABLED
+    ? ['Home', 'Book', 'Play', 'Team', 'Leaderboard', 'Activities', 'Inbox', 'Profile', 'HelpSupport']
+    : ['Home', 'Schedule', 'Play', 'Team', 'Leaderboard', 'Inbox', 'Profile', 'HelpSupport'];
   const desktopLabels = { Leaderboard: 'Leaderboard', Activities: 'Activities', Inbox: ACCOUNT_MENU_NAV ? 'Chats' : 'Messages', HelpSupport: 'Help & support' };
-  const mobileRoutes = ACCOUNT_MENU_NAV ? ['Home', 'Book', 'Play', 'Team', 'Inbox'] : null;
+  const mobileRoutes = ACCOUNT_MENU_NAV ? ['Home', DISCOVERY_TAB, 'Play', 'Team', 'Inbox'] : null;
   const visibleRoutes = desktop || mobileRoutes
     ? (desktop ? desktopRoutes : mobileRoutes).map((name) => state.routes.find((route) => route.name === name)).filter(Boolean)
     : state.routes.filter((route) => !alwaysHiddenRoutes.has(route.name));
@@ -156,11 +161,11 @@ function PeakleTabBar({ state, descriptors, navigation }) {
     : SETTINGS_ROUTES.has(currentRoute.name) ? 'Settings'
     : null;
   const legacyMobileOwner = currentRoute.name === 'Pickleball'
-    ? (currentRoute.params?.ownerTab || ({ Ratings: 'Profile', Privacy: 'Profile', 'Find play': 'Play', Compete: 'Book' }[currentRoute.params?.openTab]))
+    ? (currentRoute.params?.ownerTab || ({ Ratings: 'Profile', Privacy: 'Profile', 'Find play': 'Play', Compete: DISCOVERY_TAB }[currentRoute.params?.openTab]))
     : currentRoute.name === 'Leaderboard' ? 'Home'
     : ['Privacy', 'HelpSupport', 'SupportChat', 'NotificationTest', 'Connections'].includes(currentRoute.name) ? 'Profile'
     : ['Inbox', 'DirectChat', 'CommunityChat'].includes(currentRoute.name) ? (currentRoute.params?.ownerTab || 'Team')
-    : ['Activities', 'ActivityDetails', 'OpenPlayActivity'].includes(currentRoute.name) ? 'Home'
+    : ['Activities', 'ActivityDetails', 'OpenPlayActivity'].includes(currentRoute.name) ? (currentRoute.params?.returnTo === 'Schedule' ? 'Schedule' : 'Home')
     : null;
   // Account screens have no tab once Profile moves behind the avatar; chats all belong to Chats.
   const mobileOwner = !ACCOUNT_MENU_NAV ? legacyMobileOwner
@@ -168,10 +173,10 @@ function PeakleTabBar({ state, descriptors, navigation }) {
     : legacyMobileOwner === 'Profile' ? null
     : legacyMobileOwner;
   const contextualOwner = desktop ? ({
-    ActivityDetails: 'Activities', OpenPlayActivity: 'Activities',
+    ...(COURT_BOOKING_ENABLED ? { ActivityDetails: 'Activities', OpenPlayActivity: 'Activities' } : {}),
     Privacy: 'Profile', LegalDocument: 'Profile', AccountDeletion: 'Profile',
     PaymentHistory: 'Profile', PublicProfile: 'Profile', Connections: 'Profile',
-    SupportChat: 'HelpSupport', CommunityChat: 'Inbox', CompetitionDivision: 'Book',
+    SupportChat: 'HelpSupport', CommunityChat: 'Inbox', CompetitionDivision: DISCOVERY_TAB,
   }[currentRoute.name] || mobileOwner) : mobileOwner;
   const guardedNavigate = (name, params) => {
     if (currentRoute.name === 'Play' && joinedInvite) {
@@ -185,7 +190,7 @@ function PeakleTabBar({ state, descriptors, navigation }) {
   };
   return (
     <View dataSet={Platform.OS === 'web' ? { playerNavigation: desktop ? 'sidebar' : 'bottom' } : undefined} style={[styles.tabOuter, { paddingBottom: Math.max(insets.bottom, 9), backgroundColor: theme.background }, desktop && [styles.sidebar, { backgroundColor: theme.surface, borderColor: theme.line }]]}>
-      {desktop ? <View dataSet={{ sidebarPart: 'brand' }} style={styles.sidebarBrand}><Image source={BALL_IMAGE} style={[styles.sidebarLogo, { tintColor: isDark ? colors.optic : colors.ink }]} /><Text style={[styles.sidebarWordmark, { color: isDark ? '#F3F5EF' : colors.ink }]}>Peakle</Text><Text style={styles.sidebarBeta}>BETA</Text></View> : null}
+      {desktop ? <View dataSet={{ sidebarPart: 'brand' }} style={styles.sidebarBrand}><Image source={isDark ? BALL_IMAGE : BRAND_BALL_IMAGE} style={[styles.sidebarLogo, isDark && { tintColor: colors.optic }]} /><Text accessibilityRole="header" style={[styles.sidebarWordmark, { color: isDark ? '#F3F5EF' : colors.ink }]}>Peakle</Text><Text style={styles.sidebarBeta}>BETA</Text></View> : null}
       <View accessibilityRole={desktop ? 'navigation' : undefined} accessibilityLabel={desktop ? 'Main navigation' : undefined} style={[styles.tabBar, { backgroundColor: theme.surface, borderColor: theme.line }, desktop && styles.sidebarLinks]}>
         {visibleRoutes.map((route) => {
           const routeFocused = currentRoute.key === route.key;
@@ -288,7 +293,9 @@ function PlayerWorkspace({ isDark }) {
   return (
     <WorkspaceNavigator workspaceKey="player-workspace" initialRouteName="Home" isDark={isDark}>
       <Tab.Screen name="Home" component={HomeScreen} options={{ lazy: false }} />
-      <Tab.Screen name="Book" component={BookScreen} options={{ tabBarLabel: 'Explore', lazy: false }} />
+      {/* Booking stays registered while paused so its screens and links keep working behind the flag. */}
+      <Tab.Screen name="Book" component={BookScreen} options={{ tabBarLabel: 'Explore', lazy: !COURT_BOOKING_ENABLED }} />
+      <Tab.Screen name="Schedule" component={ScheduleScreen} options={{ tabBarLabel: 'Schedule', lazy: false }} />
       <Tab.Screen name="Play" component={PlayScreen} options={{ lazy: false }} />
       <Tab.Screen name="Team" component={TeamScreen} options={{ tabBarLabel: 'Teams', lazy: false }} />
       <Tab.Screen name="Profile" component={PlayerProfileScreen} options={{ lazy: false }} />
@@ -321,10 +328,11 @@ export default function AppNavigator() {
 
 const styles = StyleSheet.create({
   sidebar: { width: DESKTOP_SIDEBAR_WIDTH, height: '100%', paddingHorizontal: 16, paddingTop: 28, borderRightWidth: 1 },
-  sidebarBrand: { flexDirection: 'row', alignItems: 'center', gap: 8, paddingHorizontal: 8, marginBottom: 34 },
-  sidebarLogo: { width: 30, height: 30 },
-  sidebarWordmark: { fontSize: 26, fontWeight: '900', letterSpacing: -1 },
-  sidebarBeta: { color: colors.teal, backgroundColor: colors.optic, fontSize: 8, fontWeight: '900', paddingHorizontal: 5, paddingVertical: 3, borderRadius: 4 },
+  sidebarBrand: { flexDirection: 'row', alignItems: 'center', gap: 9, paddingHorizontal: 10, marginBottom: 34 },
+  // PP Mori ships 200/400/600 only; heavier weights make the browser fake a smeared bold.
+  sidebarLogo: { width: 28, height: 28 },
+  sidebarWordmark: { fontSize: 24, lineHeight: 28, fontWeight: '600', letterSpacing: -0.9 },
+  sidebarBeta: { alignSelf: 'center', marginLeft: 1, marginTop: 2, color: '#0E2321', backgroundColor: colors.optic, fontSize: 8, lineHeight: 10, fontWeight: '600', letterSpacing: 1, paddingHorizontal: 6, paddingVertical: 3, borderRadius: 5, overflow: 'hidden' },
   sidebarLinks: { height: 'auto', borderWidth: 0, borderRadius: 0, paddingHorizontal: 0, flexDirection: 'column', gap: 6 },
   sidebarLink: { minHeight: 48, paddingHorizontal: 12, flexDirection: 'row', alignItems: 'center', gap: 11, borderRadius: 12 },
   sidebarLabel: { flex: 1, fontSize: 13, fontWeight: '700' },
@@ -337,9 +345,9 @@ const styles = StyleSheet.create({
   tabItem: { flex: 1, alignItems: 'center', justifyContent: 'center' },
   tabBadge: { position: 'absolute', top: 8, right: 9, minWidth: 18, height: 18, paddingHorizontal: 5, alignItems: 'center', justifyContent: 'center', borderRadius: 9, backgroundColor: '#B6472E' },
   tabBadgeText: { color: '#FFFFFF', fontSize: 8, fontWeight: '900' },
-  activePill: { position: 'absolute', top: 9, right: 5, bottom: 9, left: 5, borderRadius: 17 },
+  activePill: { position: 'absolute', top: 9, right: 2, bottom: 9, left: 2, borderRadius: 17 },
   tabIcon: { width: 30, height: 26, alignItems: 'center', justifyContent: 'center' },
-  tabLabel: { marginTop: 1, fontSize: 10, fontWeight: '700', letterSpacing: 0.1 }, tabLabelActive: { fontWeight: '900' },
+  tabLabel: { maxWidth: '100%', marginTop: 1, paddingHorizontal: 6, fontSize: 10, fontWeight: '700', letterSpacing: 0, textAlign: 'center' }, tabLabelActive: { fontWeight: '800' },
   kitchenIndicator: { position: 'absolute', top: -1, width: 34, height: 8 },
   kitchenSolid: { height: 2 },
   kitchenDashed: { marginTop: 2, borderTopWidth: 1, borderStyle: 'dashed' },

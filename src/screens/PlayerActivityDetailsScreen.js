@@ -8,6 +8,7 @@ import { distanceInKm, formatDistance, useUserLocation } from '../context/Locati
 import { useTheme } from '../context/ThemeContext';
 import { joinProgram } from '../services/pickleball';
 import { getPlayerActivity } from '../services/playerActivities';
+import { DISCOVERY_TAB } from '../config/features';
 
 const LIGHT = { ink: '#0E2321', paper: '#F3F5EF', surface: '#FFFFFF', optic: '#D6E94A', teal: '#1C6B66', brick: '#B6472E', ink70: '#3C4A45', ink40: '#7C8983', line: '#DDE3DA' };
 const DARK = { ...LIGHT, ink: '#F3F5EF', paper: '#0E2321', surface: '#17302D', ink70: '#C1CECA', ink40: '#8FA39C', line: '#304743' };
@@ -103,7 +104,7 @@ export default function PlayerActivityDetailsScreen({ navigation, route }) {
         {error ? <View style={styles.error}><Icon name="alert-circle" color={LIGHT.brick} /><Text style={styles.errorText}>{error}</Text></View> : null}
 
         {activity.type === 'competition'
-          ? <Pressable accessibilityRole="button" onPress={() => navigation.navigate('Pickleball', { openTab: 'Compete', ownerTab: returnTo === 'Home' ? 'Home' : 'Book', focusCompetitionId: activity.sourceId })} style={styles.primary}><Text style={styles.primaryText}>View divisions and register</Text><Icon name="arrow-forward" color={LIGHT.ink} /></Pressable>
+          ? <Pressable accessibilityRole="button" onPress={() => navigation.navigate('Pickleball', { openTab: 'Compete', ownerTab: returnTo === 'Home' ? 'Home' : DISCOVERY_TAB, focusCompetitionId: activity.sourceId })} style={styles.primary}><Text style={styles.primaryText}>View divisions and register</Text><Icon name="arrow-forward" color={LIGHT.ink} /></Pressable>
           : registered
             ? <View style={styles.registered}><Icon name="checkmark-circle" color={LIGHT.teal} /><View style={styles.flex}><Text style={[styles.registeredTitle, { color: colors.ink }]}>You’re registered</Text><Text style={[styles.registeredMeta, { color: colors.ink40 }]}>{activity.registration.status === 'waitlisted' ? 'You are currently on the waitlist.' : 'This activity is saved to your account.'}</Text></View></View>
             : <Pressable accessibilityRole="button" disabled={busy} onPress={registerForProgram} style={[styles.primary, busy && styles.disabled]}>{busy ? <ActivityIndicator color={LIGHT.ink} /> : <><Text style={styles.primaryText}>Register for this activity</Text><Icon name="arrow-forward" color={LIGHT.ink} /></>}</Pressable>}

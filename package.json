@@ -11,12 +11,14 @@
     "eas-build-pre-install": "node scripts/prepare-google-services.cjs",
     "android": "expo run:android",
     "ios": "expo run:ios",
-    "web": "expo start --web",
+    "web": "expo start --web --port 8082",
     "build:web": "node scripts/build-player-web.cjs",
+    "prepreview:web": "npm run build:web",
     "preview:web": "node scripts/serve-player-web.cjs",
     "test:web": "node scripts/player-web-qa.mjs",
     "verify:web-host": "node scripts/verify-player-web-host.mjs",
-    "test:account-bans": "node supabase/tests/account-bans.mjs"
+    "test:account-bans": "node supabase/tests/account-bans.mjs",
+    "test:play-anywhere": "node supabase/tests/play-anywhere.mjs"
   },
   "jest": {
     "preset": "jest-expo",

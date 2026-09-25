@@ -1,11 +1,12 @@
 /* Same PP Mori files and fallback stack as organizer-web/app/layout.tsx. */
 @font-face { font-family: "PP Mori"; src: url("/fonts/pp-mori/ppmori-regular.otf") format("opentype"); font-weight: 400; font-style: normal; font-display: swap; }
-@font-face { font-family: "PP Mori"; src: url("/fonts/pp-mori/ppmori-semibold.otf") format("opentype"); font-weight: 600; font-style: normal; font-display: swap; }
+@font-face { font-family: "PP Mori"; src: url("/fonts/pp-mori/ppmori-semibold.otf") format("opentype"); font-weight: 600 900; font-style: normal; font-display: swap; }
 @font-face { font-family: "PP Mori"; src: url("/fonts/pp-mori/ppmori-extralight.otf") format("opentype"); font-weight: 200; font-style: normal; font-display: swap; }
 @font-face { font-family: "PP Mori"; src: url("/fonts/pp-mori/ppmori-regularitalic.otf") format("opentype"); font-weight: 400; font-style: italic; font-display: swap; }
-@font-face { font-family: "PP Mori"; src: url("/fonts/pp-mori/ppmori-semibolditalic.otf") format("opentype"); font-weight: 600; font-style: italic; font-display: swap; }
+@font-face { font-family: "PP Mori"; src: url("/fonts/pp-mori/ppmori-semibolditalic.otf") format("opentype"); font-weight: 600 900; font-style: italic; font-display: swap; }
 @font-face { font-family: "PP Mori"; src: url("/fonts/pp-mori/ppmori-extralightitalic.otf") format("opentype"); font-weight: 200; font-style: italic; font-display: swap; }
-:root { --font-body: "PP Mori", "Avenir Next", system-ui, sans-serif; color-scheme: light; background: #e5ebe5; font-family: var(--font-body); }
+/* PP Mori has no weight above SemiBold, so the 600 face also serves 700–900 styles instead of a browser-faked bold. */
+:root { --font-body: "PP Mori", "Avenir Next", system-ui, sans-serif; color-scheme: light; background: #e5ebe5; font-family: var(--font-body); font-synthesis-weight: none; -webkit-font-smoothing: antialiased; -moz-osx-font-smoothing: grayscale; text-rendering: optimizeLegibility; }
 /* React Native Web gives every Text/TextInput a hard-coded system font through these reset classes.
    Explicit fontFamily styles (icon fonts) are applied inline, so they still win. */
 [class*="css-text-"], [class*="css-textinput-"] { font-family: var(--font-body); }
@@ -80,5 +81,5 @@ input:not([type="checkbox"]):not([type="radio"]):focus, textarea:focus { outline
 @media (min-width: 1440px) {
   [data-desktop-layout="court-grid"] { grid-template-columns: repeat(3, minmax(0, 1fr)); }
 }
-@media (max-width: 600px) { input, textarea, select { font-size: max(16px, 1em) !important; } }
+@media (max-width: 600px) { input:not([data-display-input]), textarea, select { font-size: max(16px, 1em) !important; } }
 @media (prefers-reduced-motion: reduce) { *, *::before, *::after { scroll-behavior: auto !important; animation-duration: 0.01ms !important; transition-duration: 0.01ms !important; } }

@@ -15,26 +15,33 @@ npm ci
 npm run web
 ```
 
+The development server uses `http://localhost:8082` and updates as source files
+change. Port 8081 is reserved for the production preview below.
+
 Configure `.env.local` with the **same** `EXPO_PUBLIC_SUPABASE_URL` and public
 `EXPO_PUBLIC_SUPABASE_ANON_KEY` used by the native app. Keep
 `EXPO_PUBLIC_DEMO_MODE=0`. Never put a service-role key in a browser environment.
 The production beta build checks these settings.
 
 ```sh
-npm run build:web
 npm run preview:web
 ```
 
-The static release is `dist/player-beta`. Preview runs at
-`http://localhost:8081`; `PORT` can select another port. The preview server is
-local only. Use HTTPS hosting for community access, sign-in, location, and
-browser sharing.
+`preview:web` runs `build:web` automatically before serving `dist/player-beta`,
+using the same build command and hosting rules as Vercel. Restart
+`npm run preview:web` after source changes to rebuild; use `npm run web` for
+live updates. Preview runs at `http://localhost:8081`; `PORT` can select another
+port. Both IPv4 and IPv6 localhost addresses serve the same build, and startup
+fails if another app already owns either address. The preview server is local
+only. Use HTTPS hosting for community access, sign-in, location, and browser
+sharing. Use the same commit and public environment settings as the deployed
+site when comparing versions; local demo flags can change the displayed data.
 
 ## Included player flows
 
 - Sign-up, email/password login, Google sign-in, email verification, password
   reset, and existing onboarding.
-- Home, Explore/Book, match setup and scoring, find a partner/opponent, open-play
+- Home, Schedule, match setup and scoring, find a partner/opponent, open-play
   discovery and codes, joining and check-in, tournament divisions and
   registration, standings/brackets, leaderboards, and profiles.
 - Teams/clans, membership management, and group chat. Player private inboxes,
@@ -42,6 +49,34 @@ browser sharing.
   the browser beta. Native private messaging remains available.
 - Browser confirmation dialogs, profile/team photo selection, downloadable
   match cards, responsive scrolling, safe-area spacing, and keyboard focus.
+
+## Play anywhere: court booking is paused
+
+No court operators are onboarded for the first public beta, so court booking
+is switched off on every platform. The booking screens, services, tables and
+organizer tools are kept intact behind `EXPO_PUBLIC_COURT_BOOKING`; set it to
+`1` and rebuild to bring booking back. While it is off:
+
+- **Play** accepts any court: a recent court, a court listed on Peakle, or a
+  court the player types in (name, optional court number and area). The label
+  is saved with the match (`matches.court_label` / `court_area`).
+- **Schedule** replaces Explore in the navigation (`/explore` redirects to
+  `/schedule`). Players see their own games and registered events on a
+  calendar, discover open games and organizer events, and schedule a game:
+  pick a date and time slot, a court, the format, and invite players or open it
+  to anyone. Invitees accept or decline from Schedule or a notification, and
+  the host starts the match from the game when it begins (Play opens with the
+  lineup and court filled in).
+- Ranked ratings only change when both sides include a registered player, so
+  a guest-only lineup cannot move a rating. Results still need every registered
+  player's confirmation.
+- Payment history and booking help are hidden; Home shows the next scheduled
+  game or event instead of the next booking.
+
+Apply `supabase/migrations/202609250001_play_anywhere_courts.sql` and
+`202609250002_scheduled_games.sql` before deploying this build. Until they are
+applied, matches still save (without the court label) and Schedule shows only
+events. Verify them locally with `npm run test:play-anywhere`.
 
 Scores for solo-scored matches are saved locally as they change and synced to
 the account after a short debounce. Refresh and choose **Play → Resume** to
@@ -53,8 +88,8 @@ If uploading a finished result fails, its local backup remains available after
 refresh under **Play → Retry**. Retrying uses the same match ID to avoid duplicate
 results. Finish syncing that result before starting another match.
 
-The beta requires a connection to register, book, send group messages, and sync
-results. It does not cache the application for offline launch. A local draft
+The beta requires a connection to register, schedule games, send group messages,
+and sync results. It does not cache the application for offline launch. A local draft
 is recovery protection, not a replacement for a synced result: keep the browser
 open and reconnect until the score is synced or the result says **Match recorded**.
 An unsynced draft remains tied to that browser and account.
@@ -101,7 +136,8 @@ https://YOUR-BETA-HOST/verify-email
 https://YOUR-BETA-HOST/reset-password
 ```
 
-For local development use the same three paths under `http://localhost:8081`
+For local previews use the same three paths under `http://localhost:8081`;
+for live development also add them under `http://localhost:8082`
 (or the origin printed by Expo). Preserve existing native `peakle://` and
 organizer redirect entries. Google uses the existing Supabase Google provider;
 its authorized provider callback remains the Supabase Auth callback. Browser
@@ -151,7 +187,6 @@ intercepted by fixtures; these checks never change real accounts.
 
 ```sh
 npm test -- --runInBand
-npm run build:web
 # In another terminal:
 npm run preview:web
 # Install the pinned test browser if it is not already installed:

@@ -51,7 +51,7 @@ try {
   assert.ok(backend.requests.some(r => r.resource === 'token' && r.body.grant_type !== 'refresh_token'), 'Password login reaches the auth API');
   console.log('Password login passed');
   if (process.argv.includes('--desktop-flows')) await checkDesktopLayouts(player, backend, baseUrl, artifacts);
-  for (const path of (process.argv.includes('--flows-only') ? [] : ['/', '/teams', '/explore', '/play', '/compete', '/leaderboard', '/profile', '/activities', '/privacy', '/legal/privacy', '/legal/terms', '/account-deletion', '/payment-history', '/help', '/support', '/chats', '/connections', '/players/11111111-1111-4111-8111-111111111111', `/activities/competition/${competitionId}`, `/chats/competition/${competitionId}`, `/competitions/${competitionId}/divisions/${divisionId}`, `/sessions/${sessionId}`])) {
+  for (const path of (process.argv.includes('--flows-only') ? [] : ['/', '/teams', '/explore', '/schedule', '/play', '/compete', '/leaderboard', '/profile', '/activities', '/privacy', '/legal/privacy', '/legal/terms', '/account-deletion', '/payment-history', '/help', '/support', '/chats', '/connections', '/players/11111111-1111-4111-8111-111111111111', `/activities/competition/${competitionId}`, `/chats/competition/${competitionId}`, `/competitions/${competitionId}/divisions/${divisionId}`, `/sessions/${sessionId}`])) {
     await player.goto(`${baseUrl}${path}`, { waitUntil: 'networkidle2' });
     await player.waitForSelector('[aria-label="Play tab"]');
     if (path === '/teams') await player.waitForSelector('[aria-label="Open Community Clan chat"]', { timeout: 15000 });

@@ -4,10 +4,12 @@ React Native implementation of Peakle, backed by Supabase for authentication and
 
 ## Player web beta
 
-Run `npm run web` for browser development, or `npm run build:web` followed by
-`npm run preview:web` for the static beta. It shares the native app's accounts
+Run `npm run preview:web` for a freshly rebuilt production preview at
+`http://localhost:8081`, using the same build and hosting rules as Vercel.
+Restart it after source changes to rebuild. For browser development with live
+updates, run `npm run web` at `http://localhost:8082`. It shares the native app's accounts
 and saved records, with group chat and player tournament flows. See
-[`PLAYER_WEB_BETA.md`](./PLAYER_WEB_BETA.md) for deployment, verification, and
+[`PLAYER_WEB_BETA.md`](./md/PLAYER_WEB_BETA.md) for deployment, verification, and
 the transition to Android/iOS.
 
 ## Organizer web portal
