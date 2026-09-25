@@ -6,6 +6,7 @@ import * as Network from 'expo-network';
 import { useAuth } from './AuthContext';
 import { isSupabaseConfigured, requireSupabase } from '../lib/supabase';
 import {
+  CHAT_MESSAGE_NOTIFICATION_KIND,
   clearReadNotifications,
   deleteNotification,
   disablePushToken,
@@ -20,13 +21,24 @@ import {
 import { respondFollowRequest as respondToFollowRequest } from '../services/directMessages';
 import { configureInteractiveNotifications } from '../services/notificationActions';
 import { PRIVATE_MESSAGES_ENABLED } from '../config/features';
+import { readCachedData, writeCachedData } from '../lib/asyncData';
+import { notificationsCacheKey } from '../lib/cacheKeys';
 
 const Notifications = Platform.OS === 'web' ? null : require('expo-notifications');
 const OperationsContext = createContext(null);
 
+// While the app is open, chat messages are announced by the in-app
+// MessageBanner, so the OS banner would only duplicate it.
 if (Platform.OS !== 'web') Notifications.setNotificationHandler({
-  handleNotification: async () => ({ shouldShowBanner: true, shouldShowList: true, shouldPlaySound: true, shouldSetBadge: true }),
+  handleNotification: async (notification) => {
+    const inAppBanner = PRIVATE_MESSAGES_ENABLED && notification?.request?.content?.data?.notificationKind === CHAT_MESSAGE_NOTIFICATION_KIND;
+    return { shouldShowBanner: !inAppBanner, shouldShowList: true, shouldPlaySound: !inAppBanner, shouldSetBadge: true };
+  },
 });
+
+const visibleNotice = (notice) => notice.kind !== CHAT_MESSAGE_NOTIFICATION_KIND
+  && (PRIVATE_MESSAGES_ENABLED || (!notice.data?.conversationId && !String(notice.kind || '').startsWith('direct_message')));
+const byNewest = (a, b) => new Date(b.created_at) - new Date(a.created_at);
 
 export function OperationsProvider({ children }) {
   const { user } = useAuth();
@@ -34,15 +46,40 @@ export function OperationsProvider({ children }) {
   const [realtime, setRealtime] = useState('connected');
   const [pendingOperations, setPendingOperations] = useState(0);
   const [notifications, setNotifications] = useState([]);
+  const [messageBanner, setMessageBanner] = useState(null);
   const realtimeChannels = useRef(new Map());
   const flushing = useRef(false);
+  const notificationsLoaded = useRef(false);
 
   const refreshNotifications = useCallback(async () => {
     if (!user?.id || !isSupabaseConfigured) { setNotifications([]); return []; }
-    const rows = (await listNotifications()).filter((notice) => PRIVATE_MESSAGES_ENABLED || (!notice.data?.conversationId && !String(notice.data?.notificationKind || '').startsWith('direct_message')));
+    const rows = (await listNotifications()).filter(visibleNotice);
+    notificationsLoaded.current = true;
     setNotifications(rows);
+    writeCachedData(notificationsCacheKey(user.id), rows).catch(() => {});
     return rows;
   }, [user?.id]);
+  // Apply a realtime change directly instead of refetching the whole inbox.
+  const applyNotificationChange = useCallback((payload) => {
+    if (payload.eventType === 'DELETE') {
+      const id = payload.old?.id;
+      if (id) setNotifications((current) => current.filter((notice) => notice.id !== id));
+      return;
+    }
+    const row = payload.new;
+    if (!row?.id) return;
+    const bannerKind = row.kind === CHAT_MESSAGE_NOTIFICATION_KIND || row.kind === 'direct_message_request';
+    if (bannerKind && payload.eventType === 'INSERT' && !row.read_at && PRIVATE_MESSAGES_ENABLED) setMessageBanner(row);
+    if (!visibleNotice(row)) return;
+    setNotifications((current) => {
+      const existing = current.findIndex((notice) => notice.id === row.id);
+      if (existing < 0) return [row, ...current].sort(byNewest).slice(0, 50);
+      const next = [...current];
+      next[existing] = { ...next[existing], ...row };
+      return next;
+    });
+  }, []);
+  const dismissMessageBanner = useCallback(() => setMessageBanner(null), []);
 
   const flush = useCallback(async () => {
     if (!user?.id || flushing.current || network.isConnected === false || network.isInternetReachable === false) return;
@@ -76,13 +113,21 @@ export function OperationsProvider({ children }) {
   }, [flush, refreshNotifications]);
 
   useEffect(() => {
+    setMessageBanner(null);
+    notificationsLoaded.current = false;
     if (!user?.id || !isSupabaseConfigured) return undefined;
+    let cancelled = false;
+    // Show the last known inbox immediately; the fresh list replaces it.
+    readCachedData(notificationsCacheKey(user.id)).then((cached) => {
+      if (!cancelled && !notificationsLoaded.current && Array.isArray(cached)) setNotifications(cached);
+    }).catch(() => {});
     refreshNotifications().catch(() => {});
     const channel = requireSupabase().channel(`notifications-${user.id}`)
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'user_notifications', filter: `user_id=eq.${user.id}` }, refreshNotifications)
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'user_notifications', filter: `user_id=eq.${user.id}` }, applyNotificationChange)
       .subscribe();
-    return () => { requireSupabase().removeChannel(channel); };
-  }, [refreshNotifications, user?.id]);
+    return () => { cancelled = true; requireSupabase().removeChannel(channel); };
+  }, [applyNotificationChange, refreshNotifications, user?.id]);
+
 
   const reportRealtime = useCallback((key, status) => {
     if (status === 'REMOVE') {
@@ -175,8 +220,9 @@ export function OperationsProvider({ children }) {
   const value = useMemo(() => ({
     connectionState, online, pendingOperations, reportRealtime, enqueueOperation, flush,
     notifications, unreadCount: notifications.filter((notice) => !notice.read_at).length,
+    messageBanner, dismissMessageBanner,
     refreshNotifications, readNotification, readAllNotifications, removeNotification, clearNotifications, respondFollowRequest, enablePushNotifications, disablePushNotifications,
-  }), [clearNotifications, connectionState, disablePushNotifications, enablePushNotifications, enqueueOperation, flush, notifications, online, pendingOperations, readAllNotifications, readNotification, refreshNotifications, removeNotification, reportRealtime, respondFollowRequest]);
+  }), [clearNotifications, connectionState, dismissMessageBanner, messageBanner, disablePushNotifications, enablePushNotifications, enqueueOperation, flush, notifications, online, pendingOperations, readAllNotifications, readNotification, refreshNotifications, removeNotification, reportRealtime, respondFollowRequest]);
   return <OperationsContext.Provider value={value}>{children}</OperationsContext.Provider>;
 }
 

@@ -122,7 +122,7 @@ function Header({ eyebrow, title, action, onBack }) {
     <>
       <View style={styles.header}>
         {onBack ? <Pressable accessibilityRole="button" accessibilityLabel="Back to Play options" hitSlop={6} onPress={onBack} style={styles.headerBack}><Icon name="arrow-back" /></Pressable> : null}
-        <View style={styles.headerCopy}><Text numberOfLines={1} style={styles.eyebrow}>{eyebrow}</Text><Text numberOfLines={1} style={styles.h1}>{title}</Text></View>
+        <View style={styles.headerCopy}><Text numberOfLines={1} style={styles.eyebrow}>{eyebrow}</Text><Text accessibilityRole="header" numberOfLines={1} style={styles.h1}>{title}</Text></View>
         {action}
       </View>
       <KitchenLine style={styles.headerLine} />
@@ -373,7 +373,7 @@ function PlayChoiceScreen({ onFindPlay, onSetupMatch, unfinishedMatch, onResume 
       <Header
         eyebrow="YOUR GAME"
         title="Play"
-        action={<><View accessibilityElementsHidden importantForAccessibility="no-hide-descendants" style={styles.playHeaderBall}><Image source={BALL_IMAGE} style={styles.playHeaderBallImage} resizeMode="contain" /></View><HeaderAvatar size={36} style={styles.playHeaderAvatar} /></>}
+        action={<HeaderAvatar size={36} />}
       />
 
       <View style={styles.choiceIntro}>
@@ -2409,6 +2409,9 @@ export default function PlayScreen({ route, navigation }) {
     setScreen('setup');
   }, [route?.params?.scheduledGameToken]);
 
+  // "Find a play" lists open partner, opponent, and substitute requests from other players.
+  const findPlay = () => navigation.navigate('Pickleball', { openTab: 'Find play', ownerTab: 'Play' });
+
   useEffect(() => {
     const token = route?.params?.nearbyPlayersToken;
     if (!token || handledNearbyToken.current === token) return;
@@ -2458,8 +2461,8 @@ export default function PlayScreen({ route, navigation }) {
     <SafeAreaView style={styles.safe}>
       <StatusBar style={screen === 'live' || isDark ? 'light' : 'dark'} backgroundColor={screen === 'live' ? '#0E2321' : C.paper} />
       {openPlayMode === 'join' ? <PlayerOpenPlayScreen initialCode={route?.params?.openPlayCode || ''} initialSessionId={route?.params?.openPlaySessionId || null} navigationToken={route?.params?.openPlayToken || null} onBack={leaveOpenPlay} onDetailBack={route?.params?.openPlayDirect ? leaveOpenPlay : null} onOpenChat={(session) => navigation.navigate('CommunityChat', { eventKind: 'open_play', eventId: session.id, title: session.name, ownerTab: 'Play' })} /> : <>
-      {screen === 'choice' && <PlayChoiceScreen onFindPlay={() => navigation.navigate('Pickleball', { openTab: 'Find play', ownerTab: 'Play' })} onSetupMatch={() => { setShowSetupBackToChoices(true); setScreen('setup'); }} unfinishedMatch={unfinishedMatch} onResume={resumeMatch} />}
-      {screen === 'setup' && <SetupScreen courts={courts} courtsLoading={courtsLoading} courtsError={courtsError} onRefreshCourts={refreshCourtBookings} onBookCourt={openCourtBooking} recentCourts={recentCourts} defaultCourtArea={areaFromLocationLabel(userLocation?.label)} nearbyPlayers={nearbyPresence.players} nearbyPresence={nearbyPresence} currentUserName={user?.name} currentUserId={user?.id} currentUserAvatar={user?.picture} onStart={startMatch} focusChallenge={focusChallenge} onBackToChoices={showPlayChoices} showBackToChoices={showSetupBackToChoices} onFindPlay={() => navigation.navigate('Pickleball', { openTab: 'Find play', ownerTab: 'Play' })} onMessagePlayer={(player) => navigation.navigate('DirectChat', { player: { id: player.id, name: player.name, avatar: player.avatar || null, area: player.area || null }, ownerTab: 'Play' })} onLeaveJoined={confirmLeaveJoinedMatch} unfinishedMatch={unfinishedMatch} onResume={resumeMatch} openNearbyPlayersToken={route?.params?.nearbyPlayersToken} scheduledGame={scheduledGameSetup} />}
+      {screen === 'choice' && <PlayChoiceScreen onFindPlay={findPlay} onSetupMatch={() => { setShowSetupBackToChoices(true); setScreen('setup'); }} unfinishedMatch={unfinishedMatch} onResume={resumeMatch} />}
+      {screen === 'setup' && <SetupScreen courts={courts} courtsLoading={courtsLoading} courtsError={courtsError} onRefreshCourts={refreshCourtBookings} onBookCourt={openCourtBooking} recentCourts={recentCourts} defaultCourtArea={areaFromLocationLabel(userLocation?.label)} nearbyPlayers={nearbyPresence.players} nearbyPresence={nearbyPresence} currentUserName={user?.name} currentUserId={user?.id} currentUserAvatar={user?.picture} onStart={startMatch} focusChallenge={focusChallenge} onBackToChoices={showPlayChoices} showBackToChoices={showSetupBackToChoices} onFindPlay={findPlay} onMessagePlayer={(player) => navigation.navigate('DirectChat', { player: { id: player.id, name: player.name, avatar: player.avatar || null, area: player.area || null }, ownerTab: 'Play' })} onLeaveJoined={confirmLeaveJoinedMatch} unfinishedMatch={unfinishedMatch} onResume={resumeMatch} openNearbyPlayersToken={route?.params?.nearbyPlayersToken} scheduledGame={scheduledGameSetup} />}
       {screen === 'pregame' && match && <PreGameScreen match={match} onBack={() => setScreen('setup')} onStart={startLiveMatch} />}
       {screen === 'live' && match && <LiveMatch key={DEMO_MODE ? `demo-${route?.params?.demoLiveToken || 0}` : 'live'} match={match} sharedSession={match.sharedLiveMatchId ? nearbyPresence.sharedLiveMatch : null} currentUserId={user?.id} onSyncSharedState={syncSharedScore} onHandoffScorer={handoffSharedScorer} onFinish={finishMatch} />}
       {screen === 'result' && result && <ResultScreen result={result} saveState={resultSaveState === 'idle' ? 'saved' : resultSaveState} saveError={resultSaveError} onRetrySave={() => recordCompletedResult(result)} onRematch={!match?.sharedLiveMatchId || nearbyPresence.sharedLiveMatch?.host_id === user?.id ? () => startMatch(match) : null} onNewMatch={reset} />}
@@ -2513,10 +2516,8 @@ const lightStyles = createMobileStyleSheet({
   choiceTipText: { flex: 1, color: C.ink40, fontSize: 9, lineHeight: 14 },
   choiceTipStrong: { color: C.ink, fontWeight: '900' },
   resumeCard: { marginTop: 14, padding: 13, flexDirection: 'row', alignItems: 'center', gap: 10, borderRadius: 17, borderWidth: 1, borderColor: '#B9D22C', backgroundColor: '#FAFCEB' }, resumeIcon: { width: 40, height: 40, borderRadius: 12, alignItems: 'center', justifyContent: 'center', backgroundColor: C.optic }, resumeEyebrow: { color: C.teal, fontSize: 7, fontWeight: '900', letterSpacing: .7 }, resumeTitle: { marginTop: 2, color: C.ink, fontSize: 10, fontWeight: '900' }, resumeMeta: { marginTop: 2, color: C.ink40, fontSize: 7, lineHeight: 11 }, resumeButton: { minHeight: 34, paddingHorizontal: 10, flexDirection: 'row', alignItems: 'center', gap: 4, borderRadius: 10, backgroundColor: C.teal }, resumeButtonText: { color: C.surface, fontSize: 8, fontWeight: '900' },
-  header: { minHeight: 44, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 10 }, headerCopy: { flex: 1, minWidth: 0 }, headerBack: { width: 40, height: 40, flexShrink: 0, alignItems: 'center', justifyContent: 'center', borderRadius: 13, borderWidth: 1, borderColor: C.line, backgroundColor: C.surface },
-  eyebrow: { color: C.ink40, fontSize: 9, lineHeight: 13, fontWeight: '900', letterSpacing: .9 }, h1: { color: C.ink, fontSize: 22, lineHeight: 27, fontWeight: '900', letterSpacing: -.45 },
-  playHeaderAvatar: { marginLeft: 10 },
-  playHeaderBall: { width: 40, height: 40, flexShrink: 0, alignItems: 'center', justifyContent: 'center', borderRadius: 13, backgroundColor: C.optic }, playHeaderBallImage: { width: 26, height: 26 },
+  header: { minHeight: 52, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 10 }, headerCopy: { flex: 1, minWidth: 0 }, headerBack: { width: 40, height: 40, flexShrink: 0, alignItems: 'center', justifyContent: 'center', borderRadius: 13, borderWidth: 1, borderColor: C.line, backgroundColor: C.surface },
+  eyebrow: { color: C.ink40, fontSize: 10, lineHeight: 15, fontWeight: '700', letterSpacing: 1.05 }, h1: { marginTop: 2, color: C.ink, fontSize: 29, lineHeight: 37, fontWeight: '700', letterSpacing: -.8 },
   kitchen: { height: 7, marginTop: 18, marginBottom: 20 }, headerLine: { marginTop: 10, marginBottom: 16 }, solid: { height: 2, backgroundColor: C.ink }, dashed: { marginTop: 4, borderTopWidth: 1, borderStyle: 'dashed', borderColor: C.ink40 }, solidLight: { backgroundColor: 'rgba(255,255,255,.78)' }, dashedLight: { borderColor: 'rgba(255,255,255,.38)' },
   liveChip: { minHeight: 34, paddingHorizontal: 10, flexDirection: 'row', alignItems: 'center', gap: 6, borderRadius: 18, backgroundColor: '#E5F0ED' }, liveDot: { width: 7, height: 7, borderRadius: 4, backgroundColor: C.teal }, liveChipText: { color: C.teal, fontSize: 8, fontWeight: '900', letterSpacing: .7 }, joinedChip: { minHeight: 34, paddingHorizontal: 10, flexDirection: 'row', alignItems: 'center', gap: 5, borderRadius: 18, backgroundColor: C.optic }, joinedChipText: { color: '#0E2321', fontSize: 8, fontWeight: '900', letterSpacing: .7 },
   invitesCard: { marginBottom: 12, padding: 13, borderRadius: 17, borderWidth: 1, borderColor: '#B9D22C', backgroundColor: '#FAFCEB' }, invitesTitleRow: { flexDirection: 'row', alignItems: 'center', gap: 9 }, inviteBell: { width: 36, height: 36, borderRadius: 11, alignItems: 'center', justifyContent: 'center', backgroundColor: C.optic }, invitesEyebrow: { color: C.teal, fontSize: 7, fontWeight: '900', letterSpacing: .7 }, invitesTitle: { marginTop: 2, color: C.ink, fontSize: 11, fontWeight: '900' }, inviteRequest: { minHeight: 52, marginTop: 9, paddingTop: 9, flexDirection: 'row', alignItems: 'center', gap: 7, borderTopWidth: 1, borderColor: '#DFE8AD' }, inviteRequestCopy: { flex: 1, minWidth: 0 }, inviteSender: { color: C.ink, fontSize: 10, fontWeight: '900' }, inviteDetail: { marginTop: 2, color: C.ink40, fontSize: 7, lineHeight: 10 }, declineInvite: { width: 34, height: 34, borderRadius: 10, alignItems: 'center', justifyContent: 'center', borderWidth: 1, borderColor: '#E8C7BF', backgroundColor: C.surface }, acceptInvite: { minWidth: 62, height: 34, paddingHorizontal: 9, borderRadius: 10, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 3, backgroundColor: C.optic }, acceptInviteText: { color: C.ink, fontSize: 8, fontWeight: '900' },

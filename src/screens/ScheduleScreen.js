@@ -8,7 +8,9 @@ import AppIcon from '../components/AppIcon';
 import ProfilePhoto from '../components/ProfilePhoto';
 import ScrollView from '../components/FocusResetScrollView';
 import CourtPickerSheet from '../components/CourtPickerSheet';
+import ScheduleCalendar from '../components/ScheduleCalendar';
 import { HeaderAvatar } from '../components/AccountMenu';
+import { ORGANIZER_EVENTS_ENABLED } from '../config/features';
 import useDesktopLayout from '../hooks/useDesktopLayout';
 import { webDialog, webLayout } from '../utils/webLayout';
 import { useAuth } from '../context/AuthContext';
@@ -94,27 +96,6 @@ function MonthCalendar({ monthKey, selectedKey, todayKey, markers, onSelect, onM
   );
 }
 
-function WeekStrip({ selectedKey, todayKey, markers, onSelect }) {
-  const { styles } = usePalette();
-  const weekday = dateFromDayKey(selectedKey).getUTCDay();
-  const start = shiftDayKey(selectedKey, -weekday);
-  const days = Array.from({ length: 7 }, (_, index) => shiftDayKey(start, index));
-  return (
-    <View style={styles.weekStrip}>
-      {days.map((key, index) => {
-        const selected = key === selectedKey;
-        return (
-          <Pressable key={key} accessibilityRole="button" accessibilityState={{ selected }} accessibilityLabel={formatDayLabel(key)} onPress={() => onSelect(key)} style={({ pressed }) => [styles.weekDay, selected && styles.daySelected, pressed && !selected && styles.dayPressed]}>
-            <Text style={[styles.weekDayName, selected && styles.dayTextSelected]}>{WEEKDAYS[index]}</Text>
-            <Text style={[styles.weekDayNumber, key === todayKey && !selected && styles.dayTextToday, selected && styles.dayTextSelected]}>{Number(key.slice(8))}</Text>
-            <DayMarkers kinds={markers[key]} />
-          </Pressable>
-        );
-      })}
-    </View>
-  );
-}
-
 function EntryCard({ entry, onPress, past }) {
   const { isDark, styles, palette } = usePalette();
   const kind = { ...(KINDS[entry.kind] || KINDS.game), color: kindColor(entry.kind, isDark) };
@@ -124,10 +105,12 @@ function EntryCard({ entry, onPress, past }) {
     : entry.joined ? 'Registered' : entry.availability;
   return (
     <Pressable accessibilityRole="button" accessibilityLabel={`${kind.label}: ${entry.title}, ${formatTime(entry.startsAt)}`} onPress={onPress} style={({ pressed }) => [styles.entry, (past || cancelled) && styles.entryMuted, pressed && styles.pressed]}>
-      <View style={[styles.entryRail, { backgroundColor: kind.color }]} />
-      <View style={styles.entryTime}><Text style={styles.entryTimeStart}>{formatTime(entry.startsAt)}</Text>{entry.kind !== 'competition' ? <Text style={styles.entryTimeEnd}>{formatTime(entry.endsAt)}</Text> : <Text style={styles.entryTimeEnd}>All day</Text>}</View>
+      <View style={styles.entryTitleRow}>
+        <View style={styles.entryTime}><View style={[styles.legendDot, { backgroundColor: kind.color, borderColor: kind.color }]} /><Text style={styles.entryTimeStart}>{entry.kind === 'competition' ? 'All day' : `${formatTime(entry.startsAt)} – ${formatTime(entry.endsAt)}`}</Text></View>
+        {badge ? <View style={[styles.badge, entry.myStatus === 'invited' && styles.badgeAttention]}><Text style={[styles.badgeText, entry.myStatus === 'invited' && styles.badgeTextAttention]}>{badge}</Text></View> : null}
+      </View>
       <View style={styles.entryBody}>
-        <View style={styles.entryTitleRow}><Text numberOfLines={1} style={[styles.entryTitle, cancelled && styles.strike]}>{entry.title}</Text>{badge ? <View style={[styles.badge, entry.myStatus === 'invited' && styles.badgeAttention]}><Text style={[styles.badgeText, entry.myStatus === 'invited' && styles.badgeTextAttention]}>{badge}</Text></View> : null}</View>
+        <Text numberOfLines={2} style={[styles.entryTitle, cancelled && styles.strike]}>{entry.title}</Text>
         <View style={styles.entryMeta}><AppIcon name="location-outline" size={13} color={palette.ink40} /><Text numberOfLines={1} style={styles.entryMetaText}>{[entry.place, entry.area].filter(Boolean).join(' · ')}</Text></View>
         <View style={styles.entryFoot}>
           <View style={styles.kindTag}><AppIcon name={kind.icon} size={12} color={kind.color} /><Text style={[styles.kindTagText, { color: kind.color }]}>{entry.kind === 'game' ? `${entry.matchType === 'singles' ? 'Singles' : 'Doubles'} · ${entry.mode === 'ranked' ? 'Ranked' : 'Casual'}` : entry.typeLabel || kind.label}</Text></View>
@@ -477,14 +460,15 @@ function NewGameSheet({ visible, initialDay, todayKey, onClose, onCreated }) {
 export default function ScheduleScreen({ navigation, route }) {
   const { isDark, styles, palette } = usePalette();
   const desktop = useDesktopLayout();
-  const { width } = useWindowDimensions();
-  const wide = width >= 900;
+  // Measure the app shell: tablets and the desktop sidebar reduce usable space.
+  const [layoutWidth, setLayoutWidth] = useState(0);
+  const wide = layoutWidth >= 900;
   const { user } = useAuth();
   const todayKey = dayKey(Date.now());
   const [view, setView] = useState('mine');
   const [monthKey, setMonthKey] = useState(todayKey.slice(0, 7));
   const [selectedKey, setSelectedKey] = useState(todayKey);
-  const [monthOpen, setMonthOpen] = useState(false);
+  const [monthOpen, setMonthOpen] = useState(true);
   const [games, setGames] = useState([]);
   const [events, setEvents] = useState([]);
   const [hiddenKinds, setHiddenKinds] = useState([]);
@@ -529,7 +513,7 @@ export default function ScheduleScreen({ navigation, route }) {
     const gameToken = route?.params?.openGameToken;
     if (gameId && gameToken && handledTokens.current.openGame !== gameToken) {
       handledTokens.current.openGame = gameToken;
-      setView('mine');
+      setView(route.params.openView === 'discover' ? 'discover' : 'mine');
       setOpenEntryId(`game:${gameId}`);
     }
   }, [route?.params?.newGameToken, route?.params?.openGameToken, route?.params?.openViewToken]);
@@ -541,7 +525,6 @@ export default function ScheduleScreen({ navigation, route }) {
     : !isOnMyCalendar(entry) && entry.status !== 'cancelled' && (entry.kind !== 'game' || (entry.visibility === 'open' && entry.status === 'scheduled' && entry.spotsLeft > 0)))), [allEntries, view]);
   const visible = useMemo(() => scoped.filter((entry) => !hiddenKinds.includes(entry.kind)), [scoped, hiddenKinds]);
   const byDay = useMemo(() => entriesByDay(visible), [visible]);
-  const markers = useMemo(() => Object.fromEntries(Object.entries(byDay).map(([key, rows]) => [key, rows.map((entry) => entry.kind)])), [byDay]);
   const dayEntries = (byDay[selectedKey] || []).slice().sort((a, b) => new Date(a.startsAt) - new Date(b.startsAt));
   const upcoming = useMemo(() => visible
     .filter((entry) => new Date(entry.endsAt).getTime() >= Date.now() && entry.status !== 'cancelled' && dayKey(entry.startsAt) !== selectedKey)
@@ -557,6 +540,8 @@ export default function ScheduleScreen({ navigation, route }) {
   }, [visible]);
   const pendingInvites = games.filter((game) => game.myStatus === 'invited' && game.status === 'scheduled' && new Date(game.endsAt).getTime() > Date.now());
   const openEntry = openEntryId ? allEntries.find((entry) => entry.id === openEntryId) || null : null;
+  const availableKinds = Object.entries(KINDS).filter(([kind]) => kind === 'game' || ORGANIZER_EVENTS_ENABLED || scoped.some((entry) => entry.kind === kind));
+  const hasFilteredEntries = scoped.some((entry) => dayKey(entry.startsAt) === selectedKey && hiddenKinds.includes(entry.kind));
 
   const selectDay = (key) => {
     setSelectedKey(key);
@@ -578,41 +563,54 @@ export default function ScheduleScreen({ navigation, route }) {
     else navigation.navigate('ActivityDetails', { activity: entry.activity, returnTo: 'Schedule' });
   };
 
+  const newGameButton = (
+    <Pressable accessibilityRole="button" accessibilityLabel="Schedule a new game" onPress={() => setNewGameDay(selectedKey < todayKey ? todayKey : selectedKey)} style={({ pressed }) => [styles.newButton, pressed && styles.pressed]}>
+      <AppIcon name="add" size={18} color="#0E2321" />
+      {layoutWidth >= 360 ? <Text style={styles.newButtonText}>New game</Text> : null}
+    </Pressable>
+  );
+
   const header = (
     <View style={styles.header}>
-      <View style={styles.flex}><Text style={styles.eyebrow}>GAMES · EVENTS · COMPETE</Text><Text accessibilityRole="header" style={styles.h1}>Schedule</Text></View>
-      <Pressable accessibilityRole="button" accessibilityLabel="Schedule a new game" onPress={() => setNewGameDay(selectedKey)} style={({ pressed }) => [styles.newButton, pressed && styles.pressed]}><AppIcon name="add" size={18} color="#0E2321" /><Text style={styles.newButtonText}>New game</Text></Pressable>
+      <View style={styles.flex}><Text style={styles.eyebrow}>YOUR COURT TIME</Text><Text accessibilityRole="header" style={styles.h1}>Schedule</Text><Text style={styles.headerSubtitle}>Your next game starts here.</Text></View>
+      {layoutWidth >= 600 ? newGameButton : null}
       {!desktop ? <HeaderAvatar size={36} /> : null}
     </View>
   );
 
   const legend = (
     <View style={styles.legend}>
-      {Object.entries(KINDS).map(([kind, meta]) => {
+      {availableKinds.map(([kind, meta]) => {
         const hidden = hiddenKinds.includes(kind);
-        return <Pressable key={kind} accessibilityRole="checkbox" accessibilityState={{ checked: !hidden }} accessibilityLabel={`Show ${meta.label}`} onPress={() => toggleKind(kind)} style={({ pressed }) => [styles.legendItem, hidden && styles.legendItemOff, pressed && styles.pressed]}><View style={[styles.legendDot, { backgroundColor: hidden ? 'transparent' : kindColor(kind, isDark), borderColor: kindColor(kind, isDark) }]} /><Text style={styles.legendText}>{meta.label}</Text></Pressable>;
+        return <Pressable key={kind} accessibilityRole="checkbox" accessibilityState={{ checked: !hidden }} accessibilityLabel={`Show ${meta.label}`} onPress={() => toggleKind(kind)} style={({ pressed }) => [styles.legendItem, !hidden && styles.legendItemActive, hidden && styles.legendItemOff, pressed && styles.pressed]}><View style={[styles.legendDot, { backgroundColor: hidden ? 'transparent' : kindColor(kind, isDark), borderColor: kindColor(kind, isDark) }]} /><Text style={styles.legendText}>{meta.label}</Text>{!hidden ? <AppIcon name="checkmark" size={12} color={palette.teal} /> : null}</Pressable>;
       })}
     </View>
   );
 
   const agenda = (
-    <View style={styles.agenda}>
+    <View {...webLayout('schedule-agenda')} style={styles.agenda}>
       {pendingInvites.length && view === 'mine' ? <Pressable accessibilityRole="button" onPress={() => { selectDay(dayKey(pendingInvites[0].startsAt)); setOpenEntryId(pendingInvites[0].id); }} style={({ pressed }) => [styles.inviteBanner, pressed && styles.pressed]}><AppIcon name="mail-unread-outline" size={19} color="#0E2321" /><Text style={styles.inviteBannerText}>{pendingInvites.length === 1 ? `${pendingInvites[0].title} is waiting for your answer` : `${pendingInvites.length} game invites are waiting for your answer`}</Text><AppIcon name="chevron-forward" size={17} color="#0E2321" /></Pressable> : null}
       <View style={styles.agendaHead}>
-        <View style={styles.flex}><Text style={styles.agendaDay}>{selectedKey === todayKey ? 'Today' : selectedKey === shiftDayKey(todayKey, 1) ? 'Tomorrow' : formatDayLabel(selectedKey, { weekday: 'long' })}</Text><Text style={styles.agendaDate}>{formatDayLabel(selectedKey, { month: 'long', day: 'numeric', year: 'numeric' })}</Text></View>
-        <Text style={styles.agendaCount}>{dayEntries.length ? `${dayEntries.length} scheduled` : ''}</Text>
+        <View style={styles.agendaDateBadge}><Text style={styles.agendaMonth}>{formatDayLabel(selectedKey, { month: 'short' }).toUpperCase()}</Text><Text style={styles.agendaNumber}>{Number(selectedKey.slice(8))}</Text></View>
+        <View style={styles.flex}><Text accessibilityRole="header" style={styles.agendaDay}>{selectedKey === todayKey ? 'Today' : selectedKey === shiftDayKey(todayKey, 1) ? 'Tomorrow' : formatDayLabel(selectedKey, { weekday: 'long' })}</Text><Text style={styles.agendaDate}>{formatDayLabel(selectedKey, { month: 'long', day: 'numeric' })} · {dayEntries.length} {dayEntries.length === 1 ? 'session' : 'sessions'}</Text></View>
       </View>
       {loading && !allEntries.length ? <View style={styles.loadingBox}><ActivityIndicator color={palette.teal} /><Text style={styles.helperText}>Loading your schedule…</Text></View>
         : dayEntries.length ? dayEntries.map((entry) => <EntryCard key={entry.id} entry={entry} past={new Date(entry.endsAt).getTime() < Date.now()} onPress={() => setOpenEntryId(entry.id)} />)
-          : <View style={styles.empty}><View style={styles.emptyIcon}><AppIcon name={view === 'mine' ? 'calendar-clear-outline' : 'compass-outline'} size={24} color={palette.teal} /></View><Text style={styles.emptyTitle}>{view === 'mine' ? 'Nothing on your calendar' : 'Nothing happening this day'}</Text><Text style={styles.emptyText}>{view === 'mine' ? 'Schedule a game with friends, or find open games and events in Discover.' : 'Open games and organizer events will appear here as they’re posted.'}</Text>{selectedKey >= todayKey ? <Pressable accessibilityRole="button" onPress={() => setNewGameDay(selectedKey)} style={({ pressed }) => [styles.secondary, styles.emptyAction, pressed && styles.pressed]}><AppIcon name="add" size={16} color={palette.teal} /><Text style={styles.secondaryText}>Schedule a game on {formatDayLabel(selectedKey, { month: 'short', day: 'numeric' })}</Text></Pressable> : null}</View>}
+          : <View style={styles.empty}>
+            <View style={styles.emptyIcon}><AppIcon name="calendar-clear-outline" size={24} color={palette.teal} /></View>
+            <Text style={styles.emptyTitle}>{hasFilteredEntries ? 'Your filters are hiding sessions' : selectedKey === todayKey ? 'No plans for today' : 'A little room to play'}</Text>
+            <Text style={styles.emptyText}>{hasFilteredEntries ? 'Show all session types to see your plans for this day.' : selectedKey < todayKey ? 'No sessions were scheduled for this day.' : 'Get a game on the calendar, or find an open spot with other players.'}</Text>
+            {hasFilteredEntries ? <Pressable accessibilityRole="button" onPress={() => setHiddenKinds([])} style={({ pressed }) => [styles.secondary, styles.emptyAction, pressed && styles.pressed]}><Text style={styles.secondaryText}>Reset filters</Text></Pressable>
+              : selectedKey >= todayKey ? <><Pressable accessibilityRole="button" onPress={() => setNewGameDay(selectedKey)} style={({ pressed }) => [styles.primary, styles.emptyAction, pressed && styles.pressed]}><AppIcon name="add" size={16} color="#0E2321" /><Text style={styles.primaryText}>Plan a game</Text></Pressable><Pressable accessibilityRole="button" onPress={() => setView('discover')} style={({ pressed }) => [styles.discoverLink, pressed && styles.pressed]}><Text style={styles.secondaryText}>Discover open games</Text><AppIcon name="arrow-forward" size={14} color={palette.teal} /></Pressable></> : null}
+          </View>}
       {upcoming.length ? <><Text style={styles.groupLabel}>{view === 'mine' ? 'COMING UP' : 'MORE THIS MONTH'}</Text>{upcoming.map((entry) => <Pressable key={`up-${entry.id}`} accessibilityRole="button" onPress={() => { selectDay(dayKey(entry.startsAt)); setOpenEntryId(entry.id); }} style={({ pressed }) => [styles.upcomingRow, pressed && styles.pressed]}><View style={styles.upcomingDate}><Text style={styles.upcomingMonth}>{formatDayLabel(dayKey(entry.startsAt), { month: 'short' }).toUpperCase()}</Text><Text style={styles.upcomingDay}>{Number(dayKey(entry.startsAt).slice(8))}</Text></View><View style={[styles.legendDot, { backgroundColor: kindColor(entry.kind, isDark), borderColor: kindColor(entry.kind, isDark) }]} /><View style={styles.flex}><Text numberOfLines={1} style={styles.rosterName}>{entry.title}</Text><Text numberOfLines={1} style={styles.helperInline}>{formatTime(entry.startsAt)} · {entry.place}</Text></View><AppIcon name="chevron-forward" size={17} color={palette.ink40} /></Pressable>)}</> : null}
     </View>
   );
 
   const discover = (
-    <View style={styles.agenda}>
+    <View style={[styles.agenda, styles.discoverAgenda]}>
       <View style={styles.agendaHead}>
-        <View style={styles.flex}><Text style={styles.agendaDay}>Open to join</Text><Text style={styles.agendaDate}>Open games and events you’re not in yet</Text></View>
+        <View style={styles.flex}><Text style={styles.agendaDay}>Find your next game</Text><Text style={styles.agendaDate}>Open games you can join</Text></View>
         <Text style={styles.agendaCount}>{discoverDays.length ? `${discoverDays.reduce((total, [, rows]) => total + rows.length, 0)} upcoming` : ''}</Text>
       </View>
       {loading && !allEntries.length ? <View style={styles.loadingBox}><ActivityIndicator color={palette.teal} /><Text style={styles.helperText}>Finding games and events…</Text></View>
@@ -622,32 +620,25 @@ export default function ScheduleScreen({ navigation, route }) {
             {rows.map((entry) => <EntryCard key={entry.id} entry={entry} onPress={() => setOpenEntryId(entry.id)} />)}
           </View>
         ))
-          : <View style={styles.empty}><View style={styles.emptyIcon}><AppIcon name="compass-outline" size={24} color={palette.teal} /></View><Text style={styles.emptyTitle}>Nothing open to join right now</Text><Text style={styles.emptyText}>Open games and organizer events will appear here as they’re posted. Anything you’ve joined is under My schedule.</Text><Pressable accessibilityRole="button" onPress={() => setNewGameDay(todayKey)} style={({ pressed }) => [styles.secondary, styles.emptyAction, pressed && styles.pressed]}><AppIcon name="add" size={16} color={palette.teal} /><Text style={styles.secondaryText}>Host an open game</Text></Pressable></View>}
+          : <View style={styles.empty}><View style={styles.emptyIcon}><AppIcon name="compass-outline" size={24} color={palette.teal} /></View><Text style={styles.emptyTitle}>Nothing open to join right now</Text><Text style={styles.emptyText}>Open games hosted by players will appear here as they’re posted. Anything you’ve joined is under My schedule.</Text><Pressable accessibilityRole="button" onPress={() => setNewGameDay(todayKey)} style={({ pressed }) => [styles.secondary, styles.emptyAction, pressed && styles.pressed]}><AppIcon name="add" size={16} color={palette.teal} /><Text style={styles.secondaryText}>Host an open game</Text></Pressable></View>}
     </View>
   );
 
   return (
-    <SafeAreaView style={styles.safe}>
+    <SafeAreaView onLayout={({ nativeEvent }) => setLayoutWidth(nativeEvent.layout.width)} style={styles.safe}>
       <StatusBar style={isDark ? 'light' : 'dark'} backgroundColor={isDark ? DARK_CONTENT_COLORS.paper : LIGHT_CONTENT_COLORS.paper} />
       <ScrollView contentContainerStyle={[styles.content, wide && styles.contentWide]} showsVerticalScrollIndicator={false} refreshControl={<RefreshControl refreshing={refreshing} onRefresh={() => load({ refresh: true })} tintColor={palette.teal} colors={[palette.teal]} />}>
         {header}
-        <Segmented accessibilityLabel="Schedule view" styles={styles} value={view} onChange={setView} options={[{ value: 'mine', label: 'My schedule' }, { value: 'discover', label: 'Discover' }]} />
+        <View style={styles.scheduleToolbar}>
+          <View style={[styles.flex, layoutWidth >= 600 && styles.scheduleTabsWide]}><Segmented accessibilityLabel="Schedule view" styles={styles} value={view} onChange={setView} options={[{ value: 'mine', label: 'My schedule' }, { value: 'discover', label: 'Discover' }]} /></View>
+          {layoutWidth < 600 ? newGameButton : <View style={styles.timeZone}><AppIcon name="time-outline" size={13} color={palette.ink40} /><Text style={styles.helperInline}>Philippine time</Text></View>}
+        </View>
         {error ? <View style={styles.errorBox}><AppIcon name="cloud-offline-outline" size={17} color={palette.brick} /><Text style={styles.errorText}>{error}</Text><Pressable accessibilityRole="button" onPress={() => load({ refresh: true })}><Text style={styles.retryText}>Retry</Text></Pressable></View> : null}
-        {view === 'discover' ? <>{legend}{discover}</> : wide ? (
-          <View {...webLayout('schedule-columns')} style={styles.columns}>
-            <View style={styles.sideColumn}><MonthCalendar monthKey={monthKey} selectedKey={selectedKey} todayKey={todayKey} markers={markers} onSelect={selectDay} onMonth={changeMonth} />{legend}</View>
-            <View style={styles.mainColumn}>{agenda}</View>
+        {view === 'discover' ? <>{legend}{discover}</> : (
+          <View {...webLayout('schedule-columns')} style={[styles.columns, wide && styles.columnsWide]}>
+            <View style={[styles.calendarColumn, wide && styles.calendarColumnWide]}><ScheduleCalendar monthKey={monthKey} selectedKey={selectedKey} todayKey={todayKey} byDay={byDay} monthOpen={monthOpen} onToggleMonth={() => setMonthOpen((value) => !value)} onSelect={selectDay} onMonth={changeMonth} expanded={layoutWidth >= 680} kindColor={kindColor} footer={legend} /></View>
+            <View style={[styles.mainColumn, wide && styles.mainColumnWide]}>{agenda}</View>
           </View>
-        ) : (
-          <>
-            {monthOpen ? <MonthCalendar monthKey={monthKey} selectedKey={selectedKey} todayKey={todayKey} markers={markers} onSelect={selectDay} onMonth={changeMonth} /> : <WeekStrip selectedKey={selectedKey} todayKey={todayKey} markers={markers} onSelect={selectDay} />}
-            <View style={styles.calendarToggleRow}>
-              <Pressable accessibilityRole="button" accessibilityState={{ expanded: monthOpen }} onPress={() => setMonthOpen((value) => !value)} style={({ pressed }) => [styles.calendarToggle, pressed && styles.pressed]}><AppIcon name={monthOpen ? 'chevron-up' : 'calendar-outline'} size={15} color={palette.teal} /><Text style={styles.calendarToggleText}>{monthOpen ? 'Show week' : 'Show month'}</Text></Pressable>
-              {selectedKey !== todayKey ? <Pressable accessibilityRole="button" onPress={() => selectDay(todayKey)} style={({ pressed }) => [styles.calendarToggle, pressed && styles.pressed]}><Text style={styles.calendarToggleText}>Today</Text></Pressable> : null}
-            </View>
-            {legend}
-            {agenda}
-          </>
         )}
       </ScrollView>
       {openEntry ? <EntrySheet entry={openEntry} onClose={() => setOpenEntryId(null)} onChanged={() => load()} onStart={startGame} onOpenEvent={openEvent} /> : null}
@@ -666,19 +657,26 @@ const lightStyles = StyleSheet.create({
   content: { paddingHorizontal: 20, paddingTop: 21, paddingBottom: 120 },
   contentWide: { width: '100%', maxWidth: 1100, alignSelf: 'center', paddingHorizontal: 32 },
   flex: { flex: 1, minWidth: 0 },
-  header: { minHeight: 52, marginBottom: 16, flexDirection: 'row', alignItems: 'center', gap: 10 },
+  header: { minHeight: 72, marginBottom: 22, flexDirection: 'row', alignItems: 'center', gap: 12 },
   eyebrow: { color: C.ink40, fontSize: 10, lineHeight: 15, fontWeight: '700', letterSpacing: 1.05 },
-  h1: { marginTop: 2, color: C.ink, fontSize: 29, lineHeight: 37, fontWeight: '700', letterSpacing: -0.8 },
-  newButton: { minHeight: 40, paddingHorizontal: 13, flexDirection: 'row', alignItems: 'center', gap: 5, borderRadius: 12, backgroundColor: C.optic },
+  h1: { marginTop: 2, color: C.ink, fontSize: 32, lineHeight: 40, fontWeight: '800', letterSpacing: -1 },
+  headerSubtitle: { marginTop: 3, color: C.ink40, fontSize: 12, lineHeight: 18 },
+  newButton: { minHeight: 44, minWidth: 44, paddingHorizontal: 13, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 5, borderRadius: 12, backgroundColor: C.optic },
   newButtonText: { color: '#0E2321', fontSize: 12, fontWeight: '900' },
+  scheduleToolbar: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 10 },
+  scheduleTabsWide: { maxWidth: 290 },
+  timeZone: { flexDirection: 'row', alignItems: 'center', gap: 5 },
   segmented: { padding: 4, flexDirection: 'row', borderRadius: 12, backgroundColor: '#E7EBE6' },
   segment: { flex: 1, minHeight: 38, alignItems: 'center', justifyContent: 'center', borderRadius: 9 },
   segmentActive: { backgroundColor: C.surface, shadowColor: C.ink, shadowOpacity: .08, shadowRadius: 6, shadowOffset: { width: 0, height: 2 }, elevation: 2 },
   segmentText: { color: C.ink40, fontSize: 12, fontWeight: '700' },
   segmentTextActive: { color: C.ink, fontWeight: '900' },
-  columns: { marginTop: 18, flexDirection: 'row', alignItems: 'flex-start', gap: 24 },
-  sideColumn: { width: 340 },
-  mainColumn: { flex: 1, minWidth: 0 },
+  columns: { marginTop: 20, gap: 18 },
+  columnsWide: { flexDirection: 'row', alignItems: 'flex-start', gap: 20 },
+  calendarColumn: { minWidth: 0 },
+  calendarColumnWide: { flex: 1 },
+  mainColumn: { minWidth: 0 },
+  mainColumnWide: { width: 340 },
   calendar: { marginTop: 16, padding: 14, borderRadius: 18, borderWidth: 1, borderColor: C.line, backgroundColor: C.surface },
   calendarHead: { marginBottom: 10, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
   calendarTitle: { color: C.ink, fontSize: 15, fontWeight: '800' },
@@ -697,34 +695,30 @@ const lightStyles = StyleSheet.create({
   dayTextDisabled: { color: C.line },
   dayTextToday: { color: C.teal, fontWeight: '900' },
   dayTextSelected: { color: C.paper, fontWeight: '900' },
-  weekStrip: { marginTop: 16, padding: 6, flexDirection: 'row', gap: 4, borderRadius: 16, borderWidth: 1, borderColor: C.line, backgroundColor: C.surface },
-  weekDay: { flex: 1, minHeight: 64, alignItems: 'center', justifyContent: 'center', borderRadius: 11 },
-  weekDayName: { color: C.ink40, fontSize: 9, fontWeight: '900' },
-  weekDayNumber: { marginTop: 3, color: C.ink, fontSize: 17, fontWeight: '800' },
-  calendarToggleRow: { marginTop: 8, flexDirection: 'row', justifyContent: 'space-between' },
-  calendarToggle: { minHeight: 34, paddingHorizontal: 6, flexDirection: 'row', alignItems: 'center', gap: 5 },
-  calendarToggleText: { color: C.teal, fontSize: 11, fontWeight: '900' },
   legend: { marginTop: 12, flexDirection: 'row', flexWrap: 'wrap', gap: 6 },
-  legendItem: { minHeight: 32, paddingHorizontal: 10, flexDirection: 'row', alignItems: 'center', gap: 6, borderRadius: 16, borderWidth: 1, borderColor: C.line, backgroundColor: C.surface },
+  legendItem: { minHeight: 36, paddingHorizontal: 10, flexDirection: 'row', alignItems: 'center', gap: 6, borderRadius: 10, borderWidth: 1, borderColor: C.line, backgroundColor: C.surface },
+  legendItemActive: { backgroundColor: C.tealWash, borderColor: C.tealWash },
   legendItemOff: { opacity: .55 },
   legendDot: { width: 9, height: 9, borderRadius: 5, borderWidth: 1.5 },
   legendText: { color: C.ink70, fontSize: 11, fontWeight: '700' },
-  agenda: { marginTop: 16 },
+  agenda: { padding: 16, borderRadius: 22, borderWidth: 1, borderColor: C.line, backgroundColor: C.surface },
+  discoverAgenda: { marginTop: 18 },
   inviteBanner: { minHeight: 52, marginBottom: 14, paddingHorizontal: 14, flexDirection: 'row', alignItems: 'center', gap: 9, borderRadius: 14, backgroundColor: C.optic },
   inviteBannerText: { flex: 1, color: '#0E2321', fontSize: 12, fontWeight: '800' },
-  agendaHead: { marginBottom: 8, flexDirection: 'row', alignItems: 'flex-end' },
+  agendaHead: { marginBottom: 12, paddingBottom: 16, flexDirection: 'row', alignItems: 'center', gap: 12, borderBottomWidth: 1, borderBottomColor: C.line },
+  agendaDateBadge: { width: 48, height: 56, alignItems: 'center', justifyContent: 'center', borderRadius: 13, backgroundColor: C.tealWash },
+  agendaMonth: { color: C.teal, fontSize: 9, lineHeight: 14, letterSpacing: .8, fontWeight: '800' },
+  agendaNumber: { color: C.ink, fontSize: 24, lineHeight: 29, fontWeight: '800', letterSpacing: -.6 },
   agendaDay: { color: C.ink, fontSize: 20, fontWeight: '800', letterSpacing: -.3 },
   agendaDate: { marginTop: 2, color: C.ink40, fontSize: 12, fontWeight: '600' },
   agendaCount: { color: C.ink40, fontSize: 11, fontWeight: '800' },
-  entry: { minHeight: 96, marginTop: 8, flexDirection: 'row', overflow: 'hidden', borderRadius: 14, borderWidth: 1, borderColor: C.line, backgroundColor: C.surface },
+  entry: { marginTop: 8, padding: 13, overflow: 'hidden', borderRadius: 14, borderWidth: 1, borderColor: C.line, backgroundColor: C.paper },
   entryMuted: { opacity: .6 },
-  entryRail: { width: 4 },
-  entryTime: { width: 74, paddingVertical: 14, paddingLeft: 12, borderRightWidth: 1, borderRightColor: C.line },
-  entryTimeStart: { color: C.ink, fontSize: 12, fontWeight: '800' },
-  entryTimeEnd: { marginTop: 3, color: C.ink40, fontSize: 11, fontWeight: '600' },
-  entryBody: { flex: 1, minWidth: 0, paddingVertical: 12, paddingHorizontal: 12 },
-  entryTitleRow: { flexDirection: 'row', alignItems: 'center', gap: 8 },
-  entryTitle: { flex: 1, color: C.ink, fontSize: 14, fontWeight: '800' },
+  entryTime: { flexShrink: 1, flexDirection: 'row', alignItems: 'center', gap: 6 },
+  entryTimeStart: { flexShrink: 1, color: C.ink70, fontSize: 10, lineHeight: 15, fontWeight: '700', fontVariant: ['tabular-nums'] },
+  entryBody: { minWidth: 0, marginTop: 10 },
+  entryTitleRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 6 },
+  entryTitle: { color: C.ink, fontSize: 15, lineHeight: 21, fontWeight: '800' },
   strike: { textDecorationLine: 'line-through' },
   badge: { paddingHorizontal: 8, paddingVertical: 3, borderRadius: 10, backgroundColor: C.paper },
   badgeAttention: { backgroundColor: C.optic },
@@ -732,18 +726,19 @@ const lightStyles = StyleSheet.create({
   badgeTextAttention: { color: '#0E2321' },
   entryMeta: { marginTop: 5, flexDirection: 'row', alignItems: 'center', gap: 4 },
   entryMetaText: { flex: 1, color: C.ink40, fontSize: 11 },
-  entryFoot: { marginTop: 9, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
-  kindTag: { flexDirection: 'row', alignItems: 'center', gap: 4 },
-  kindTagText: { fontSize: 10, fontWeight: '900' },
+  entryFoot: { marginTop: 12, flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center', justifyContent: 'space-between', gap: 6 },
+  kindTag: { flexShrink: 1, flexDirection: 'row', alignItems: 'center', gap: 4 },
+  kindTagText: { flexShrink: 1, fontSize: 10, fontWeight: '900' },
   avatarStack: { flexDirection: 'row' },
   avatarRing: { borderRadius: 13, borderWidth: 2, borderColor: C.surface },
   avatarOverlap: { marginLeft: -8 },
   loadingBox: { minHeight: 140, alignItems: 'center', justifyContent: 'center', gap: 8 },
-  empty: { padding: 22, alignItems: 'center', borderRadius: 16, borderWidth: 1, borderStyle: 'dashed', borderColor: C.line, backgroundColor: C.surface },
-  emptyIcon: { width: 48, height: 48, alignItems: 'center', justifyContent: 'center', borderRadius: 14, backgroundColor: C.tealWash },
-  emptyTitle: { marginTop: 10, color: C.ink, fontSize: 15, fontWeight: '800' },
+  empty: { paddingHorizontal: 14, paddingVertical: 26, alignItems: 'center', borderRadius: 16, backgroundColor: C.paper },
+  emptyIcon: { width: 54, height: 54, alignItems: 'center', justifyContent: 'center', borderRadius: 18, backgroundColor: C.tealWash },
+  emptyTitle: { marginTop: 14, color: C.ink, fontSize: 16, lineHeight: 22, fontWeight: '800', textAlign: 'center' },
   emptyText: { maxWidth: 320, marginTop: 5, color: C.ink40, fontSize: 12, lineHeight: 17, textAlign: 'center' },
-  emptyAction: { marginTop: 14, paddingHorizontal: 14 },
+  emptyAction: { maxWidth: '100%', marginTop: 18, paddingHorizontal: 14 },
+  discoverLink: { minHeight: 44, marginTop: 6, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6 },
   upcomingRow: { minHeight: 58, marginTop: 6, paddingHorizontal: 10, flexDirection: 'row', alignItems: 'center', gap: 10, borderRadius: 12, borderWidth: 1, borderColor: C.line, backgroundColor: C.surface },
   upcomingDate: { width: 38, alignItems: 'center' },
   upcomingMonth: { color: C.brick, fontSize: 8, fontWeight: '900', letterSpacing: .6 },

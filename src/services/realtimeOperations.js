@@ -108,9 +108,13 @@ export async function disablePushToken(userId) {
   if (error) throw error;
 }
 
+// Individual chat messages surface as an in-app banner and in the chat inbox,
+// so they are kept out of the notification list (the rows still drive push).
+export const CHAT_MESSAGE_NOTIFICATION_KIND = 'direct_message';
+
 export async function listNotifications() {
   const { data, error } = await requireSupabase().from('user_notifications')
-    .select('*').order('created_at', { ascending: false }).limit(50);
+    .select('*').neq('kind', CHAT_MESSAGE_NOTIFICATION_KIND).order('created_at', { ascending: false }).limit(50);
   if (error) throw error;
   return data || [];
 }

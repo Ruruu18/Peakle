@@ -8,6 +8,7 @@ import { webDialog } from '../utils/webLayout';
 import { useAuth } from '../context/AuthContext';
 import { DARK_CONTENT_COLORS, LIGHT_CONTENT_COLORS, useTheme } from '../context/ThemeContext';
 import useDesktopLayout from '../hooks/useDesktopLayout';
+import { APP_VERSION_LABEL } from '../config/appInfo';
 
 // On web, Profile leaves the tab bar: the player's avatar opens this menu and
 // Chats takes the freed tab. Native keeps its Profile tab until this ships there.
@@ -109,6 +110,7 @@ export function AccountMenuSheet({ onNavigate, onSignOut }) {
             <AppIcon name="log-out-outline" size={20} color={colors.brick} />
             <Text style={[styles.rowLabel, { color: colors.brick }]}>Log out</Text>
           </Pressable>
+          <Text selectable style={[styles.version, { color: colors.ink40 }]}>{APP_VERSION_LABEL}</Text>
         </View>
       </View>
     </Modal>
@@ -130,4 +132,5 @@ const styles = StyleSheet.create({
   rowBorder: { borderTopWidth: StyleSheet.hairlineWidth },
   rowLabel: { flex: 1, fontSize: 15, fontWeight: '700' },
   logOut: { borderWidth: 1, borderRadius: 18 },
+  version: { marginTop: 10, textAlign: 'center', fontSize: 11, fontWeight: '600' },
 });

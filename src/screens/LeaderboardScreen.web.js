@@ -16,7 +16,7 @@ import LeaderboardPodium from '../components/LeaderboardPodium';
 import useResponsiveWidth from '../hooks/useResponsiveWidth';
 import { webLayout } from '../utils/webLayout';
 import { useTheme } from '../context/ThemeContext';
-import { loadLeaderboard } from '../services/leaderboard';
+import { loadLeaderboard, loadTeamLeaderboard } from '../services/leaderboard';
 
 const LIGHT = {
   ink: '#0E2321', paper: '#F7F8F5', surface: '#FFFFFF', muted: '#65716B',
@@ -216,15 +216,103 @@ function EmptyState({ format, palette }) {
   );
 }
 
+function TeamStanding({ teams, onFindTeam, palette, wide }) {
+  const team = teams[0];
+  if (!team) {
+    return (
+      <View testID="team-leaderboard-standing" style={[styles.personalCard, { backgroundColor: palette.surface, borderColor: palette.line }]}>
+        <Text style={[styles.personalTitle, { color: palette.ink }]}>Your team</Text>
+        <Text style={[styles.unrankedHint, styles.teamHint, { color: palette.muted }]}>Join or create a team, then challenge other teams to climb these standings.</Text>
+        <Pressable accessibilityRole="button" onPress={onFindTeam} style={({ pressed }) => [styles.retryButton, styles.teamButton, { backgroundColor: palette.teal }, pressed && styles.pressed]}>
+          <Text style={[styles.retryText, { color: palette.surface }]}>Find a team</Text>
+        </Pressable>
+      </View>
+    );
+  }
+  const ranked = team.rank != null;
+  const stats = [
+    { label: 'Win–loss', value: `${team.wins}–${team.losses}` },
+    { label: 'Challenges', value: team.matches },
+  ];
+  return (
+    <View testID="team-leaderboard-standing" style={[styles.personalCard, wide && styles.personalCardWide, { backgroundColor: palette.surface, borderColor: palette.line }]}>
+      <View style={[styles.personalIdentity, wide && styles.personalIdentityWide]}>
+        <ProfilePhoto photo={team.avatar} name={team.name} size={40} />
+        <View style={styles.personalCopy}>
+          <Text numberOfLines={1} style={[styles.personalTitle, { color: palette.ink }]}>{team.name}</Text>
+          <Text numberOfLines={1} style={[styles.personalContext, { color: palette.muted }]}>Your team{team.tag ? ` · ${team.tag}` : ''}</Text>
+        </View>
+        <View style={styles.personalRank}>
+          <Text style={[styles.personalRankValue, { color: palette.teal }]}>{ranked ? `#${team.rank}` : '—'}</Text>
+          <Text style={[styles.personalRankLabel, { color: palette.muted }]}>{ranked ? 'Rank' : 'Unranked'}</Text>
+        </View>
+      </View>
+      <View style={[styles.personalStats, { borderColor: palette.line }, wide && styles.personalStatsWide]}>
+        {stats.map(({ label, value }) => (
+          <View key={label} style={styles.personalStat}>
+            <Text style={[styles.personalStatValue, { color: palette.ink }]}>{value}</Text>
+            <Text style={[styles.personalStatLabel, { color: palette.muted }]}>{label}</Text>
+          </View>
+        ))}
+      </View>
+      {!team.isPublic ? <Text style={[styles.unrankedHint, wide && styles.unrankedHintWide, { color: palette.muted }]}>{team.name} is private. Make the team public to appear in the standings.</Text>
+        : !ranked ? <Text style={[styles.unrankedHint, wide && styles.unrankedHintWide, { color: palette.muted }]}>Finish a challenge match to earn your team a place.</Text> : null}
+    </View>
+  );
+}
+
+function TeamStandings({ teams, palette, wide }) {
+  return (
+    <View testID="team-leaderboard-table" style={[styles.standingsCard, { backgroundColor: palette.surface, borderColor: palette.line }]}>
+      <View style={[styles.tableHeader, wide && styles.tableHeaderWide]}>
+        <Text style={[styles.rankColumn, styles.columnLabel, { color: palette.muted }]}>#</Text>
+        <Text style={[styles.playerColumn, styles.columnLabel, { color: palette.muted }]}>Team</Text>
+        {wide ? <Text style={[styles.matchesColumn, styles.columnLabel, { color: palette.muted }]}>Challenges</Text> : null}
+        <View style={[styles.recordColumn, styles.ratingHeading]}>
+          <Text style={[styles.columnLabel, { color: palette.muted }]}>Win–loss</Text>
+          <Ionicons name="arrow-down" size={12} color={palette.muted} />
+        </View>
+      </View>
+      {teams.map((team) => (
+        <View key={team.id} style={[
+          styles.standingRow,
+          wide && styles.standingRowWide,
+          { borderTopColor: palette.line },
+          team.isMember && { backgroundColor: palette.wash },
+        ]}>
+          {team.isMember ? <View style={[styles.currentPlayerMarker, { backgroundColor: palette.teal }]} /> : null}
+          <RankNumber rank={team.rank} palette={palette} />
+          <View style={styles.playerColumn}>
+            <ProfilePhoto photo={team.avatar} name={team.name} size={36} />
+            <View style={styles.standingCopy}>
+              <View style={styles.standingNameLine}>
+                <Text numberOfLines={1} style={[styles.standingName, { color: palette.ink }]}>{team.name}</Text>
+                {team.isMember ? <Text style={[styles.youLabel, { color: palette.teal }]}>Your team</Text> : null}
+              </View>
+              <Text numberOfLines={1} style={[styles.standingMeta, { color: palette.muted }]}>
+                {[team.tag, team.area, wide ? null : `${team.matches} ${team.matches === 1 ? 'challenge' : 'challenges'}`].filter(Boolean).join(' · ') || '—'}
+              </Text>
+            </View>
+          </View>
+          {wide ? <Text style={[styles.matchesColumn, styles.tableNumber, { color: palette.muted }]}>{team.matches}</Text> : null}
+          <Text style={[styles.recordColumn, styles.standingRating, { color: palette.ink }]}>{team.wins}–{team.losses}</Text>
+        </View>
+      ))}
+    </View>
+  );
+}
+
 export default function LeaderboardScreen({ navigation, route }) {
   const { isDark } = useTheme();
   const palette = isDark ? DARK : LIGHT;
   const width = useResponsiveWidth();
   const wide = width >= 760;
   const defaultFormat = route?.params?.defaultFormat === 'singles' ? 'singles' : 'doubles';
+  const [board, setBoard] = useState(route?.params?.defaultBoard === 'teams' ? 'teams' : 'players');
   const [scope, setScope] = useState('local');
   const [format, setFormat] = useState(defaultFormat);
   const [data, setData] = useState(null);
+  const [teamData, setTeamData] = useState(null);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState('');
@@ -232,12 +320,13 @@ export default function LeaderboardScreen({ navigation, route }) {
 
   useEffect(() => {
     let active = true;
-    const refreshOnly = Boolean(data);
+    const teams = board === 'teams';
+    const refreshOnly = Boolean(teams ? teamData : data);
     if (refreshOnly) setRefreshing(true);
     else setLoading(true);
     setError('');
-    loadLeaderboard({ scope, format })
-      .then((next) => { if (active) setData(next); })
+    (teams ? loadTeamLeaderboard() : loadLeaderboard({ scope, format }))
+      .then((next) => { if (active) (teams ? setTeamData : setData)(next); })
       .catch((nextError) => { if (active) setError(nextError.message || 'The leaderboard could not be loaded.'); })
       .finally(() => {
         if (!active) return;
@@ -245,7 +334,7 @@ export default function LeaderboardScreen({ navigation, route }) {
         setRefreshing(false);
       });
     return () => { active = false; };
-  }, [format, request, scope]);
+  }, [board, format, request, scope]);
 
   const refresh = useCallback(() => setRequest((value) => value + 1), []);
   const changeScope = useCallback((nextScope) => {
@@ -254,6 +343,11 @@ export default function LeaderboardScreen({ navigation, route }) {
     setData(null);
     setScope(nextScope);
   }, [scope]);
+  const changeBoard = useCallback((nextBoard) => {
+    if (nextBoard === board) return;
+    setLoading(true);
+    setBoard(nextBoard);
+  }, [board]);
   const changeFormat = useCallback((nextFormat) => {
     if (nextFormat === format) return;
     setLoading(true);
@@ -264,6 +358,8 @@ export default function LeaderboardScreen({ navigation, route }) {
   const effectiveScope = data?.scope || scope;
   const areaLabel = effectiveScope === 'local' ? (data?.homeArea || data?.area || 'Local area') : 'Global';
   const formatLabel = format === 'singles' ? 'Singles' : 'Doubles';
+  const showTeams = board === 'teams';
+  const teamStandings = teamData?.standings || [];
 
   return (
     <SafeAreaView style={[styles.safe, { backgroundColor: palette.paper }]}>
@@ -284,8 +380,14 @@ export default function LeaderboardScreen({ navigation, route }) {
         showsVerticalScrollIndicator={false}
         refreshControl={<RefreshControl refreshing={refreshing} onRefresh={refresh} tintColor={palette.teal} colors={[palette.teal]} progressBackgroundColor={palette.surface} />}
       >
-        <Text style={[styles.intro, { color: palette.muted }]}>Player rankings from verified match results.</Text>
-        <View style={[styles.filters, { borderBottomColor: palette.line }, wide && styles.filtersWide]}>
+        <View style={styles.introRow}>
+          <Text style={[styles.intro, { color: palette.muted }]}>{showTeams ? 'Team rankings from challenge matches scored in Peakle.' : 'Player rankings from verified match results.'}</Text>
+          <View accessibilityLabel="Leaderboard" style={[styles.scopeControls, { backgroundColor: palette.control }]}>
+            <ScopeControl active={!showTeams} icon="person-outline" label="Players" onPress={() => changeBoard('players')} palette={palette} compact={width < 360} />
+            <ScopeControl active={showTeams} icon="people-outline" label="Teams" onPress={() => changeBoard('teams')} palette={palette} compact={width < 360} />
+          </View>
+        </View>
+        {!showTeams ? <View style={[styles.filters, { borderBottomColor: palette.line }, wide && styles.filtersWide]}>
           <View accessibilityRole="tablist" accessibilityLabel="Match format" style={styles.formatBar}>
             <FormatControl active={format === 'doubles'} label="Doubles" onPress={() => changeFormat('doubles')} palette={palette} />
             <FormatControl active={format === 'singles'} label="Singles" onPress={() => changeFormat('singles')} palette={palette} />
@@ -294,7 +396,7 @@ export default function LeaderboardScreen({ navigation, route }) {
             <ScopeControl active={effectiveScope === 'local'} icon="location-outline" label="Local" onPress={() => changeScope('local')} palette={palette} compact={width < 360} />
             <ScopeControl active={effectiveScope === 'global'} icon="globe-outline" label="Global" onPress={() => changeScope('global')} palette={palette} compact={width < 360} />
           </View>
-        </View>
+        </View> : null}
 
         {loading ? (
           <View style={styles.loadingState}>
@@ -314,7 +416,43 @@ export default function LeaderboardScreen({ navigation, route }) {
           </View>
         ) : null}
 
-        {!loading && !error && data ? (
+        {!loading && !error && showTeams && teamData ? (
+          <View {...webLayout('leaderboard')}>
+            <View style={[styles.overview, wide && teamStandings.length > 0 && styles.overviewWide]}>
+              {teamStandings.length ? (
+                <View style={styles.podiumSection}>
+                  <View style={styles.podiumHeading}>
+                    <View style={styles.sectionCopy}>
+                      <Text accessibilityRole="header" style={[styles.sectionTitle, { color: palette.ink }]}>Top teams</Text>
+                      <Text style={[styles.sectionMeta, { color: palette.muted }]}>Team challenges · All areas</Text>
+                    </View>
+                    <Text style={[styles.podiumRatingLabel, { color: palette.muted }]}>WIN–LOSS</Text>
+                  </View>
+                  <LeaderboardPodium players={teamStandings.slice(0, 3).map((team) => ({ ...team, display: `${team.wins}–${team.losses}` }))} isDark={isDark} wide={wide} tieNote="Equal records share a rank." />
+                </View>
+              ) : null}
+              <TeamStanding teams={teamData.mine} onFindTeam={() => navigation.navigate('Team')} palette={palette} wide={wide && !teamStandings.length} />
+            </View>
+            <View style={styles.sectionHead}>
+              <View style={styles.sectionCopy}>
+                <Text accessibilityRole="header" style={[styles.sectionTitle, { color: palette.ink }]}>Team standings</Text>
+                <Text style={[styles.sectionMeta, { color: palette.muted }]}>All areas · {teamStandings.length} {teamStandings.length === 1 ? 'team' : 'teams'} shown</Text>
+              </View>
+            </View>
+            {teamStandings.length ? (
+              <TeamStandings teams={teamStandings} palette={palette} wide={wide} />
+            ) : (
+              <View style={[styles.stateCard, { backgroundColor: palette.surface, borderColor: palette.line }]}>
+                <Ionicons name="people-outline" size={30} color={palette.teal} />
+                <Text style={[styles.stateTitle, { color: palette.ink }]}>No team results yet</Text>
+                <Text style={[styles.stateText, { color: palette.muted }]}>Public teams appear here after their first completed challenge match.</Text>
+              </View>
+            )}
+            <Text style={[styles.integrityText, { color: palette.muted }]}>Ranked by wins. Only challenge matches scored live in Peakle count, and scrimmage details stay private.</Text>
+          </View>
+        ) : null}
+
+        {!loading && !error && !showTeams && data ? (
           <View {...webLayout('leaderboard')}>
             <View style={[styles.overview, wide && standings.length > 0 && styles.overviewWide]}>
               {standings.length ? (
@@ -362,7 +500,10 @@ const styles = StyleSheet.create({
   title: { flex: 1, fontSize: 26, lineHeight: 34, fontWeight: '600', letterSpacing: -0.8 },
   content: { paddingHorizontal: 20, paddingBottom: 36 },
   contentWide: { paddingHorizontal: 32, paddingBottom: 48 },
-  intro: { fontSize: 13, lineHeight: 20, marginBottom: 20 },
+  introRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: 12, marginBottom: 20 },
+  intro: { flexShrink: 1, fontSize: 13, lineHeight: 20 },
+  teamHint: { marginTop: 6 },
+  teamButton: { marginTop: 14, alignSelf: 'flex-start' },
   filters: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', borderBottomWidth: 1, marginBottom: 24, gap: 8, paddingBottom: 0 },
   filtersWide: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingBottom: 0 },
   formatBar: { flexDirection: 'row', gap: 18 },

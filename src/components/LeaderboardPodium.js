@@ -24,8 +24,9 @@ function Crown({ color }) {
 function PodiumPlayer({ player, currentUserId, palette, wide }) {
   const champion = player.rank === 1;
   const height = ({ 1: wide ? 124 : 96, 2: wide ? 90 : 70, 3: wide ? 64 : 50 })[player.rank] || 50;
-  const isYou = player.id === currentUserId;
-  const rating = player.rating.toFixed(3);
+  const isYou = player.isMember || player.id === currentUserId;
+  // Teams rank by record rather than rating, so rows may carry their own display value.
+  const rating = player.display ?? player.rating.toFixed(3);
   const cap = champion ? '#E6F29B' : palette.stepTop;
   const face = champion ? '#D6E94A' : palette.step;
   const edge = champion ? '#C2D43C' : palette.stepEdge;
@@ -34,7 +35,7 @@ function PodiumPlayer({ player, currentUserId, palette, wide }) {
     <View
       testID={`podium-player-${player.id}`}
       accessible
-      accessibilityLabel={`Rank ${player.rank}, ${player.name}${isYou ? ', you' : ''}, rating ${rating}, ${player.wins} wins and ${player.losses} losses`}
+      accessibilityLabel={`Rank ${player.rank}, ${player.name}${isYou ? ', you' : ''}${player.display == null ? `, rating ${rating}` : ''}, ${player.wins} wins and ${player.losses} losses`}
       style={styles.player}
     >
       <View style={[styles.identity, wide && styles.identityWide]}>
@@ -42,7 +43,7 @@ function PodiumPlayer({ player, currentUserId, palette, wide }) {
         <View style={[styles.avatarRing, { borderColor: champion ? '#A7B92E' : palette.ring }]}>
           <ProfilePhoto photo={player.avatar} name={player.name} size={wide ? (champion ? 64 : 52) : (champion ? 52 : 44)} />
         </View>
-        <Text numberOfLines={2} style={[styles.name, wide && styles.nameWide, { color: palette.ink }]}>{player.name}{isYou ? ' · You' : ''}</Text>
+        <Text numberOfLines={2} style={[styles.name, wide && styles.nameWide, { color: palette.ink }]}>{player.name}{isYou ? (player.isMember ? ' · Your team' : ' · You') : ''}</Text>
         <Text style={[styles.rating, wide && styles.ratingWide, { color: palette.ink }]}>{rating}</Text>
       </View>
       <View testID={`podium-step-${player.id}`} style={styles.step}>
@@ -58,7 +59,7 @@ function PodiumPlayer({ player, currentUserId, palette, wide }) {
   );
 }
 
-export default function LeaderboardPodium({ players, currentUserId, isDark, wide = false }) {
+export default function LeaderboardPodium({ players, currentUserId, isDark, wide = false, tieNote = 'Equal ratings share a rank.' }) {
   if (!players.length) return null;
   const palette = isDark ? DARK : LIGHT;
   // Keep the leader in the center even when only one or two players are ranked.
@@ -73,7 +74,7 @@ export default function LeaderboardPodium({ players, currentUserId, isDark, wide
           <PodiumPlayer key={player.id} player={player} currentUserId={currentUserId} palette={palette} wide={wide} />
         ) : <View key={`empty-${index}`} style={styles.player} />)}
       </View>
-      {tied ? <Text style={[styles.tieNote, { color: palette.muted }]}>Equal ratings share a rank.</Text> : null}
+      {tied ? <Text style={[styles.tieNote, { color: palette.muted }]}>{tieNote}</Text> : null}
     </View>
   );
 }

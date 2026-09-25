@@ -371,7 +371,8 @@ describe('listNotifications', () => {
   it('requests the 50 most recent notifications and returns the data', async () => {
     const limit = jest.fn(async () => ({ data: [{ id: 'n1' }], error: null }));
     const order = jest.fn(() => ({ limit }));
-    const select = jest.fn(() => ({ order }));
+    const neq = jest.fn(() => ({ order }));
+    const select = jest.fn(() => ({ neq }));
     const from = jest.fn(() => ({ select }));
     mockClient({ from });
 
@@ -379,19 +380,20 @@ describe('listNotifications', () => {
 
     expect(from).toHaveBeenCalledWith('user_notifications');
     expect(select).toHaveBeenCalledWith('*');
+    expect(neq).toHaveBeenCalledWith('kind', 'direct_message');
     expect(order).toHaveBeenCalledWith('created_at', { ascending: false });
     expect(limit).toHaveBeenCalledWith(50);
     expect(result).toEqual([{ id: 'n1' }]);
   });
 
   it('falls back to an empty array when data is null', async () => {
-    const from = jest.fn(() => ({ select: () => ({ order: () => ({ limit: async () => ({ data: null, error: null }) }) }) }));
+    const from = jest.fn(() => ({ select: () => ({ neq: () => ({ order: () => ({ limit: async () => ({ data: null, error: null }) }) }) }) }));
     mockClient({ from });
     expect(await listNotifications()).toEqual([]);
   });
 
   it('throws on a server error', async () => {
-    const from = jest.fn(() => ({ select: () => ({ order: () => ({ limit: async () => ({ data: null, error: new Error('boom') }) }) }) }));
+    const from = jest.fn(() => ({ select: () => ({ neq: () => ({ order: () => ({ limit: async () => ({ data: null, error: new Error('boom') }) }) }) }) }));
     mockClient({ from });
     await expect(listNotifications()).rejects.toThrow('boom');
   });

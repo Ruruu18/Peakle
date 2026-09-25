@@ -2,6 +2,7 @@ import { requireSupabase } from '../lib/supabase';
 import { listDiscoverableOpenPlaySessions } from './openPlayRegistration';
 import { DEMO_MODE } from '../config/demoMode';
 import { DEMO_ACTIVITIES } from '../config/demoData';
+import { ORGANIZER_EVENTS_ENABLED } from '../config/features';
 
 function venueFrom(row) {
   const venue = row?.venues || row?.venue || null;
@@ -55,6 +56,7 @@ function mapProgramActivity(program) {
 }
 
 export async function listDiscoverablePlayerActivities() {
+  if (!ORGANIZER_EVENTS_ENABLED) return [];
   if (DEMO_MODE) return DEMO_ACTIVITIES;
   const client = requireSupabase();
   const now = new Date();

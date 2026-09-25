@@ -14,7 +14,6 @@ import {
   TextInput,
   View,
 } from 'react-native';
-import Constants from 'expo-constants';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { StatusBar } from 'expo-status-bar';
 import Ionicons from '@expo/vector-icons/Ionicons';
@@ -23,6 +22,7 @@ import { DARK_CONTENT_COLORS, useTheme } from '../context/ThemeContext';
 import { createMobileStyleSheet } from '../utils/mobileStyles';
 import { startSupportConversation } from '../services/supportChat';
 import { COURT_BOOKING_ENABLED } from '../config/features';
+import { APP_VERSION_LABEL } from '../config/appInfo';
 
 const LIGHT = {
   ink: '#0E2321', paper: '#F3F5EF', surface: '#FFFFFF', optic: '#D6E94A',
@@ -35,7 +35,7 @@ const DARK = {
 };
 const BALL_IMAGE = require('../../public/images/ball.png');
 const SUPPORT_EMAIL = (process.env.EXPO_PUBLIC_SUPPORT_EMAIL || 'support@peakle.app').trim();
-const APP_VERSION = Constants.expoConfig?.version || '1.0.0';
+const APP_VERSION = APP_VERSION_LABEL.replace(/^Peakle /, '');
 
 const BOOKING_FAQS = [
   {

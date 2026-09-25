@@ -12,6 +12,7 @@ import { OperationsProvider } from './src/context/OperationsContext';
 import { NearbyPlayersProvider } from './src/context/NearbyPlayersContext';
 import { OrganizerPassProvider } from './src/context/OrganizerPassContext';
 import MatchInviteOverlay from './src/components/MatchInviteOverlay';
+import MessageBanner from './src/components/MessageBanner';
 import SupportBubble from './src/components/SupportBubble';
 import ErrorBoundary from './src/components/ErrorBoundary';
 import DemoAutopilot from './src/components/DemoAutopilot';
@@ -247,7 +248,7 @@ function Root() {
   if (passwordRecovery) { setWebTitle('Reset Password'); return <AuthFlowScreen key="password-recovery" initialScreen="reset-password" />; }
   if (!user) { setWebTitle('Sign In'); return <AuthFlowScreen key="login" initialScreen="login" />; }
   if (!user.onboardingCompleted) { setWebTitle('Get Started'); return <AuthFlowScreen key={`new-user-setup-${user.id}`} initialScreen="new-user-overview" />; }
-  return <View key={`player-session-${user.id}`} style={[styles.appShell, { backgroundColor: appBackground }]}><NavigationContainer ref={navigationRef} theme={navigationTheme} linking={linking} documentTitle={{ formatter: formatPageTitle }}><AppNavigator /></NavigationContainer><MatchInviteOverlay onAccepted={openAcceptedMatch} />{Platform.OS !== 'web' ? <SupportBubble navigationRef={navigationRef} /> : null}{DEMO_MODE && Platform.OS !== 'web' ? <DemoAutopilot navigationRef={navigationRef} /> : null}</View>;
+  return <View key={`player-session-${user.id}`} style={[styles.appShell, { backgroundColor: appBackground }]}><NavigationContainer ref={navigationRef} theme={navigationTheme} linking={linking} documentTitle={{ formatter: formatPageTitle }}><AppNavigator /></NavigationContainer><MatchInviteOverlay onAccepted={openAcceptedMatch} /><MessageBanner navigationRef={navigationRef} />{Platform.OS !== 'web' ? <SupportBubble navigationRef={navigationRef} /> : null}{DEMO_MODE && Platform.OS !== 'web' ? <DemoAutopilot navigationRef={navigationRef} /> : null}</View>;
 }
 
 export default function App() {

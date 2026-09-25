@@ -7,7 +7,24 @@ import {
 
 const DIRECT_MESSAGE_SELECT_BASE = 'id, conversation_id, sender_id, body, created_at, profiles!direct_messages_sender_id_fkey(display_name, avatar_url)';
 const DIRECT_MESSAGE_SELECT = `${DIRECT_MESSAGE_SELECT_BASE}, direct_message_reactions(emoji, user_id)`;
-const reactionsSchemaMissing = (error) => ['42P01', 'PGRST200', 'PGRST205'].includes(error?.code);
+// Newest schema first. Projects without the unsend column (42703) or the
+// reactions table fall back to the older shapes.
+const DIRECT_MESSAGE_SELECTS = [
+  `${DIRECT_MESSAGE_SELECT_BASE}, deleted_at, direct_message_reactions(emoji, user_id)`,
+  DIRECT_MESSAGE_SELECT,
+  DIRECT_MESSAGE_SELECT_BASE,
+];
+const messageSchemaMissing = (error) => ['42P01', '42703', 'PGRST200', 'PGRST204', 'PGRST205'].includes(error?.code);
+const deleteSchemaMissing = (error) => ['42P01', '42703', 'PGRST202', 'PGRST205'].includes(error?.code);
+
+async function selectDirectMessages(run) {
+  let result;
+  for (const select of DIRECT_MESSAGE_SELECTS) {
+    result = await run(select);
+    if (!result.error || !messageSchemaMissing(result.error)) return result;
+  }
+  return result;
+}
 
 export function normalizeDirectConversation(row) {
   if (!row) return null;
@@ -43,7 +60,8 @@ export function normalizeDirectMessage(row, currentUserId) {
     sender: name,
     avatar: row.profiles?.avatar_url || null,
     mine: row.sender_id === currentUserId,
-    text: row.body,
+    text: row.deleted_at ? null : row.body,
+    deletedAt: row.deleted_at || null,
     reactions: row.direct_message_reactions || [],
     createdAt: row.created_at,
     time: new Date(row.created_at).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }),
@@ -51,10 +69,146 @@ export function normalizeDirectMessage(row, currentUserId) {
 }
 
 export async function listDirectConversations() {
-  if (DEMO_MODE) return DEMO_CONVERSATIONS;
-  const { data, error } = await requireSupabase().rpc('list_direct_conversations');
+  if (DEMO_MODE) return DEMO_CONVERSATIONS.map((conversation) => applyConversationSettings(conversation, null));
+  const client = requireSupabase();
+  const [{ data, error }, settingsById] = await Promise.all([
+    client.rpc('list_direct_conversations'),
+    listDirectConversationSettings(client),
+  ]);
   if (error) throw error;
-  return (data || []).map(normalizeDirectConversation);
+  return (data || [])
+    .map(normalizeDirectConversation)
+    .map((conversation) => applyConversationSettings(conversation, settingsById.get(conversation.id)))
+    .filter((conversation) => !conversation.deleted);
+}
+
+// ---------------------------------------------------------------------------
+// Per-player inbox controls (archive, mute, delete for me). Settings only ever
+// affect the caller's own inbox; the other participant sees no change.
+
+// Offered mute lengths in minutes; null mutes until turned back on.
+export const MUTE_DURATIONS = [
+  { minutes: 15, label: 'For 15 minutes' },
+  { minutes: 30, label: 'For 30 minutes' },
+  { minutes: 60, label: 'For 1 hour' },
+  { minutes: null, label: 'Until I turn it back on' },
+];
+
+const settingsSchemaMissing = (error) => ['42P01', 'PGRST205', 'PGRST202'].includes(error?.code);
+const timeOf = (value) => (value ? Date.parse(value) : NaN);
+
+function normalizeConversationSettings(row) {
+  return {
+    archivedAt: row?.archived_at || null,
+    clearedAt: row?.cleared_at || null,
+    mutedUntil: row?.muted_until || null,
+  };
+}
+
+// 'infinity' (mute until turned back on) arrives from PostgREST as a string.
+export function isMuteActive(mutedUntil, now = Date.now()) {
+  if (!mutedUntil) return false;
+  if (mutedUntil === 'infinity') return true;
+  const until = timeOf(mutedUntil);
+  return Number.isFinite(until) && until > now;
+}
+
+export function muteStatusLabel(mutedUntil, now = Date.now()) {
+  if (!isMuteActive(mutedUntil, now)) return null;
+  if (mutedUntil === 'infinity') return 'Muted until you turn it back on';
+  const until = new Date(mutedUntil);
+  const sameDay = until.toDateString() === new Date(now).toDateString();
+  const time = until.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
+  return `Muted until ${sameDay ? time : `${until.toLocaleDateString([], { weekday: 'short' })} ${time}`}`;
+}
+
+// A conversation is archived or deleted only until something newer arrives,
+// so a new message brings it back to the inbox automatically.
+export function applyConversationSettings(conversation, settings) {
+  if (!conversation) return conversation;
+  const { archivedAt, clearedAt, mutedUntil } = settings || normalizeConversationSettings(null);
+  const lastActivity = timeOf(conversation.lastMessageAt) || timeOf(conversation.createdAt) || 0;
+  return {
+    ...conversation,
+    archivedAt,
+    clearedAt,
+    mutedUntil,
+    archived: Boolean(archivedAt) && lastActivity <= timeOf(archivedAt),
+    deleted: Boolean(clearedAt) && lastActivity <= timeOf(clearedAt),
+    muted: isMuteActive(mutedUntil),
+  };
+}
+
+// Settings are optional: before the migration reaches a project every
+// conversation simply reads as unarchived, unmuted, and not deleted.
+async function listDirectConversationSettings(client) {
+  const { data, error } = await client.from('direct_conversation_settings')
+    .select('conversation_id, archived_at, cleared_at, muted_until');
+  if (error) {
+    if (settingsSchemaMissing(error)) return new Map();
+    throw error;
+  }
+  return new Map((data || []).map((row) => [row.conversation_id, normalizeConversationSettings(row)]));
+}
+
+export async function getDirectConversationSettings(conversationId) {
+  if (DEMO_MODE || !conversationId) return normalizeConversationSettings(null);
+  const client = requireSupabase();
+  const { data, error } = await client.from('direct_conversation_settings')
+    .select('archived_at, cleared_at, muted_until')
+    .eq('conversation_id', conversationId)
+    .maybeSingle();
+  if (error) {
+    if (settingsSchemaMissing(error)) return normalizeConversationSettings(null);
+    throw error;
+  }
+  return normalizeConversationSettings(data);
+}
+
+function settingsError(error) {
+  if (settingsSchemaMissing(error)) return new Error('Archive, mute, and delete are not available yet. Please try again after the next update.');
+  return error;
+}
+
+export async function setDirectConversationArchived(conversationId, archived) {
+  if (DEMO_MODE) return archived ? new Date().toISOString() : null;
+  const { data, error } = await requireSupabase().rpc('set_direct_conversation_archived', {
+    p_conversation_id: conversationId,
+    p_archived: Boolean(archived),
+  });
+  if (error) throw settingsError(error);
+  return data || null;
+}
+
+// minutes: a number for a timed mute, null to mute until turned back on.
+export async function muteDirectConversation(conversationId, minutes = null) {
+  if (DEMO_MODE) return minutes == null ? 'infinity' : new Date(Date.now() + minutes * 60000).toISOString();
+  const { data, error } = await requireSupabase().rpc('set_direct_conversation_muted', {
+    p_conversation_id: conversationId,
+    p_muted: true,
+    p_minutes: minutes,
+  });
+  if (error) throw settingsError(error);
+  return data || null;
+}
+
+export async function unmuteDirectConversation(conversationId) {
+  if (DEMO_MODE) return null;
+  const { error } = await requireSupabase().rpc('set_direct_conversation_muted', {
+    p_conversation_id: conversationId,
+    p_muted: false,
+  });
+  if (error) throw settingsError(error);
+  return null;
+}
+
+export async function deleteDirectConversationForMe(conversationId) {
+  if (DEMO_MODE) return new Date().toISOString();
+  const { data, error } = await requireSupabase().rpc('delete_direct_conversation_for_me', {
+    p_conversation_id: conversationId,
+  });
+  if (error) throw settingsError(error);
+  return data || null;
 }
 
 async function hydrateFollowProfiles(client, relationships, idKey) {
@@ -77,7 +231,7 @@ async function hydrateFollowProfiles(client, relationships, idKey) {
       .flatMap((result) => result.data || [])
       .map((profile) => [profile.id, profile]),
   );
-  const onlineIds = await getOnlinePlayerIds(client, ids);
+  const activityById = await getPlayerActivity(client, ids);
   return relationships
     .map((relationship) => profilesById.get(relationship[idKey]))
     .filter(Boolean)
@@ -87,20 +241,21 @@ async function hydrateFollowProfiles(client, relationships, idKey) {
       avatar: profile.avatar_url || null,
       area: profile.home_area || null,
       playerStatus: profile.presence_status || 'free',
-      isOnline: onlineIds.has(profile.id),
+      isOnline: Boolean(activityById.get(profile.id)?.is_online),
+      lastActiveAt: activityById.get(profile.id)?.last_active_at || null,
     }));
 }
 
 // presence_status is only the player's chosen label and defaults to free, so
 // the status dot is shown only for players who are using the app right now.
 // Activity is non-essential: if it cannot load, everyone simply reads offline.
-async function getOnlinePlayerIds(client, ids) {
+async function getPlayerActivity(client, ids) {
   try {
     const { data, error } = await client.rpc('get_player_activity', { p_player_ids: ids });
-    if (error) return new Set();
-    return new Set((data || []).filter((row) => row.is_online).map((row) => row.user_id));
+    if (error) return new Map();
+    return new Map((data || []).map((row) => [row.user_id, row]));
   } catch {
-    return new Set();
+    return new Map();
   }
 }
 
@@ -135,7 +290,33 @@ export async function listFollowerPlayers() {
   return hydrateFollowProfiles(client, data, 'follower_id');
 }
 
+// Friends are players connected both ways: A follows B and B follows A.
+export async function listFriendPlayers() {
+  if (DEMO_MODE) return DEMO_FOLLOWING;
+  const client = requireSupabase();
+  const { data: auth, error: authError } = await client.auth.getUser();
+  if (authError) throw authError;
+  if (!auth.user?.id) return [];
+
+  const [followingResult, followersResult] = await Promise.all([
+    client.from('player_follows')
+      .select('followed_id, created_at')
+      .eq('follower_id', auth.user.id)
+      .order('created_at', { ascending: false }),
+    client.from('player_follows')
+      .select('follower_id')
+      .eq('followed_id', auth.user.id),
+  ]);
+  const error = followingResult.error || followersResult.error;
+  if (error) throw error;
+
+  const followerIds = new Set((followersResult.data || []).map((row) => row.follower_id));
+  const friends = (followingResult.data || []).filter((row) => followerIds.has(row.followed_id));
+  return hydrateFollowProfiles(client, friends, 'followed_id');
+}
+
 export async function listPrivateConnections() {
+  if (DEMO_MODE) return [];
   const client = requireSupabase();
   const { data: auth, error: authError } = await client.auth.getUser();
   if (authError) throw authError;
@@ -189,38 +370,48 @@ export async function findDirectConversation(playerId) {
 export async function listDirectMessages(conversationId) {
   if (DEMO_MODE) return conversationId === DEMO_CONVERSATION_ID ? DEMO_DIRECT_MESSAGES : [];
   const client = requireSupabase();
-  const { data: auth } = await client.auth.getUser();
-  let { data, error } = await client.from('direct_messages')
-    .select(DIRECT_MESSAGE_SELECT)
-    .eq('conversation_id', conversationId)
-    .order('created_at', { ascending: true })
-    .order('id', { ascending: true })
-    .limit(150);
-  if (error && reactionsSchemaMissing(error)) {
-    ({ data, error } = await client.from('direct_messages')
-      .select(DIRECT_MESSAGE_SELECT_BASE)
-      .eq('conversation_id', conversationId)
+  const [{ data: auth }, settings, hiddenIds] = await Promise.all([
+    client.auth.getUser(),
+    getDirectConversationSettings(conversationId),
+    listHiddenDirectMessageIds(client, conversationId),
+  ]);
+  // After "delete for me", only messages newer than the deletion are shown.
+  const query = (select) => {
+    let builder = client.from('direct_messages')
+      .select(select)
+      .eq('conversation_id', conversationId);
+    if (settings.clearedAt) builder = builder.gt('created_at', settings.clearedAt);
+    return builder
       .order('created_at', { ascending: true })
       .order('id', { ascending: true })
-      .limit(150));
-  }
+      .limit(150);
+  };
+  const { data, error } = await selectDirectMessages(query);
   if (error) throw error;
-  return (data || []).map((row) => normalizeDirectMessage(row, auth.user?.id));
+  return (data || [])
+    .filter((row) => !hiddenIds.has(row.id))
+    .map((row) => normalizeDirectMessage(row, auth.user?.id));
+}
+
+// Messages this player deleted for themselves only.
+async function listHiddenDirectMessageIds(client, conversationId) {
+  const { data, error } = await client.from('direct_message_hides')
+    .select('message_id, direct_messages!inner(conversation_id)')
+    .eq('direct_messages.conversation_id', conversationId);
+  if (error) {
+    if (messageSchemaMissing(error)) return new Set();
+    throw error;
+  }
+  return new Set((data || []).map((row) => row.message_id));
 }
 
 export async function getDirectMessage(messageId) {
   const client = requireSupabase();
   const { data: auth } = await client.auth.getUser();
-  let { data, error } = await client.from('direct_messages')
-    .select(DIRECT_MESSAGE_SELECT)
+  const { data, error } = await selectDirectMessages((select) => client.from('direct_messages')
+    .select(select)
     .eq('id', messageId)
-    .maybeSingle();
-  if (error && reactionsSchemaMissing(error)) {
-    ({ data, error } = await client.from('direct_messages')
-      .select(DIRECT_MESSAGE_SELECT_BASE)
-      .eq('id', messageId)
-      .maybeSingle());
-  }
+    .maybeSingle());
   if (error) throw error;
   return normalizeDirectMessage(data, auth.user?.id);
 }
@@ -305,18 +496,24 @@ export async function getPlayerFollowCounts(playerId = null) {
       ]);
       if (followersResult.error) throw followersResult.error;
       if (followingResult.error) throw followingResult.error;
-      return {
-        followers: Number(followersResult.count || 0),
-        following: Number(followingResult.count || 0),
-      };
+      const followers = Number(followersResult.count || 0);
+      const following = Number(followingResult.count || 0);
+      return { followers, following, friends: Math.min(followers, following) };
     }
     throw error;
   }
   const row = Array.isArray(data) ? data[0] : data;
-  return {
-    followers: Number(row?.followers || 0),
-    following: Number(row?.following || 0),
-  };
+  const followers = Number(row?.followers || 0);
+  const following = Number(row?.following || 0);
+  return { followers, following, friends: await getPlayerFriendCount(client, playerId, Math.min(followers, following)) };
+}
+
+// Databases without the friend count RPC fall back to the smaller of the two
+// follow totals, which matches the friend count whenever follows are mutual.
+async function getPlayerFriendCount(client, playerId, fallback) {
+  const { data, error } = await client.rpc('get_player_friend_count', { p_player_id: playerId });
+  if (error) return fallback;
+  return Number((Array.isArray(data) ? data[0] : data) || 0);
 }
 
 async function getPlayerFollowCountsByIds(playerIds) {
@@ -329,10 +526,14 @@ async function getPlayerFollowCountsByIds(playerIds) {
   });
 
   if (!error) {
-    return new Map((data || []).map((row) => [row.player_id, {
-      followers: Number(row.followers || 0),
-      following: Number(row.following || 0),
-    }]));
+    const friendResult = await client.rpc('get_player_friend_counts_batch', { p_player_ids: ids });
+    const friendsById = new Map((friendResult.error ? [] : friendResult.data || [])
+      .map((row) => [row.player_id, Number(row.friends || 0)]));
+    return new Map((data || []).map((row) => {
+      const followers = Number(row.followers || 0);
+      const following = Number(row.following || 0);
+      return [row.player_id, { followers, following, friends: friendsById.get(row.player_id) ?? Math.min(followers, following) }];
+    }));
   }
 
   // Keep upgraded clients compatible with databases that have not received
@@ -436,6 +637,7 @@ export async function listPlayerSuggestions(limit = 8) {
       reason: row.reason || 'Peakle player',
       followers: counts?.followers ?? Number(row.followers || 0),
       following: counts?.following ?? Number(row.following || 0),
+      friends: counts?.friends ?? Math.min(Number(row.followers || 0), Number(row.following || 0)),
       mutuals: Number(row.mutuals || 0),
       followRequestPending: false,
     });
@@ -469,6 +671,27 @@ export async function toggleDirectMessageReaction(messageId, emoji) {
   });
   if (error) throw error;
   return getDirectMessage(messageId);
+}
+
+function deleteError(error) {
+  if (deleteSchemaMissing(error)) return new Error('Deleting messages is not available yet. Please try again after the next update.');
+  return error;
+}
+
+// Delete for everyone: only the sender can unsend, and both players then see
+// "Message unsent" in its place.
+export async function unsendDirectMessage(messageId) {
+  if (DEMO_MODE) return new Date().toISOString();
+  const { data, error } = await requireSupabase().rpc('unsend_direct_message', { p_message_id: messageId });
+  if (error) throw deleteError(error);
+  return data || null;
+}
+
+// Delete for you: hides the message from this player only.
+export async function hideDirectMessage(messageId) {
+  if (DEMO_MODE) return;
+  const { error } = await requireSupabase().rpc('hide_direct_message', { p_message_id: messageId });
+  if (error) throw deleteError(error);
 }
 
 export async function respondDirectMessageRequest(conversationId, accept) {

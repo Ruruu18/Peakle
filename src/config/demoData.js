@@ -287,8 +287,8 @@ export const DEMO_ACTIVITIES = [
 ];
 
 export const DEMO_SUGGESTIONS = [
-  { id: 'p-sam-whitfield', name: 'Sam Whitfield', avatar: null, area: 'Austin, TX', rating: 1587.340, reason: 'Plays near you', followers: 14, following: 9, mutuals: 3, followRequestPending: false },
-  { id: 'p-lena-ostrowski', name: 'Lena Ostrowski', avatar: null, area: 'Austin, TX', rating: 1571.900, reason: 'Similar skill level', followers: 8, following: 12, mutuals: 1, followRequestPending: false },
+  { id: 'p-sam-whitfield', name: 'Sam Whitfield', avatar: null, area: 'Austin, TX', rating: 1587.340, reason: 'Plays near you', followers: 14, following: 9, friends: 9, mutuals: 3, followRequestPending: false },
+  { id: 'p-lena-ostrowski', name: 'Lena Ostrowski', avatar: null, area: 'Austin, TX', rating: 1571.900, reason: 'Similar skill level', followers: 8, following: 12, friends: 8, mutuals: 1, followRequestPending: false },
 ];
 
 export const DEMO_FOLLOWING = [
@@ -296,7 +296,7 @@ export const DEMO_FOLLOWING = [
   { id: 'p-diego-ramirez', name: 'Diego Ramirez', avatar: null, area: 'Austin, TX', playerStatus: 'playing', isOnline: true },
 ];
 
-export const DEMO_FOLLOW_COUNTS = { followers: 22, following: 15 };
+export const DEMO_FOLLOW_COUNTS = { followers: 22, following: 15, friends: 15 };
 
 // ---------------------------------------------------------------------------
 // Nearby players / find match (src/services/nearbyPlayers.js)

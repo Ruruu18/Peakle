@@ -13,3 +13,13 @@ export const COURT_BOOKING_ENABLED = process.env.EXPO_PUBLIC_COURT_BOOKING === '
 
 // The tab that owns event discovery: Explore while booking runs, Schedule otherwise.
 export const DISCOVERY_TAB = COURT_BOOKING_ENABLED ? 'Book' : 'Schedule';
+
+// Organizer tools are not in this beta: players host open games themselves.
+// Venue-run open play, competitions and programs stay hidden from discovery;
+// set EXPO_PUBLIC_ORGANIZER_EVENTS=1 to list them again.
+export const ORGANIZER_EVENTS_ENABLED = process.env.EXPO_PUBLIC_ORGANIZER_EVENTS === '1';
+
+// The ratings hub hides its tab row in the beta. "Find a play" in Play still
+// opens the hub's Find play list, and team challenges open from a team's page.
+// Set EXPO_PUBLIC_HUB_TABS=1 to bring back the Ratings/Find play/Compete tabs.
+export const HUB_TABS_ENABLED = process.env.EXPO_PUBLIC_HUB_TABS === '1';

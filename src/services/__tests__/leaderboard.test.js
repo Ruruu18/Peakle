@@ -1,5 +1,5 @@
 import { requireSupabase } from '../../lib/supabase';
-import { loadLeaderboard } from '../leaderboard';
+import { loadLeaderboard, loadTeamLeaderboard } from '../leaderboard';
 
 jest.mock('../../lib/supabase', () => ({ requireSupabase: jest.fn() }));
 
@@ -253,5 +253,34 @@ describe('loadLeaderboard - format filtering and return shape', () => {
     const result = await loadLeaderboard();
     expect(result.homeArea).toBe('Makati');
     expect(result.user).toMatchObject({ id: 'u1', name: 'Ana', avatar: null, rating: null, verifiedMatches: 0, wins: 0, losses: 0, rank: null });
+  });
+});
+
+describe('loadTeamLeaderboard', () => {
+  it('maps public standings and the caller\'s own teams from the RPC', async () => {
+    const rpc = jest.fn(async () => ({
+      data: {
+        standings: [{ id: 't1', name: 'Dink Dynasty', tag: 'DINK', image_url: 'x.png', location: 'Makati', wins: 5, losses: 1, matches: 6, rank: 1, is_member: true }],
+        mine: [{ id: 't2', name: 'Private Crew', tag: 'PRV', wins: 2, losses: 0, matches: 2, rank: null, is_discoverable: false }],
+      },
+      error: null,
+    }));
+    requireSupabase.mockReturnValue({ rpc });
+
+    const result = await loadTeamLeaderboard();
+
+    expect(rpc).toHaveBeenCalledWith('get_team_leaderboard', { p_limit: 50 });
+    expect(result.standings[0]).toMatchObject({ id: 't1', avatar: 'x.png', area: 'Makati', wins: 5, losses: 1, matches: 6, rank: 1, isMember: true, isPublic: true });
+    expect(result.mine[0]).toMatchObject({ id: 't2', rank: null, isPublic: false, wins: 2 });
+  });
+
+  it('returns empty lists when nobody has results', async () => {
+    requireSupabase.mockReturnValue({ rpc: jest.fn(async () => ({ data: { standings: [], mine: [] }, error: null })) });
+    await expect(loadTeamLeaderboard()).resolves.toEqual({ standings: [], mine: [] });
+  });
+
+  it('surfaces RPC errors', async () => {
+    requireSupabase.mockReturnValue({ rpc: jest.fn(async () => ({ data: null, error: new Error('boom') })) });
+    await expect(loadTeamLeaderboard()).rejects.toThrow('boom');
   });
 });

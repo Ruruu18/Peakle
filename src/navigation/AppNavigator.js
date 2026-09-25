@@ -21,7 +21,8 @@ import PaymentHistoryScreen from '../screens/PaymentHistoryScreen';
 import HelpSupportScreen from '../screens/HelpSupportScreen';
 import SupportChatScreen from '../screens/SupportChatScreen';
 import CommunityChatScreen from '../screens/CommunityChatScreen';
-import { COURT_BOOKING_ENABLED, DISCOVERY_TAB, PRIVATE_MESSAGES_ENABLED } from '../config/features';
+import { COURT_BOOKING_ENABLED, DISCOVERY_TAB, HUB_TABS_ENABLED, PRIVATE_MESSAGES_ENABLED } from '../config/features';
+import { APP_VERSION_LABEL } from '../config/appInfo';
 // Inbox hosts both private messages and community chats (its segments).
 const { DirectChatScreen, InboxScreen } = require('../screens/DirectMessagesScreens');
 import PublicProfileScreen from '../screens/PublicProfileScreen';
@@ -229,7 +230,7 @@ function PeakleTabBar({ state, descriptors, navigation }) {
           return <TabBarItem key={route.key} focused={focused} label={label} onPress={onPress} play={play} routeName={route.name} theme={theme} badge={badge} />;
         })}
       </View>
-      {desktop ? <View dataSet={{ sidebarPart: 'footer' }} style={[styles.sidebarFooter, { borderColor: theme.line }]}><Pressable accessibilityRole="button" accessibilityLabel="Open your profile" onPress={() => guardedNavigate('Profile', { openTab: 'Overview', openTabToken: Date.now() })} style={({ hovered, pressed }) => [styles.sidebarLink, styles.sidebarAccount, (hovered || pressed) && { backgroundColor: theme.background }]}><ProfilePhoto photo={user?.picture || user?.avatar} name={user?.name} size={30} /><Text numberOfLines={1} style={[styles.sidebarLabel, { color: isDark ? '#F3F5EF' : colors.ink }]}>{user?.name?.trim() || 'Your profile'}</Text></Pressable><Pressable accessibilityRole="button" accessibilityLabel="Log out" onPress={() => signOut()} style={({ hovered, pressed }) => [styles.sidebarLink, styles.sidebarLogOut, (hovered || pressed) && { backgroundColor: theme.background }]}><AppIcon name="log-out-outline" size={21} color="#B6472E" /><Text style={[styles.sidebarLabel, { color: '#B6472E' }]}>Log out</Text></Pressable></View> : null}
+      {desktop ? <View dataSet={{ sidebarPart: 'footer' }} style={[styles.sidebarFooter, { borderColor: theme.line }]}><Pressable accessibilityRole="button" accessibilityLabel="Open your profile" onPress={() => guardedNavigate('Profile', { openTab: 'Overview', openTabToken: Date.now() })} style={({ hovered, pressed }) => [styles.sidebarLink, styles.sidebarAccount, (hovered || pressed) && { backgroundColor: theme.background }]}><ProfilePhoto photo={user?.picture || user?.avatar} name={user?.name} size={30} /><Text numberOfLines={1} style={[styles.sidebarLabel, { color: isDark ? '#F3F5EF' : colors.ink }]}>{user?.name?.trim() || 'Your profile'}</Text></Pressable><Pressable accessibilityRole="button" accessibilityLabel="Log out" onPress={() => signOut()} style={({ hovered, pressed }) => [styles.sidebarLink, styles.sidebarLogOut, (hovered || pressed) && { backgroundColor: theme.background }]}><AppIcon name="log-out-outline" size={21} color="#B6472E" /><Text style={[styles.sidebarLabel, { color: '#B6472E' }]}>Log out</Text></Pressable><Text selectable style={[styles.sidebarVersion, { color: isDark ? '#8FA39C' : '#7C8983' }]}>{APP_VERSION_LABEL}</Text></View> : null}
       {ACCOUNT_MENU_NAV ? <AccountMenuSheet onNavigate={guardedNavigate} onSignOut={() => signOut()} /> : null}
       <LeaveMatchDialog
         visible={leaveDialogOpen}
@@ -299,7 +300,7 @@ function PlayerWorkspace({ isDark }) {
       <Tab.Screen name="Play" component={PlayScreen} options={{ lazy: false }} />
       <Tab.Screen name="Team" component={TeamScreen} options={{ tabBarLabel: 'Teams', lazy: false }} />
       <Tab.Screen name="Profile" component={PlayerProfileScreen} options={{ lazy: false }} />
-      <Tab.Screen name="Pickleball" component={PickleballHubScreen} initialParams={Platform.OS === 'web' ? { openTab: 'Compete' } : undefined} />
+      <Tab.Screen name="Pickleball" component={PickleballHubScreen} initialParams={Platform.OS === 'web' ? { openTab: HUB_TABS_ENABLED ? 'Compete' : 'Ratings' } : undefined} />
       <Tab.Screen name="Activities" component={PlayerActivitiesScreen} />
       <Tab.Screen name="ActivityDetails" component={PlayerActivityDetailsScreen} />
       <Tab.Screen name="OpenPlayActivity" component={PlayerOpenPlayRouteScreen} />
@@ -339,6 +340,7 @@ const styles = StyleSheet.create({
   sidebarBadge: { minWidth: 19, paddingHorizontal: 5, paddingVertical: 3, borderRadius: 10, backgroundColor: '#B6472E' },
   sidebarFooter: { marginTop: 'auto', paddingTop: 22, paddingBottom: 16, borderTopWidth: 1 },
   sidebarLogOut: { marginBottom: 14 },
+  sidebarVersion: { marginTop: -6, paddingHorizontal: 12, fontSize: 11, fontWeight: '600' },
   sidebarAccount: { marginBottom: 4, gap: 10 },
   tabOuter: { backgroundColor: 'transparent', paddingHorizontal: 12, paddingTop: 5 },
   tabBar: { height: 76, paddingHorizontal: 5, borderWidth: 1, borderColor: colors.line, borderRadius: 25, flexDirection: 'row', backgroundColor: colors.surface, ...Platform.select({ ios: { shadowColor: colors.ink, shadowOpacity: 0.16, shadowRadius: 24, shadowOffset: { width: 0, height: 10 } }, android: { elevation: 11 } }) },

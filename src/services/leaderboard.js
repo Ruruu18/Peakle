@@ -172,3 +172,48 @@ export async function loadLeaderboard({ format = 'doubles', scope = 'local' } = 
     },
   };
 }
+
+const PREVIEW_TEAMS = [
+  ['Dink Dynasty', 'DINK'], ['Kitchen Kings', 'KTCH'], ['Third Shot Crew', '3RD'], ['Erne Squad', 'ERNE'],
+  ['Baseline Bandits', 'BASE'], ['Net Rushers', 'NET'], ['Drop Zone', 'DROP'], ['Lob City', 'LOB'],
+];
+
+function teamRow(row) {
+  return {
+    id: row.id,
+    name: row.name || 'Peakle team',
+    tag: row.tag || '',
+    avatar: row.image_url || null,
+    area: row.location || '',
+    wins: Number(row.wins || 0),
+    losses: Number(row.losses || 0),
+    matches: Number(row.matches || 0),
+    rank: row.rank == null ? null : Number(row.rank),
+    isMember: Boolean(row.is_member),
+    isPublic: row.is_discoverable !== false,
+  };
+}
+
+function buildPreviewTeamLeaderboard() {
+  const standings = PREVIEW_TEAMS.map(([name, tag], index) => {
+    const matches = 14 - index;
+    const wins = Math.max(1, matches - 2 - index);
+    return teamRow({ id: `preview-team-${index}`, name, tag, wins, losses: matches - wins, matches, rank: index + 1, is_member: index === 2 });
+  });
+  return { standings, mine: [standings[2]] };
+}
+
+/**
+ * Team standings from completed team-challenge matches. Only win–loss totals
+ * of public teams are exposed; the caller's own teams come back in `mine`,
+ * with a null rank when the team is private or has no results yet.
+ */
+export async function loadTeamLeaderboard() {
+  if (DEMO_MODE || DEMO_LEADERBOARD) return buildPreviewTeamLeaderboard();
+  const { data, error } = await requireSupabase().rpc('get_team_leaderboard', { p_limit: PAGE_SIZE });
+  if (error) throw error;
+  return {
+    standings: (data?.standings || []).map(teamRow),
+    mine: (data?.mine || []).map(teamRow),
+  };
+}

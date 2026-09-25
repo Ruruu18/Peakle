@@ -1358,7 +1358,7 @@ export async function listMyMatches({ limit } = {}) {
   const client = requireSupabase();
   const { data: auth } = await client.auth.getSession();
   const userId = auth?.session?.user?.id;
-  let query = client.from('matches').select('*, match_games(*), match_participants(*, profiles(display_name)), venues(name), courts(name)').eq('status', 'completed').order('ended_at', { ascending: false });
+  let query = client.from('matches').select('*, match_games(*), match_participants(*, profiles(display_name, avatar_url)), venues(name), courts(name)').eq('status', 'completed').order('ended_at', { ascending: false });
   if (limit != null) query = query.limit(limit);
   const { data, error } = await query;
   if (error) throw error;
@@ -1370,12 +1370,14 @@ export async function listMyMatches({ limit } = {}) {
     const homeWins = normalizedGames.filter((game) => game.homeScore > game.awayScore).length;
     const awayWins = normalizedGames.filter((game) => game.awayScore > game.homeScore).length;
     const playerName = (player) => player.guest_name || player.profiles?.display_name || 'Player';
-    const opponents = match.match_participants.filter((player) => player.side !== currentSide).sort((a, b) => a.position - b.position).map(playerName).join(' & ');
+    const opponentRows = match.match_participants.filter((player) => player.side !== currentSide).sort((a, b) => a.position - b.position);
+    const opponents = opponentRows.map(playerName).join(' & ');
+    const opponentPlayers = opponentRows.map((player) => ({ name: playerName(player), avatar: player.guest_name ? null : player.profiles?.avatar_url || null }));
     const partnerRow = currentParticipant
       ? match.match_participants.find((player) => player.side === currentSide && player.user_id !== userId && player.position !== currentParticipant.position)
       : match.match_participants.find((player) => player.side === currentSide && player.position === 1);
     const partner = partnerRow ? playerName(partnerRow) : null;
-    return { id: match.id, opponent: opponents || 'Opponent', partner, score: normalizedGames.map((game) => `${game.homeScore}–${game.awayScore}`).join(', '), games: normalizedGames, result: homeWins > awayWins ? 'W' : 'L', date: new Date(match.ended_at).toLocaleDateString('en-US', { month: 'short', day: '2-digit' }).toUpperCase(), endedAt: match.ended_at, startedAt: match.started_at, type: `${match.mode === 'ranked' ? 'Ranked' : 'Casual'} ${match.match_type}`, rating: '—', venue: match.venues ? `${match.venues.name}${match.courts ? ` · ${match.courts.name}` : ''}` : match.court_label ? `${match.court_label}${match.court_area ? ` · ${match.court_area}` : ''}` : 'Unlisted court', duration: match.started_at && match.ended_at ? `${Math.max(1, Math.round((new Date(match.ended_at) - new Date(match.started_at)) / 60000))} min` : '—', longestRally: null, sideOuts: null, serveWon: null, returnWon: null, kitchenWon: null, errors: null, takeaway: homeWins > awayWins ? 'Match completed and recorded.' : 'Review the scoring pattern from this match.', improve: 'Use the score history to plan the next match.' };
+    return { id: match.id, opponent: opponents || 'Opponent', opponentPlayers, partner, score: normalizedGames.map((game) => `${game.homeScore}–${game.awayScore}`).join(', '), games: normalizedGames, result: homeWins > awayWins ? 'W' : 'L', date: new Date(match.ended_at).toLocaleDateString('en-US', { month: 'short', day: '2-digit' }).toUpperCase(), endedAt: match.ended_at, startedAt: match.started_at, type: `${match.mode === 'ranked' ? 'Ranked' : 'Casual'} ${match.match_type}`, rating: '—', venue: match.venues ? `${match.venues.name}${match.courts ? ` · ${match.courts.name}` : ''}` : match.court_label ? `${match.court_label}${match.court_area ? ` · ${match.court_area}` : ''}` : 'Unlisted court', duration: match.started_at && match.ended_at ? `${Math.max(1, Math.round((new Date(match.ended_at) - new Date(match.started_at)) / 60000))} min` : '—', longestRally: null, sideOuts: null, serveWon: null, returnWon: null, kitchenWon: null, errors: null, takeaway: homeWins > awayWins ? 'Match completed and recorded.' : 'Review the scoring pattern from this match.', improve: 'Use the score history to plan the next match.' };
   });
 }
 

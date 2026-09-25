@@ -7,9 +7,11 @@
 @font-face { font-family: "PP Mori"; src: url("/fonts/pp-mori/ppmori-extralightitalic.otf") format("opentype"); font-weight: 200; font-style: italic; font-display: swap; }
 /* PP Mori has no weight above SemiBold, so the 600 face also serves 700–900 styles instead of a browser-faked bold. */
 :root { --font-body: "PP Mori", "Avenir Next", system-ui, sans-serif; color-scheme: light; background: #e5ebe5; font-family: var(--font-body); font-synthesis-weight: none; -webkit-font-smoothing: antialiased; -moz-osx-font-smoothing: grayscale; text-rendering: optimizeLegibility; }
-/* React Native Web gives every Text/TextInput a hard-coded system font through these reset classes.
-   Explicit fontFamily styles (icon fonts) are applied inline, so they still win. */
-[class*="css-text-"], [class*="css-textinput-"] { font-family: var(--font-body); }
+/* React Native Web gives every Text/TextInput a hard-coded system font through its reset classes
+   (hashed in RNW 0.19+: .css-146c3p1 Text, .css-11aywtz TextInput, .r-1qd0xha fontFamily "System").
+   Explicit fontFamily styles (icon fonts) use other atomic classes, so they still win. */
+[class*="css-text-"], [class*="css-textinput-"],
+.css-146c3p1, .css-11aywtz, .r-1qd0xha { font-family: var(--font-body); }
 html, body, #root { margin: 0; width: 100%; height: 100%; }
 body { overflow: hidden; overscroll-behavior: none; }
 button, input, textarea, select { font: inherit; }
@@ -40,8 +42,20 @@ button, input, textarea, select { font: inherit; }
 :focus-visible { outline: 3px solid #1c6b66; outline-offset: 3px; }
 /* Text fields use their existing container and caret, without an extra focus ring. */
 input:not([type="checkbox"]):not([type="radio"]):focus, textarea:focus { outline: none; }
+/* Match the mobile reference: player identity beside an icon-only action dock. */
+[data-desktop-layout="home-header"] { flex-direction: row; align-items: center; gap: 12px; }
+[data-desktop-layout="home-header-profile"] { flex: 1; gap: 12px; }
+[data-desktop-layout="home-header-title"] { min-width: 0; overflow-wrap: anywhere; }
+[data-desktop-layout="home-header-actions"] { gap: 4px; }
+[data-desktop-layout="home-header-action"],
+[data-desktop-layout="home-header-shortcut"] { width: 38px; height: 38px; flex-shrink: 0; flex-direction: row; gap: 8px; }
+[data-desktop-layout="home-header-action-label"] { display: none; }
+[data-desktop-layout="home-header-actions"] [role="button"]:hover { box-shadow: inset 0 0 0 1px #7c898366; }
 /* Match useDesktopLayout's 1024px breakpoint and 224px sidebar. */
 @media (min-width: 1024px) {
+  [data-desktop-layout="home-header"] { gap: 24px; }
+  [data-desktop-layout="home-header-shortcut"] { width: auto; padding-inline: 12px; }
+  [data-desktop-layout="home-header-action-label"] { display: flex; }
   .beta-shell { max-width: none; box-shadow: none; }
   .beta-banner { padding-left: 24px; padding-right: 24px; }
   /* Keep navigation stationary; shrink its spacing to fit shorter desktop windows. */

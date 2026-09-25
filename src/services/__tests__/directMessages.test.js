@@ -10,6 +10,12 @@ import {
   findDirectConversation,
   listDirectMessages,
   getDirectMessage,
+  muteDirectConversation,
+  unmuteDirectConversation,
+  setDirectConversationArchived,
+  deleteDirectConversationForMe,
+  isMuteActive,
+  muteStatusLabel,
   startDirectConversation,
   getDirectMessagePermission,
   getPlayerFollowCounts,
@@ -40,7 +46,7 @@ const MESSAGE_SELECT_FULL = `${MESSAGE_SELECT_BASE}, direct_message_reactions(em
 // { count, error }) result — exactly like the real thenable builder.
 function makeQueryBuilder(result) {
   const builder = {};
-  ['select', 'eq', 'in', 'order', 'limit'].forEach((method) => {
+  ['select', 'eq', 'gt', 'in', 'order', 'limit'].forEach((method) => {
     builder[method] = jest.fn(() => builder);
   });
   builder.maybeSingle = jest.fn(() => Promise.resolve(result));
@@ -167,17 +173,94 @@ describe('normalizeDirectMessage', () => {
 });
 
 describe('listDirectConversations', () => {
-  it('maps every row returned by the RPC', async () => {
-    const client = { rpc: jest.fn(async () => ({ data: [{ conversation_id: 'c1' }, { conversation_id: 'c2' }], error: null })) };
+  const withSettings = (rows, settings = { data: [], error: null }) => {
+    const client = makeClient();
+    client.rpc.mockResolvedValue({ data: rows, error: null });
+    client.from.mockReturnValue(makeQueryBuilder(settings));
     requireSupabase.mockReturnValue(client);
+    return client;
+  };
+
+  it('maps every row returned by the RPC', async () => {
+    const client = withSettings([{ conversation_id: 'c1' }, { conversation_id: 'c2' }]);
     const result = await listDirectConversations();
     expect(client.rpc).toHaveBeenCalledWith('list_direct_conversations');
+    expect(client.from).toHaveBeenCalledWith('direct_conversation_settings');
     expect(result.map((c) => c.id)).toEqual(['c1', 'c2']);
+    expect(result[0]).toEqual(expect.objectContaining({ archived: false, deleted: false, muted: false }));
   });
 
   it('propagates an RPC error', async () => {
-    requireSupabase.mockReturnValue({ rpc: jest.fn(async () => ({ data: null, error: new Error('boom') })) });
+    const client = withSettings(null);
+    client.rpc.mockResolvedValue({ data: null, error: new Error('boom') });
     await expect(listDirectConversations()).rejects.toThrow('boom');
+  });
+
+  it('applies archive, delete-for-me, and mute until a newer message arrives', async () => {
+    withSettings([
+      { conversation_id: 'archived', last_created_at: '2026-09-26T08:00:00Z' },
+      { conversation_id: 'revived', last_created_at: '2026-09-26T09:00:00Z' },
+      { conversation_id: 'deleted', last_created_at: '2026-09-26T08:00:00Z' },
+      { conversation_id: 'muted', last_created_at: '2026-09-26T08:00:00Z' },
+    ], {
+      data: [
+        { conversation_id: 'archived', archived_at: '2026-09-26T08:30:00Z' },
+        { conversation_id: 'revived', archived_at: '2026-09-26T08:30:00Z', cleared_at: '2026-09-26T08:30:00Z' },
+        { conversation_id: 'deleted', cleared_at: '2026-09-26T08:30:00Z' },
+        { conversation_id: 'muted', muted_until: 'infinity' },
+      ],
+      error: null,
+    });
+    const result = await listDirectConversations();
+    const byId = Object.fromEntries(result.map((c) => [c.id, c]));
+    expect(Object.keys(byId)).toEqual(['archived', 'revived', 'muted']);
+    expect(byId.archived.archived).toBe(true);
+    expect(byId.revived.archived).toBe(false);
+    expect(byId.muted.muted).toBe(true);
+  });
+
+  it('treats a missing settings table as no settings', async () => {
+    withSettings([{ conversation_id: 'c1' }], { data: null, error: { code: '42P01' } });
+    await expect(listDirectConversations()).resolves.toEqual([expect.objectContaining({ id: 'c1', archived: false })]);
+  });
+});
+
+describe('conversation inbox controls', () => {
+  it('mutes for a number of minutes, or until turned back on', async () => {
+    const client = makeClient();
+    client.rpc.mockResolvedValue({ data: '2026-09-26T09:00:00Z', error: null });
+    requireSupabase.mockReturnValue(client);
+    await muteDirectConversation('c1', 15);
+    expect(client.rpc).toHaveBeenCalledWith('set_direct_conversation_muted', { p_conversation_id: 'c1', p_muted: true, p_minutes: 15 });
+    await muteDirectConversation('c1');
+    expect(client.rpc).toHaveBeenLastCalledWith('set_direct_conversation_muted', { p_conversation_id: 'c1', p_muted: true, p_minutes: null });
+    await unmuteDirectConversation('c1');
+    expect(client.rpc).toHaveBeenLastCalledWith('set_direct_conversation_muted', { p_conversation_id: 'c1', p_muted: false });
+  });
+
+  it('archives and deletes through their RPCs', async () => {
+    const client = makeClient();
+    client.rpc.mockResolvedValue({ data: 'now', error: null });
+    requireSupabase.mockReturnValue(client);
+    await setDirectConversationArchived('c1', true);
+    expect(client.rpc).toHaveBeenCalledWith('set_direct_conversation_archived', { p_conversation_id: 'c1', p_archived: true });
+    await deleteDirectConversationForMe('c1');
+    expect(client.rpc).toHaveBeenLastCalledWith('delete_direct_conversation_for_me', { p_conversation_id: 'c1' });
+  });
+
+  it('explains when the backend has not been updated yet', async () => {
+    requireSupabase.mockReturnValue({ rpc: jest.fn(async () => ({ data: null, error: { code: 'PGRST202' } })) });
+    await expect(deleteDirectConversationForMe('c1')).rejects.toThrow('not available yet');
+  });
+
+  it('reads mute state, including mutes that never expire', () => {
+    const now = Date.parse('2026-09-26T08:00:00Z');
+    expect(isMuteActive(null, now)).toBe(false);
+    expect(isMuteActive('infinity', now)).toBe(true);
+    expect(isMuteActive('2026-09-26T08:15:00Z', now)).toBe(true);
+    expect(isMuteActive('2026-09-26T07:59:00Z', now)).toBe(false);
+    expect(muteStatusLabel('infinity', now)).toBe('Muted until you turn it back on');
+    expect(muteStatusLabel('2026-09-26T07:59:00Z', now)).toBeNull();
   });
 });
 
@@ -214,7 +297,7 @@ describe('listFollowingPlayers / listFollowerPlayers (follow-graph hydration)', 
       error: null,
     });
     client.from.mockReturnValueOnce(relationships).mockReturnValueOnce(profiles);
-    client.rpc.mockResolvedValueOnce({ data: [{ user_id: 'p1', is_online: true }, { user_id: 'p2', is_online: false }], error: null });
+    client.rpc.mockResolvedValueOnce({ data: [{ user_id: 'p1', is_online: true }, { user_id: 'p2', is_online: false, last_active_at: '2026-09-26T08:00:00Z' }], error: null });
     requireSupabase.mockReturnValue(client);
 
     const result = await listFollowingPlayers();
@@ -226,8 +309,8 @@ describe('listFollowingPlayers / listFollowerPlayers (follow-graph hydration)', 
     // Relationship order is preserved (p2, p1, p2), each hydrated to a profile.
     expect(client.rpc).toHaveBeenCalledWith('get_player_activity', { p_player_ids: ['p2', 'p1'] });
     expect(result.map((p) => p.id)).toEqual(['p2', 'p1', 'p2']);
-    expect(result[0]).toEqual({ id: 'p2', name: 'Peakle player', avatar: null, area: null, playerStatus: 'free', isOnline: false });
-    expect(result[1]).toEqual({ id: 'p1', name: 'Alex', avatar: 'a.png', area: 'BGC', playerStatus: 'playing', isOnline: true });
+    expect(result[0]).toEqual({ id: 'p2', name: 'Peakle player', avatar: null, area: null, playerStatus: 'free', isOnline: false, lastActiveAt: '2026-09-26T08:00:00Z' });
+    expect(result[1]).toEqual({ id: 'p1', name: 'Alex', avatar: 'a.png', area: 'BGC', playerStatus: 'playing', isOnline: true, lastActiveAt: null });
   });
 
   it('follower_id is used as the relationship key for listFollowerPlayers', async () => {
@@ -241,7 +324,7 @@ describe('listFollowingPlayers / listFollowerPlayers (follow-graph hydration)', 
     expect(relationships.eq).toHaveBeenCalledWith('followed_id', 'me');
     expect(profiles.in).toHaveBeenCalledWith('id', ['p9']);
     // Activity lookup failures leave players offline instead of failing the list.
-    expect(result).toEqual([{ id: 'p9', name: 'Sam', avatar: null, area: null, playerStatus: 'free', isOnline: false }]);
+    expect(result).toEqual([{ id: 'p9', name: 'Sam', avatar: null, area: null, playerStatus: 'free', isOnline: false, lastActiveAt: null }]);
   });
 
   it('propagates a profile-lookup error', async () => {
@@ -350,11 +433,13 @@ describe('listDirectMessages (reactions-schema fallback)', () => {
       data: [{ id: 'm1', sender_id: 'me', body: 'hi', created_at: '2026-08-10T12:00:00Z' }],
       error: null,
     });
-    client.from.mockReturnValueOnce(builder);
+    client.from.mockReturnValueOnce(makeQueryBuilder({ data: null, error: null })).mockReturnValueOnce(builder);
     requireSupabase.mockReturnValue(client);
 
     const result = await listDirectMessages('c1');
-    expect(client.from).toHaveBeenCalledTimes(1);
+    expect(client.from).toHaveBeenNthCalledWith(1, 'direct_conversation_settings');
+    expect(client.from).toHaveBeenCalledTimes(2);
+    expect(builder.gt).not.toHaveBeenCalled();
     expect(builder.select).toHaveBeenCalledWith(MESSAGE_SELECT_FULL);
     expect(builder.eq).toHaveBeenCalledWith('conversation_id', 'c1');
     expect(builder.limit).toHaveBeenCalledWith(150);
@@ -368,11 +453,11 @@ describe('listDirectMessages (reactions-schema fallback)', () => {
       data: [{ id: 'm1', sender_id: 'p1', body: 'hi', created_at: '2026-08-10T12:00:00Z' }],
       error: null,
     });
-    client.from.mockReturnValueOnce(failing).mockReturnValueOnce(fallback);
+    client.from.mockReturnValueOnce(makeQueryBuilder({ data: null, error: null })).mockReturnValueOnce(failing).mockReturnValueOnce(fallback);
     requireSupabase.mockReturnValue(client);
 
     const result = await listDirectMessages('c1');
-    expect(client.from).toHaveBeenCalledTimes(2);
+    expect(client.from).toHaveBeenCalledTimes(3);
     expect(fallback.select).toHaveBeenCalledWith(MESSAGE_SELECT_BASE);
     expect(fallback.eq).toHaveBeenCalledWith('conversation_id', 'c1');
     expect(result[0].reactions).toEqual([]);
@@ -382,19 +467,30 @@ describe('listDirectMessages (reactions-schema fallback)', () => {
     const client = makeClient();
     const failing = makeQueryBuilder({ data: null, error: { code } });
     const fallback = makeQueryBuilder({ data: [], error: null });
-    client.from.mockReturnValueOnce(failing).mockReturnValueOnce(fallback);
+    client.from.mockReturnValueOnce(makeQueryBuilder({ data: null, error: null })).mockReturnValueOnce(failing).mockReturnValueOnce(fallback);
     requireSupabase.mockReturnValue(client);
     await expect(listDirectMessages('c1')).resolves.toEqual([]);
-    expect(client.from).toHaveBeenCalledTimes(2);
+    expect(client.from).toHaveBeenCalledTimes(3);
   });
 
   it('throws immediately on a real error without attempting the fallback', async () => {
     const client = makeClient();
     const failing = makeQueryBuilder({ data: null, error: new Error('rls denied') });
-    client.from.mockReturnValueOnce(failing);
+    client.from.mockReturnValueOnce(makeQueryBuilder({ data: null, error: null })).mockReturnValueOnce(failing);
     requireSupabase.mockReturnValue(client);
     await expect(listDirectMessages('c1')).rejects.toThrow('rls denied');
-    expect(client.from).toHaveBeenCalledTimes(1);
+    expect(client.from).toHaveBeenCalledTimes(2);
+  });
+
+  it('only loads messages newer than a delete-for-me', async () => {
+    const client = makeClient();
+    const settings = makeQueryBuilder({ data: { cleared_at: '2026-09-26T08:00:00Z' }, error: null });
+    const builder = makeQueryBuilder({ data: [], error: null });
+    client.from.mockReturnValueOnce(settings).mockReturnValueOnce(builder);
+    requireSupabase.mockReturnValue(client);
+    await listDirectMessages('c1');
+    expect(settings.eq).toHaveBeenCalledWith('conversation_id', 'c1');
+    expect(builder.gt).toHaveBeenCalledWith('created_at', '2026-09-26T08:00:00Z');
   });
 
   it('still throws when the fallback query itself errors', async () => {

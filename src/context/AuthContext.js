@@ -30,6 +30,8 @@ const LAST_SIGN_IN_METHOD_KEY = '@peakle/last-selected-sign-in-method';
 const REMEMBERED_EMAIL_KEY = '@peakle/remembered-email';
 const ONBOARDING_SAVE_TIMEOUT_MS = 15000;
 const AUTH_STARTUP_TIMEOUT_MS = 8000;
+// Serializes activity check-ins across provider remounts; see the heartbeat effect.
+let activityQueue = Promise.resolve();
 const userCacheKey = (userId) => `@peakle/cache/auth-user/${userId}`;
 
 export function mapUser(authUser, profile, isAdmin = false) {
@@ -382,26 +384,34 @@ export function AuthProvider({ children }) {
   // Report real app activity so followers see a status dot only while this
   // player is using Peakle. The server also treats a check-in older than five
   // minutes as offline, covering apps closed without a background event.
+  // Check-ins are sent one at a time so a quick leave-and-return (or an effect
+  // remount) cannot land "inactive" after "active" and show an online player
+  // as last active a minute ago. The one-minute heartbeat also repairs the
+  // flag quickly when another device or tab of the same account goes idle.
   useEffect(() => {
     if (!supabase || !user?.id) return undefined;
     const touch = (isActive) => {
-      supabase.rpc('touch_player_activity', { p_active: isActive }).then(() => {}, () => {});
+      activityQueue = activityQueue
+        .then(() => supabase.rpc('touch_player_activity', { p_active: isActive }))
+        .then(() => {}, () => {});
     };
     let timer = null;
     const start = () => {
       touch(true);
       clearInterval(timer);
-      timer = setInterval(() => touch(true), 2 * 60 * 1000);
+      timer = setInterval(() => touch(true), 60 * 1000);
     };
     const stop = () => {
       clearInterval(timer);
       timer = null;
       touch(false);
     };
-    if (AppState.currentState === 'active') start();
+    if (AppState.currentState !== 'background') start();
+    // iOS reports "inactive" for the app switcher, Control Center and system
+    // prompts while Peakle is still on screen, so only "background" counts.
     const appState = AppState.addEventListener('change', (nextState) => {
       if (nextState === 'active') start();
-      else if (timer) stop();
+      else if (nextState === 'background' && timer) stop();
     });
     return () => {
       appState.remove();

@@ -114,7 +114,7 @@ const ACCENT_INK_STYLES = new Set([
   'openPlayRallyNameAccent', 'openPlayRallyActionAccent', 'openPlayFinishText',
   'openPlayPlayFinishText', 'liveMatchPillText', 'resultPrimaryActionText',
   'bookCourtButtonText', 'primaryText', 'posterMatchBadgeText', 'tailTextWon',
-  'payNowText'
+  'payNowText', 'clubWarsBadgeText'
 ]);
 
 // Active switches keep the brighter yellow-green brand accent in dark mode.
