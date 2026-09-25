@@ -185,7 +185,7 @@ function PeakleTabBar({ state, descriptors, navigation }) {
   };
   return (
     <View dataSet={Platform.OS === 'web' ? { playerNavigation: desktop ? 'sidebar' : 'bottom' } : undefined} style={[styles.tabOuter, { paddingBottom: Math.max(insets.bottom, 9), backgroundColor: theme.background }, desktop && [styles.sidebar, { backgroundColor: theme.surface, borderColor: theme.line }]]}>
-      {desktop ? <View style={styles.sidebarBrand}><Image source={BALL_IMAGE} style={[styles.sidebarLogo, { tintColor: isDark ? colors.optic : colors.ink }]} /><Text style={[styles.sidebarWordmark, { color: isDark ? '#F3F5EF' : colors.ink }]}>Peakle</Text><Text style={styles.sidebarBeta}>BETA</Text></View> : null}
+      {desktop ? <View dataSet={{ sidebarPart: 'brand' }} style={styles.sidebarBrand}><Image source={BALL_IMAGE} style={[styles.sidebarLogo, { tintColor: isDark ? colors.optic : colors.ink }]} /><Text style={[styles.sidebarWordmark, { color: isDark ? '#F3F5EF' : colors.ink }]}>Peakle</Text><Text style={styles.sidebarBeta}>BETA</Text></View> : null}
       <View accessibilityRole={desktop ? 'navigation' : undefined} accessibilityLabel={desktop ? 'Main navigation' : undefined} style={[styles.tabBar, { backgroundColor: theme.surface, borderColor: theme.line }, desktop && styles.sidebarLinks]}>
         {visibleRoutes.map((route) => {
           const routeFocused = currentRoute.key === route.key;
@@ -224,7 +224,7 @@ function PeakleTabBar({ state, descriptors, navigation }) {
           return <TabBarItem key={route.key} focused={focused} label={label} onPress={onPress} play={play} routeName={route.name} theme={theme} badge={badge} />;
         })}
       </View>
-      {desktop ? <View style={[styles.sidebarFooter, { borderColor: theme.line }]}><Pressable accessibilityRole="button" accessibilityLabel="Open your profile" onPress={() => guardedNavigate('Profile', { openTab: 'Overview', openTabToken: Date.now() })} style={({ hovered, pressed }) => [styles.sidebarLink, styles.sidebarAccount, (hovered || pressed) && { backgroundColor: theme.background }]}><ProfilePhoto photo={user?.picture || user?.avatar} name={user?.name} size={30} /><Text numberOfLines={1} style={[styles.sidebarLabel, { color: isDark ? '#F3F5EF' : colors.ink }]}>{user?.name?.trim() || 'Your profile'}</Text></Pressable><Pressable accessibilityRole="button" accessibilityLabel="Log out" onPress={() => signOut()} style={({ hovered, pressed }) => [styles.sidebarLink, styles.sidebarLogOut, (hovered || pressed) && { backgroundColor: theme.background }]}><AppIcon name="log-out-outline" size={21} color="#B6472E" /><Text style={[styles.sidebarLabel, { color: '#B6472E' }]}>Log out</Text></Pressable><Text style={[styles.sidebarFootnote, { color: theme.muted }]}>Your community. Your court.</Text></View> : null}
+      {desktop ? <View dataSet={{ sidebarPart: 'footer' }} style={[styles.sidebarFooter, { borderColor: theme.line }]}><Pressable accessibilityRole="button" accessibilityLabel="Open your profile" onPress={() => guardedNavigate('Profile', { openTab: 'Overview', openTabToken: Date.now() })} style={({ hovered, pressed }) => [styles.sidebarLink, styles.sidebarAccount, (hovered || pressed) && { backgroundColor: theme.background }]}><ProfilePhoto photo={user?.picture || user?.avatar} name={user?.name} size={30} /><Text numberOfLines={1} style={[styles.sidebarLabel, { color: isDark ? '#F3F5EF' : colors.ink }]}>{user?.name?.trim() || 'Your profile'}</Text></Pressable><Pressable accessibilityRole="button" accessibilityLabel="Log out" onPress={() => signOut()} style={({ hovered, pressed }) => [styles.sidebarLink, styles.sidebarLogOut, (hovered || pressed) && { backgroundColor: theme.background }]}><AppIcon name="log-out-outline" size={21} color="#B6472E" /><Text style={[styles.sidebarLabel, { color: '#B6472E' }]}>Log out</Text></Pressable></View> : null}
       {ACCOUNT_MENU_NAV ? <AccountMenuSheet onNavigate={guardedNavigate} onSignOut={() => signOut()} /> : null}
       <LeaveMatchDialog
         visible={leaveDialogOpen}
@@ -320,7 +320,7 @@ export default function AppNavigator() {
 }
 
 const styles = StyleSheet.create({
-  sidebar: { width: DESKTOP_SIDEBAR_WIDTH, height: '100%', paddingHorizontal: 16, paddingTop: 28, borderRightWidth: 1, overflow: 'auto' },
+  sidebar: { width: DESKTOP_SIDEBAR_WIDTH, height: '100%', paddingHorizontal: 16, paddingTop: 28, borderRightWidth: 1 },
   sidebarBrand: { flexDirection: 'row', alignItems: 'center', gap: 8, paddingHorizontal: 8, marginBottom: 34 },
   sidebarLogo: { width: 30, height: 30 },
   sidebarWordmark: { fontSize: 26, fontWeight: '900', letterSpacing: -1 },
@@ -332,7 +332,6 @@ const styles = StyleSheet.create({
   sidebarFooter: { marginTop: 'auto', paddingTop: 22, paddingBottom: 16, borderTopWidth: 1 },
   sidebarLogOut: { marginBottom: 14 },
   sidebarAccount: { marginBottom: 4, gap: 10 },
-  sidebarFootnote: { fontSize: 11, lineHeight: 17, textAlign: 'center' },
   tabOuter: { backgroundColor: 'transparent', paddingHorizontal: 12, paddingTop: 5 },
   tabBar: { height: 76, paddingHorizontal: 5, borderWidth: 1, borderColor: colors.line, borderRadius: 25, flexDirection: 'row', backgroundColor: colors.surface, ...Platform.select({ ios: { shadowColor: colors.ink, shadowOpacity: 0.16, shadowRadius: 24, shadowOffset: { width: 0, height: 10 } }, android: { elevation: 11 } }) },
   tabItem: { flex: 1, alignItems: 'center', justifyContent: 'center' },
