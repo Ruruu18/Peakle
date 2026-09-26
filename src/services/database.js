@@ -4,6 +4,7 @@ import * as Crypto from 'expo-crypto';
 import * as ImageManipulator from 'expo-image-manipulator';
 import { requireSupabase } from '../lib/supabase';
 import { cleanCourtText, courtLabel } from './playCourts';
+import { announcePlayerStatusChange } from './playerStatus';
 import { DEMO_MODE } from '../config/demoMode';
 import {
   DEMO_VENUE_ROWS, DEMO_QUOTE, DEMO_TEAMS, DEMO_MATCHES, DEMO_TEAM_ID,
@@ -1004,9 +1005,12 @@ export async function getChatSafetyStatus() {
 }
 
 export async function acknowledgeChatSafety(isAdult) {
-  const { data, error } = await requireSupabase().rpc('acknowledge_chat_safety', { p_is_adult: Boolean(isAdult) });
+  const client = requireSupabase();
+  const { data, error } = await client.rpc('acknowledge_chat_safety', { p_is_adult: Boolean(isAdult) });
   if (error) throw error;
   const status = Array.isArray(data) ? data[0] : data;
+  // Players waiting on this account's chat gate can re-check right away.
+  announcePlayerStatusChange();
   return {
     acknowledged: Boolean(status?.acknowledged),
     isAdult: Boolean(status?.is_adult),

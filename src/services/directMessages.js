@@ -5,6 +5,7 @@ import {
   DEMO_SUGGESTIONS, DEMO_FOLLOWING, DEMO_FOLLOW_COUNTS,
 } from '../config/demoData';
 import { uploadChatMedia } from './database';
+import { announcePlayerStatusChange } from './playerStatus';
 
 const DIRECT_MEDIA_BUCKET = 'direct-message-media';
 
@@ -625,6 +626,7 @@ export async function followPlayer(playerId) {
     p_player_id: playerId,
   });
   if (error) throw error;
+  announcePlayerStatusChange(playerId);
   const permission = await getDirectMessagePermission(playerId);
   return { ...permission, followRequestPending: !permission?.isFollowing };
 }
@@ -634,6 +636,7 @@ export async function unfollowPlayer(playerId) {
     p_player_id: playerId,
   });
   if (error) throw error;
+  announcePlayerStatusChange(playerId);
   return getDirectMessagePermission(playerId);
 }
 
@@ -670,6 +673,7 @@ export async function respondFollowRequest(requesterId, accept) {
     p_accept: Boolean(accept),
   });
   if (error) throw error;
+  announcePlayerStatusChange(requesterId);
   return Boolean(data);
 }
 

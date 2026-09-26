@@ -39,6 +39,7 @@ import {
   listTeamConversationSummaries,
   listTeams,
 } from '../services/database';
+import { subscribePlayerStatus } from '../services/playerStatus';
 import { listMyCommunityChats } from '../services/communityChat';
 import { ACCOUNT_MENU_NAV, HeaderAvatar } from '../components/AccountMenu';
 import {
@@ -701,7 +702,9 @@ export function InboxScreen({ navigation }) {
       .on('postgres_changes', { event: '*', schema: 'public', table: 'direct_messages' }, refresh)
       .on('postgres_changes', { event: '*', schema: 'public', table: 'direct_conversation_reads' }, refresh)
       .subscribe();
-    return () => { clearTimeout(refreshTimer); supabase.removeChannel(channel); };
+    // Follows are not in realtime, so players who follow or accept us ping here.
+    const unsubscribeStatus = subscribePlayerStatus(user.id, refresh);
+    return () => { clearTimeout(refreshTimer); supabase.removeChannel(channel); unsubscribeStatus(); };
   }, [loadInbox, user?.id]);
 
   const incomingRequests = directConversations.filter((item) => item.status === 'pending' && item.requesterId !== user?.id);
@@ -1359,8 +1362,10 @@ function DirectChatConversation({ route, navigation }) {
     refreshMessagePermission();
     if (!awaitingRelationship) return undefined;
     const timer = setInterval(refreshMessagePermission, 15000);
-    return () => clearInterval(timer);
-  }, [awaitingRelationship, refreshMessagePermission]));
+    // The peer confirming 18+ or following back pings their status topic.
+    const unsubscribe = subscribePlayerStatus(routePlayer?.id, refreshMessagePermission);
+    return () => { clearInterval(timer); unsubscribe(); };
+  }, [awaitingRelationship, refreshMessagePermission, routePlayer?.id]));
   const sendTyping = useCallback((isTyping) => {
     if (!conversationId || conversation?.status !== 'accepted' || !channelRef.current) return;
     channelRef.current.send({ type: 'broadcast', event: 'typing', payload: { userId: user?.id, isTyping } }).catch(() => {});
