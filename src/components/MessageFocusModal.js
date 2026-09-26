@@ -122,7 +122,7 @@ export default function MessageFocusModal({ visible, mine, dark, reactions, sele
     <Modal visible transparent animationType="none" statusBarTranslucent onRequestClose={onClose}>
       <Animated.View style={[styles.backdrop, ANDROID_WEB && styles.backdropFlat, { opacity: appear, backgroundColor: ANDROID_WEB ? palette.flatTint : palette.tint }]}>
         <Pressable accessibilityLabel="Close message actions" onPress={onClose} style={StyleSheet.absoluteFillObject} />
-        <ScrollView pointerEvents="box-none" style={styles.stage} contentContainerStyle={[styles.stageContent, desktop && styles.stageDesktop]} showsVerticalScrollIndicator={false}>
+        <ScrollView style={[styles.stage, { pointerEvents: 'box-none' }]} contentContainerStyle={[styles.stageContent, desktop && styles.stageDesktop]} showsVerticalScrollIndicator={false}>
           <Pressable accessible={false} focusable={false} onPress={onClose} style={StyleSheet.absoluteFillObject} />
           <Animated.View ref={pillRef} {...pan.panHandlers} style={[styles.pill, side, { backgroundColor: palette.pill }, rise(10)]}>
             {reactions.map((emoji, index) => {
@@ -134,7 +134,7 @@ export default function MessageFocusModal({ visible, mine, dark, reactions, sele
               );
             })}
           </Animated.View>
-          <Animated.View pointerEvents="none" style={[styles.preview, side, { opacity: appear }]}>{children}</Animated.View>
+          <Animated.View style={[styles.preview, side, { opacity: appear }, { pointerEvents: 'none' }]}>{children}</Animated.View>
           <Animated.View style={[styles.menu, side, { backgroundColor: palette.menu }, rise(14)]}>
             {actions.map((action, index) => (
               <View key={action.key}>

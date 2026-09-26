@@ -46,8 +46,7 @@ export default function PeakleLoadingOverlay({ visible, status, minimumVisibleMs
     <Animated.View
       accessibilityElementsHidden={!visible}
       importantForAccessibility={visible ? 'yes' : 'no-hide-descendants'}
-      pointerEvents={visible ? 'auto' : 'none'}
-      style={[styles.overlay, desktop && styles.desktopOverlay, { opacity }]}
+      style={[styles.overlay, desktop && styles.desktopOverlay, { opacity }, { pointerEvents: visible ? 'auto' : 'none' }]}
     >
       <PeakleLoadingScreen status={status} />
     </Animated.View>

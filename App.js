@@ -151,7 +151,7 @@ function LaunchScreen({ edition = 'player', fromEdition = null, overlay = false,
     <Animated.View accessibilityLabel="Peakle is starting" accessibilityViewIsModal={overlay} style={[styles.launchScreen, overlay && styles.launchScreenOverlay, { opacity: screenOpacity }]}>
       <View style={styles.launchBallStage}>
         <Animated.View style={[styles.launchBallShadow, shadowStyle]} />
-        <Animated.View pointerEvents="none" style={[styles.launchMotionTrails, trailStyle]}>
+        <Animated.View style={[styles.launchMotionTrails, trailStyle, { pointerEvents: 'none' }]}>
           <View style={styles.launchMotionLineShort} />
           <View style={styles.launchMotionLineTall} />
         </Animated.View>

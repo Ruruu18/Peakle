@@ -2,6 +2,7 @@ import React, { useId } from 'react';
 import { StyleSheet, Text, View } from 'react-native';
 import Svg, { Defs, Ellipse, LinearGradient, Path, Polygon, RadialGradient, Stop } from 'react-native-svg';
 import ProfilePhoto from './ProfilePhoto';
+import { dropShadow } from '../utils/shadow';
 
 const LIGHT = {
   ink: '#0E2321', muted: '#65716B', ring: '#C4D5CA', avatar: '#F7F8F5',
@@ -31,7 +32,7 @@ function Crown() {
 
 function StageFloor({ palette, id }) {
   return (
-    <View pointerEvents="none" aria-hidden accessibilityElementsHidden importantForAccessibility="no-hide-descendants" style={styles.floor}>
+    <View aria-hidden accessibilityElementsHidden importantForAccessibility="no-hide-descendants" style={[styles.floor, { pointerEvents: 'none' }]}>
       <Svg width="100%" height="100%" viewBox="0 0 520 70" preserveAspectRatio="none">
         <Defs>
           <LinearGradient id={`${id}-floor`} x1="0%" y1="0%" x2="0%" y2="100%">
@@ -137,7 +138,7 @@ export default function LeaderboardPodium({ players, currentUserId, isDark, wide
   return (
     <View testID="leaderboard-podium" style={styles.container}>
       <View style={[styles.stage, wide && styles.stageWide]}>
-        <View pointerEvents="none" aria-hidden accessibilityElementsHidden importantForAccessibility="no-hide-descendants" style={styles.spotlight}>
+        <View aria-hidden accessibilityElementsHidden importantForAccessibility="no-hide-descendants" style={[styles.spotlight, { pointerEvents: 'none' }]}>
           <Svg width="100%" height="100%" viewBox="0 0 520 340" preserveAspectRatio="none">
             <Defs>
               <RadialGradient id={`${id}-glow`} cx="50%" cy="50%" rx="50%" ry="50%">
@@ -173,7 +174,7 @@ const styles = StyleSheet.create({
   identityWide: { paddingHorizontal: 5, paddingBottom: 16 },
   crown: { position: 'absolute', top: -28, alignSelf: 'center' },
   avatarRing: { padding: 4, borderWidth: 1, borderRadius: 50 },
-  championRing: { shadowColor: '#758B26', shadowOffset: { width: 0, height: 4 }, shadowOpacity: 0.18, shadowRadius: 9 },
+  championRing: { ...dropShadow({ color: '#758B26', opacity: 0.18, radius: 9, y: 4 }) },
   name: { width: '100%', marginTop: 9, minHeight: 32, textAlign: 'center', fontSize: 12, lineHeight: 16, fontWeight: '600' },
   nameWide: { fontSize: 14, lineHeight: 19, minHeight: 38 },
   rating: { marginTop: 4, fontSize: 19, lineHeight: 24, fontWeight: '700', letterSpacing: -0.6, fontVariant: ['tabular-nums'] },

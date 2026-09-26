@@ -345,7 +345,7 @@ export default function ChatCamera({ visible, onClose, onCapture, onLibrary, onS
             <Text style={styles.hint}>{recording ? 'Release to stop' : 'Tap for photo, hold for video'}</Text>
           )}
         </View>
-        {screenFlash ? <View pointerEvents="none" style={styles.screenFlash} /> : null}
+        {screenFlash ? <View style={[styles.screenFlash, { pointerEvents: 'none' }]} /> : null}
       </View>
       {!IS_WEB ? <ChatGalleryPicker visible={galleryOpen} onClose={() => setGalleryOpen(false)} onSend={sendFromGallery} /> : null}
     </Modal>

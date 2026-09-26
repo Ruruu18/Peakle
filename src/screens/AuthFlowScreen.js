@@ -55,7 +55,7 @@ function Wordmark({ light = false, flush = false }) {
   return (
     <View style={[styles.wordmark, !flush && styles.wordmarkOffset]}>
       <View style={[styles.mark, { width: 26, height: 26, borderRadius: 13, borderBottomLeftRadius: 13, borderBottomRightRadius: 13, backgroundColor: C.optic, alignItems: 'center', justifyContent: 'center', overflow: 'hidden' }]}>
-        <Image source={require('../../public/images/ball.png')} style={{ width: 26, height: 26, tintColor: C.ink, position: 'absolute' }} resizeMode="cover" />
+        <Image source={require('../../public/images/ball.png')} style={{ width: 26, height: 26, position: 'absolute' }} tintColor={C.ink} resizeMode="cover" />
       </View>
       <Text style={[styles.word, light && styles.wordLight, { fontSize: 21 }]}>Peakle</Text>
     </View>
@@ -298,7 +298,7 @@ function Field({ label, icon, error, dark = false, onFocus, onBlur, secureTextEn
 }
 
 function LastUsedBadge() {
-  return <View pointerEvents="none" accessibilityElementsHidden importantForAccessibility="no-hide-descendants" style={styles.lastUsedBadge}><Text style={styles.lastUsedBadgeText}>Last used</Text></View>;
+  return <View accessibilityElementsHidden importantForAccessibility="no-hide-descendants" style={[styles.lastUsedBadge, { pointerEvents: 'none' }]}><Text style={styles.lastUsedBadgeText}>Last used</Text></View>;
 }
 
 // Home Screen web app on iOS: Google sign-in runs in Safari, then this app
@@ -495,7 +495,7 @@ function Welcome({ onLogin, onCreate }) {
 
       <View style={styles.heroWrap}>
         <View style={styles.courtArt}>
-          <Image source={require('../../public/images/ball.png')} style={[styles.heroGlow, { tintColor: C.optic, opacity: 0.15, backgroundColor: 'transparent' }]} />
+          <Image source={require('../../public/images/ball.png')} style={[styles.heroGlow, {  opacity: 0.15, backgroundColor: 'transparent' }]} tintColor={C.optic} />
           <View style={styles.courtBounds}>
             <View style={styles.courtVertical} />
             <View style={styles.courtHorizontal} />

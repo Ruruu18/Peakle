@@ -28,7 +28,7 @@ export default function RallyBall({ travel, bounce, doubles, opacity }) {
     };
   }, [bounce, doubles, opacity, travel]);
 
-  return <View pointerEvents="none" accessible={false} accessibilityElementsHidden importantForAccessibility="no-hide-descendants" style={StyleSheet.absoluteFill}>
+  return <View accessible={false} accessibilityElementsHidden importantForAccessibility="no-hide-descendants" style={[StyleSheet.absoluteFill, { pointerEvents: 'none' }]}>
     <Animated.View testID="rally-ball-shadow" style={[styles.shadow, { opacity: motion.shadowOpacity, transform: [{ translateX: motion.x }, { translateY: motion.y }, { scaleX: motion.shadowScale }] }]} />
     <Animated.View testID="rally-ball" style={[styles.ball, { opacity, transform: [{ translateX: motion.x }, { translateY: motion.y }] }]}>
       <Animated.View testID="rally-ball-lift" style={{ transform: [{ translateY: motion.height }, { scale: motion.scale }, { scaleY: motion.squash }] }}>

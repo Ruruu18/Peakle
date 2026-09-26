@@ -6,6 +6,7 @@ import { createMobileStyleSheet } from '../utils/mobileStyles';
 import ProfilePhoto from './ProfilePhoto';
 import { useOperations } from '../context/OperationsContext';
 import { useNearbyPlayersContext } from '../context/NearbyPlayersContext';
+import { dropShadow } from '../utils/shadow';
 
 const VISIBLE_MS = 5000;
 const HIDDEN_OFFSET = -160;
@@ -84,7 +85,7 @@ export default function MessageBanner({ navigationRef }) {
   };
 
   return (
-    <View pointerEvents="box-none" style={styles.layer}>
+    <View style={[styles.layer, { pointerEvents: 'box-none' }]}>
       <Animated.View {...pan.panHandlers} style={[styles.card, { top: Math.max(insets.top, 12) + 8, transform: [{ translateY: offset }] }]}>
         <Pressable accessibilityRole="button" accessibilityLabel={`${senderName}: ${notice.body}. Opens the chat`} onPress={open} style={({ pressed }) => [styles.content, pressed && styles.pressed]}>
           <ProfilePhoto name={request ? '?' : senderName} size={40} />
@@ -105,7 +106,7 @@ export default function MessageBanner({ navigationRef }) {
 
 const styles = createMobileStyleSheet({
   layer: { ...StyleSheet.absoluteFillObject, zIndex: 999, elevation: 999 },
-  card: { position: 'absolute', left: 14, right: 14, maxWidth: 520, alignSelf: 'center', flexDirection: 'row', alignItems: 'center', paddingLeft: 12, paddingRight: 6, paddingVertical: 10, borderWidth: 1, borderColor: '#304743', borderRadius: 20, backgroundColor: '#0E2321', shadowColor: '#07110F', shadowOpacity: .3, shadowRadius: 18, shadowOffset: { width: 0, height: 9 }, elevation: 18 },
+  card: { position: 'absolute', left: 14, right: 14, maxWidth: 520, alignSelf: 'center', flexDirection: 'row', alignItems: 'center', paddingLeft: 12, paddingRight: 6, paddingVertical: 10, borderWidth: 1, borderColor: '#304743', borderRadius: 20, backgroundColor: '#0E2321', ...dropShadow({ color: '#07110F', opacity: .3, radius: 18, y: 9 }), elevation: 18 },
   content: { flex: 1, minWidth: 0, flexDirection: 'row', alignItems: 'center', gap: 11 },
   copy: { flex: 1, minWidth: 0 },
   eyebrow: { color: '#D6E94A', fontSize: 7, fontWeight: '900', letterSpacing: .8 },

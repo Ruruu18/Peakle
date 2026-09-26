@@ -37,7 +37,7 @@ export default function PeakleLoadingScreen({ status = 'GETTING THE COURT READY'
       <View style={styles.card}>
         <View style={styles.ballStage}>
           <Animated.View style={[styles.ballShadow, shadowStyle]} />
-          <Animated.View pointerEvents="none" style={[styles.motionTrails, trailStyle]}>
+          <Animated.View style={[styles.motionTrails, trailStyle, { pointerEvents: 'none' }]}>
             <View style={styles.motionLineShort} />
             <View style={styles.motionLineTall} />
           </Animated.View>

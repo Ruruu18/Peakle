@@ -128,6 +128,7 @@ function mapStyleColor(styleName, property, value) {
   if (DARK_SWITCH_ACTIVE_FOREGROUNDS.has(styleName) && (property === 'backgroundColor' || property === 'color')) return LIGHT_CONTENT_COLORS.ink;
   if (property === 'backgroundColor') return BACKGROUND_COLORS[normalized] || value;
   if (property === 'shadowColor') return normalized === '#0E2321' ? '#000000' : value;
+  if (property === 'boxShadow') return value.replace(/rgba\(14,35,33,/g, 'rgba(0,0,0,');
   if (property.includes('border') && property.endsWith('Color')) return BORDER_COLORS[normalized] || FOREGROUND_COLORS[normalized] || value;
   if (property === 'color' || property === 'tintColor' || property === 'textDecorationColor' || property === 'textShadowColor') {
     if (ACCENT_INK_STYLES.has(styleName) && (normalized === '#0E2321' || normalized === '#3C4A45')) return value;

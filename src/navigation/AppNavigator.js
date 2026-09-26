@@ -88,7 +88,6 @@ function TabBarItem({ focused, label, onPress, play, routeName, theme, badge = 0
     >
       {!play ? (
         <Animated.View
-          pointerEvents="none"
           style={[
             styles.activePill,
             { backgroundColor: theme.active },
@@ -96,6 +95,7 @@ function TabBarItem({ focused, label, onPress, play, routeName, theme, badge = 0
               opacity: focusProgress,
               transform: [{ scale: focusProgress.interpolate({ inputRange: [0, 1], outputRange: [0.82, 1] }) }],
             },
+            { pointerEvents: 'none' },
           ]}
         />
       ) : null}
@@ -116,7 +116,7 @@ function TabBarItem({ focused, label, onPress, play, routeName, theme, badge = 0
         ]}
       >
         {play ? (
-          <Image source={BALL_IMAGE} defaultSource={BALL_IMAGE} fadeDuration={0} style={styles.playIcon} resizeMode="contain" />
+          <Image source={BALL_IMAGE} defaultSource={BALL_IMAGE} fadeDuration={0} style={styles.playIcon} tintColor={colors.ink} resizeMode="contain" />
         ) : (
           <AppIcon name={icons[routeName]} size={20} color={focused ? theme.activeText : theme.muted} />
         )}
@@ -194,7 +194,7 @@ function PeakleTabBar({ state, descriptors, navigation }) {
   };
   return (
     <View dataSet={Platform.OS === 'web' ? { playerNavigation: desktop ? 'sidebar' : 'bottom' } : undefined} style={[styles.tabOuter, { paddingBottom: Math.max(insets.bottom, 9), backgroundColor: theme.background }, desktop && [styles.sidebar, { backgroundColor: theme.surface, borderColor: theme.line }]]}>
-      {desktop ? <View dataSet={{ sidebarPart: 'brand' }} style={styles.sidebarBrand}><Image source={isDark ? BALL_IMAGE : BRAND_BALL_IMAGE} style={[styles.sidebarLogo, isDark && { tintColor: colors.optic }]} /><Text accessibilityRole="header" style={[styles.sidebarWordmark, { color: isDark ? '#F3F5EF' : colors.ink }]}>Peakle</Text><Text style={styles.sidebarBeta}>BETA</Text></View> : null}
+      {desktop ? <View dataSet={{ sidebarPart: 'brand' }} style={styles.sidebarBrand}><Image source={isDark ? BALL_IMAGE : BRAND_BALL_IMAGE} style={styles.sidebarLogo} tintColor={isDark ? colors.optic : undefined} /><Text accessibilityRole="header" style={[styles.sidebarWordmark, { color: isDark ? '#F3F5EF' : colors.ink }]}>Peakle</Text><Text style={styles.sidebarBeta}>BETA</Text></View> : null}
       <View accessibilityRole={desktop ? 'navigation' : undefined} accessibilityLabel={desktop ? 'Main navigation' : undefined} style={[styles.tabBar, { backgroundColor: theme.surface, borderColor: theme.line }, desktop && styles.sidebarLinks]}>
         {visibleRoutes.map((route) => {
           const routeFocused = currentRoute.key === route.key && !chatOwner;
@@ -229,7 +229,7 @@ function PeakleTabBar({ state, descriptors, navigation }) {
             };
             return <Pressable key={`${route.key}-${section.tab}`} accessibilityRole="button" accessibilityLabel={`${section.label} tab`} accessibilityState={{ selected: sectionFocused }} onPress={onSectionPress} style={({ hovered, pressed }) => [styles.sidebarLink, { backgroundColor: sectionFocused ? theme.active : hovered || pressed ? theme.background : 'transparent' }]}><AppIcon name={section.icon} size={21} color={sectionFocused ? colors.ink : theme.muted} /><Text style={[styles.sidebarLabel, { color: sectionFocused ? colors.ink : isDark ? '#F3F5EF' : colors.ink }]}>{section.label}</Text></Pressable>;
           });
-          if (desktop) return <Pressable key={route.key} accessibilityRole="button" accessibilityLabel={`${label} tab`} accessibilityState={{ selected: focused }} onPress={onPress} style={({ hovered, pressed }) => [styles.sidebarLink, { backgroundColor: focused ? theme.active : hovered || pressed ? theme.background : 'transparent' }]}>{route.name === 'Play' ? <Image source={BALL_IMAGE} style={{ width: 21, height: 21, tintColor: focused ? colors.ink : theme.muted }} resizeMode="contain" /> : <AppIcon name={icons[route.name]} size={21} color={focused ? colors.ink : theme.muted} />}<Text style={[styles.sidebarLabel, { color: focused ? colors.ink : isDark ? '#F3F5EF' : colors.ink }]}>{label}</Text>{badge > 0 ? <View style={styles.sidebarBadge}><Text style={styles.tabBadgeText}>{badge > 99 ? '99+' : badge}</Text></View> : null}</Pressable>;
+          if (desktop) return <Pressable key={route.key} accessibilityRole="button" accessibilityLabel={`${label} tab`} accessibilityState={{ selected: focused }} onPress={onPress} style={({ hovered, pressed }) => [styles.sidebarLink, { backgroundColor: focused ? theme.active : hovered || pressed ? theme.background : 'transparent' }]}>{route.name === 'Play' ? <Image source={BALL_IMAGE} style={{ width: 21, height: 21 }} tintColor={focused ? colors.ink : theme.muted} resizeMode="contain" /> : <AppIcon name={icons[route.name]} size={21} color={focused ? colors.ink : theme.muted} />}<Text style={[styles.sidebarLabel, { color: focused ? colors.ink : isDark ? '#F3F5EF' : colors.ink }]}>{label}</Text>{badge > 0 ? <View style={styles.sidebarBadge}><Text style={styles.tabBadgeText}>{badge > 99 ? '99+' : badge}</Text></View> : null}</Pressable>;
           return <TabBarItem key={route.key} focused={focused} label={label} onPress={onPress} play={play} routeName={route.name} theme={theme} badge={badge} />;
         })}
       </View>
@@ -359,5 +359,5 @@ const styles = StyleSheet.create({
   kitchenDashed: { marginTop: 2, borderTopWidth: 1, borderStyle: 'dashed' },
   playCircle: { width: 54, height: 54, marginTop: -30, borderRadius: 27, borderWidth: 4, alignItems: 'center', justifyContent: 'center', backgroundColor: colors.optic, ...Platform.select({ ios: { shadowColor: colors.ink, shadowOpacity: 0.14, shadowRadius: 8, shadowOffset: { width: 0, height: 4 } }, android: { elevation: 6 } }) },
   playCircleFocused: { borderWidth: 4 },
-  playIcon: { width: 24, height: 24, tintColor: colors.ink },
+  playIcon: { width: 24, height: 24 },
 });

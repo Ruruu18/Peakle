@@ -22,7 +22,7 @@ export default function WorkspaceSwitchModal({ nextMode, onCancel, onConfirm }) 
   return <Modal visible={Boolean(nextMode)} transparent animationType="fade" onRequestClose={onCancel}>
     <Pressable {...webDialog('backdrop')} accessibilityLabel="Cancel workspace change" onPress={onCancel} style={styles.backdrop}>
       <Pressable {...webDialog('surface')} accessibilityRole="alert" onPress={(event) => event.stopPropagation()} style={styles.dialog}>
-        <View style={styles.dialogIcon}>{organizer ? <Ionicons name="key-outline" size={27} color="#0E2321" /> : <Image source={BALL_IMAGE} style={{ width: 27, height: 27, tintColor: '#0E2321' }} resizeMode="contain" />}</View>
+        <View style={styles.dialogIcon}>{organizer ? <Ionicons name="key-outline" size={27} color="#0E2321" /> : <Image source={BALL_IMAGE} style={{ width: 27, height: 27 }} tintColor="#0E2321" resizeMode="contain" />}</View>
         <Text style={styles.eyebrow}>CHANGE APP MODE</Text>
         <Text style={styles.title}>Switch to {organizer ? 'Organizer' : 'Player'}?</Text>
         <Text style={styles.body}>{organizer ? 'You’ll enter the organizer workspace for sessions, courts, queues, and player monitoring.' : 'You’ll return to your personal bookings, matches, teams, and player statistics.'}</Text>

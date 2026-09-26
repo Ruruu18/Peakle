@@ -59,6 +59,7 @@ import { getFeatureVote, setFeatureVote } from '../services/featureInterest';
 import { speakScoreAnnouncement, stopScoreAnnouncement } from '../utils/scoreAccessibility';
 import { createReactionTracker, toggleOwnReaction } from '../utils/reactions';
 import { ACCOUNT_MENU_NAV, HeaderAvatar } from '../components/AccountMenu';
+import { noShadow } from '../utils/shadow';
 
 const LIGHT_C = { ink: '#0E2321', paper: '#F3F5EF', surface: '#FFFFFF', optic: '#D6E94A', teal: '#1C6B66', brick: '#B6472E', ink70: '#3C4A45', ink40: '#7C8983', line: '#DDE3DA' };
 let C = LIGHT_C;
@@ -224,7 +225,7 @@ function TeamCover({ team, height = 148, children }) {
       </Svg>
       {team.coverImage ? <ResilientImage uri={team.coverImage} fallback={null} fallbackColor="transparent" showLoadingIndicator={false} style={StyleSheet.absoluteFillObject} /> : null}
       {team.coverImage && <View style={[StyleSheet.absoluteFillObject, styles.coverScrim]} />}
-      <View pointerEvents="none" style={styles.coverCourt}><View style={styles.coverCourtLine} /><View style={[styles.coverCourtLine, styles.coverCourtLineVertical]} /></View>
+      <View style={[styles.coverCourt, { pointerEvents: 'none' }]}><View style={styles.coverCourtLine} /><View style={[styles.coverCourtLine, styles.coverCourtLineVertical]} /></View>
       {children}
     </View>
   );
@@ -2831,7 +2832,7 @@ const lightStyles = createMobileStyleSheet({
   messageActionSheet: { position: 'absolute', left: 10, right: 10, bottom: 10, paddingHorizontal: 14, paddingTop: 8, paddingBottom: 12, borderRadius: 24, backgroundColor: C.surface, ...shadow },
   actionSheetHandle: { width: 38, height: 4, alignSelf: 'center', marginBottom: 10, borderRadius: 2, backgroundColor: C.line },
   actionSheetTitle: { marginBottom: 5, color: C.ink, fontSize: 16, fontWeight: '900' },
-  actionSheetReactionPicker: { alignSelf: 'center', marginTop: 5, marginBottom: 8, backgroundColor: C.paper, shadowOpacity: 0, elevation: 0 },
+  actionSheetReactionPicker: { alignSelf: 'center', marginTop: 5, marginBottom: 8, backgroundColor: C.paper, ...noShadow, elevation: 0 },
   actionSheetRow: { minHeight: 66, flexDirection: 'row', alignItems: 'center', gap: 11, borderTopWidth: 1, borderColor: C.line },
   actionSheetIcon: { width: 40, height: 40, alignItems: 'center', justifyContent: 'center', borderRadius: 20, backgroundColor: C.paper },
   actionSheetIconDanger: { backgroundColor: '#F7EAE6' },

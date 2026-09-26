@@ -1133,10 +1133,10 @@ function ComposerAttachments({ mode, colors, onOpen, onCamera, onLibrary, onVoic
   const minimized = mode === 'minimized';
   return (
     <View style={styles.attachTray}>
-      <Animated.View pointerEvents={open ? 'none' : 'auto'} accessibilityElementsHidden={open} importantForAccessibility={open ? 'no-hide-descendants' : 'auto'} style={[styles.attachClip, toggleStyle]}>
+      <Animated.View accessibilityElementsHidden={open} importantForAccessibility={open ? 'no-hide-descendants' : 'auto'} style={[styles.attachClip, toggleStyle, { pointerEvents: open ? 'none' : 'auto' }]}>
         <Pressable accessibilityRole="button" accessibilityLabel="Show attachments" accessibilityHint="Photo, video, or voice message" onPress={onOpen} hitSlop={4} style={styles.attachButton}><Icon name={minimized ? 'chevron-forward' : 'add-circle'} size={minimized ? 24 : 27} color={colors.teal} /></Pressable>
       </Animated.View>
-      <Animated.View pointerEvents={open ? 'auto' : 'none'} accessibilityElementsHidden={!open} importantForAccessibility={open ? 'auto' : 'no-hide-descendants'} style={[styles.attachClip, trayStyle]}>
+      <Animated.View accessibilityElementsHidden={!open} importantForAccessibility={open ? 'auto' : 'no-hide-descendants'} style={[styles.attachClip, trayStyle, { pointerEvents: open ? 'auto' : 'none' }]}>
         <Pressable accessibilityRole="button" accessibilityLabel="Take a photo or video" onPress={onCamera} hitSlop={4} style={styles.attachButton}><Icon name="camera" size={23} color={colors.teal} /></Pressable>
         <Pressable accessibilityRole="button" accessibilityLabel="Send a photo or video" onPress={onLibrary} hitSlop={4} style={styles.attachButton}><Icon name="image" size={22} color={colors.teal} /></Pressable>
         <Pressable accessibilityRole="button" accessibilityLabel="Record a voice message" onPress={onVoice} hitSlop={4} style={styles.attachButton}><Icon name="mic" size={23} color={colors.teal} /></Pressable>

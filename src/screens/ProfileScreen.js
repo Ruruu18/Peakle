@@ -121,9 +121,9 @@ function Overview({ matches, onAchievement, onSeeMatches, onMatch, onStartFocus 
     <>
       <View style={styles.statCard}>
         <View style={styles.ring}>
-          <Svg style={{ position: 'absolute' }} width={96} height={96}>
+          <Svg style={{ position: 'absolute', transform: [{ rotate: '-90deg' }] }} width={96} height={96}>
             <Circle stroke={C.line} fill="none" cx={48} cy={48} r={radius} strokeWidth={7} />
-            <Circle stroke={C.optic} fill="none" cx={48} cy={48} r={radius} strokeWidth={7} strokeDasharray={circumference} strokeDashoffset={offset} strokeLinecap="round" originX={48} originY={48} rotation="-90" />
+            <Circle stroke={C.optic} fill="none" cx={48} cy={48} r={radius} strokeWidth={7} strokeDasharray={circumference} strokeDashoffset={offset} strokeLinecap="round" />
           </Svg>
           <View style={styles.ringInner}><Text style={styles.ringValue}>{winRate}<Text style={styles.ringPercent}>%</Text></Text><Text style={styles.statLabel}>WIN RATE</Text></View>
         </View>
@@ -559,13 +559,13 @@ function ProfileScreen({ navigation, route }) {
         <View style={styles.topbar}>
           {ACCOUNT_MENU_NAV && !desktop && <Pressable accessibilityRole="button" accessibilityLabel="Go back" hitSlop={8} onPress={() => (navigation.canGoBack() ? navigation.goBack() : navigation.navigate('Home'))} style={[styles.topActionButton, styles.topBackButton]}><Icon name="arrow-back" size={19} /></Pressable>}
           <View style={styles.topbarCopy}><Text numberOfLines={1} style={styles.eyebrow}>YOUR GAME</Text><Text numberOfLines={1} style={styles.h1}>Player profile</Text></View>
-          <View style={styles.topActions}><Pressable accessibilityLabel={`Notifications${unreadCount ? `, ${unreadCount} unread` : ''}`} onPress={() => setNotificationsOpen(true)} style={styles.topActionButton}><Icon name={unreadCount > 0 ? 'notifications' : 'notifications-outline'} size={19} />{unreadCount > 0 && <View pointerEvents="none" style={styles.noticeBadge}><Text style={styles.noticeBadgeText}>{unreadCount > 99 ? '99+' : unreadCount}</Text></View>}</Pressable></View>
+          <View style={styles.topActions}><Pressable accessibilityLabel={`Notifications${unreadCount ? `, ${unreadCount} unread` : ''}`} onPress={() => setNotificationsOpen(true)} style={styles.topActionButton}><Icon name={unreadCount > 0 ? 'notifications' : 'notifications-outline'} size={19} />{unreadCount > 0 && <View style={[styles.noticeBadge, { pointerEvents: 'none' }]}><Text style={styles.noticeBadgeText}>{unreadCount > 99 ? '99+' : unreadCount}</Text></View>}</Pressable></View>
         </View>
         <KitchenLine style={[styles.headerLine, compactPhone && styles.headerLineCompact]} />
         <View {...webLayout('profile')}>
         <View {...webLayout('profile-summary')}>
         <View {...webLayout('profile-identity')} style={[styles.identity, compactPhone && styles.identityCompact]}>
-          <Pressable accessibilityRole="button" accessibilityLabel={`Change player status. Current status ${presenceOption(player.presenceStatus).label}`} accessibilityHint="Opens player availability options" onPress={() => setPresenceOpen(true)} hitSlop={10} style={({ pressed }) => [styles.avatar, pressed && styles.avatarPressed]}><ProfilePhoto photo={player.avatar} name={player.name} size={67} /><View pointerEvents="none" style={styles.avatarStatusButton}><View style={[styles.avatarStatusDot, { backgroundColor: presenceOption(player.presenceStatus).color }]} /></View></Pressable>
+          <Pressable accessibilityRole="button" accessibilityLabel={`Change player status. Current status ${presenceOption(player.presenceStatus).label}`} accessibilityHint="Opens player availability options" onPress={() => setPresenceOpen(true)} hitSlop={10} style={({ pressed }) => [styles.avatar, pressed && styles.avatarPressed]}><ProfilePhoto photo={player.avatar} name={player.name} size={67} /><View style={[styles.avatarStatusButton, { pointerEvents: 'none' }]}><View style={[styles.avatarStatusDot, { backgroundColor: presenceOption(player.presenceStatus).color }]} /></View></Pressable>
           <View {...webLayout('profile-identity-copy')} style={styles.identityCopy}>
             <View style={styles.playerNameRow}><Text numberOfLines={1} style={styles.playerName}>{player.name}</Text><Pressable accessibilityLabel={`Edit profile. Status ${presenceOption(player.presenceStatus).label}`} onPress={() => setEditOpen(true)} hitSlop={8} style={styles.editProfileButton}><Icon name="create-outline" size={18} color={C.ink40} /></Pressable></View>
             <View {...webLayout('profile-meta')} style={[styles.clubLocationRow, compactPhone && styles.clubLocationRowCompact]}>

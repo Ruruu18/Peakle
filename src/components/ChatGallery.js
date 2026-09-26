@@ -350,7 +350,7 @@ const styles = StyleSheet.create({
   cellCheck: { position: 'absolute', top: 6, right: 6, width: 24, height: 24, borderRadius: 12, borderWidth: 1.5, borderColor: '#FFFFFF', backgroundColor: 'rgba(0,0,0,.2)', alignItems: 'center', justifyContent: 'center' },
   cellCheckOn: { borderColor: '#D6E94A', backgroundColor: '#D6E94A' },
   cellCheckText: { color: '#0E2321', fontSize: 13, fontWeight: '800' },
-  cellDuration: { position: 'absolute', right: 6, bottom: 5, color: '#FFFFFF', fontSize: 12, fontWeight: '700', textShadowColor: 'rgba(0,0,0,.6)', textShadowRadius: 3 },
+  cellDuration: { position: 'absolute', right: 6, bottom: 5, color: '#FFFFFF', fontSize: 12, fontWeight: '700', ...Platform.select({ web: { textShadow: '0px 0px 3px rgba(0,0,0,.6)' }, default: { textShadowColor: 'rgba(0,0,0,.6)', textShadowRadius: 3 } }) },
   albumRow: { minHeight: 52, paddingHorizontal: 20, flexDirection: 'row', alignItems: 'center', gap: 10 },
   albumTitle: { flex: 1, fontSize: 16, fontWeight: '600' },
   albumCount: { fontSize: 14 },

@@ -4,6 +4,7 @@ import AppIcon from './AppIcon';
 import { webLayout } from '../utils/webLayout';
 import { createDarkStyleSheet, DARK_CONTENT_COLORS, LIGHT_CONTENT_COLORS, useTheme } from '../context/ThemeContext';
 import { dateFromDayKey, formatDayLabel, formatTime, monthGrid, shiftDayKey } from '../services/schedule';
+import { dropShadow } from '../utils/shadow';
 
 const WEEKDAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
 
@@ -70,7 +71,7 @@ export default function ScheduleCalendar({ monthKey, selectedKey, todayKey, byDa
                       <Text style={[styles.dateText, weekday === 0 && styles.sunday, weekday === 6 && styles.saturday, outside && styles.dateOutside, today && styles.dateTodayText, selected && styles.dateSelectedText]}>{Number(key.slice(8))}</Text>
                     </View>
                   </Pressable>
-                  <View pointerEvents="box-none" style={styles.previews}>
+                  <View style={[styles.previews, { pointerEvents: 'box-none' }]}>
                     {entries.slice(0, 3).map((entry) => {
                       const color = kindColor(entry.kind, isDark);
                       const cancelled = entry.status === 'cancelled';
@@ -106,7 +107,7 @@ const lightStyles = StyleSheet.create({
   toolbar: { marginTop: 18, paddingHorizontal: 6, flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center', justifyContent: 'space-between', gap: 8 },
   viewToggle: { flexDirection: 'row', padding: 3, borderRadius: 12, backgroundColor: C.paper },
   viewButton: { minHeight: 40, paddingHorizontal: 10, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 5, borderRadius: 9 },
-  viewButtonActive: { backgroundColor: C.surface, shadowColor: C.ink, shadowOpacity: .06, shadowRadius: 3, shadowOffset: { width: 0, height: 1 }, elevation: 1 },
+  viewButtonActive: { backgroundColor: C.surface, ...dropShadow({ color: C.ink, opacity: .06, radius: 3, y: 1 }), elevation: 1 },
   viewText: { color: C.ink40, fontSize: 11, fontWeight: '700' },
   viewTextActive: { color: C.ink },
   navigation: { flexDirection: 'row', gap: 4 },

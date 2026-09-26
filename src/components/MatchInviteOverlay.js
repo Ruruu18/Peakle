@@ -6,6 +6,7 @@ import { createMobileStyleSheet } from '../utils/mobileStyles';
 import ProfilePhoto from './ProfilePhoto';
 import { useNearbyPlayersContext } from '../context/NearbyPlayersContext';
 import { INVITE_WINDOW_MS } from '../services/nearbyPlayers';
+import { dropShadow } from '../utils/shadow';
 
 function secondsRemaining(invite) {
   if (!invite?.created_at) return 0;
@@ -47,7 +48,7 @@ export default function MatchInviteOverlay({ onAccepted }) {
   };
 
   return (
-    <View pointerEvents="box-none" style={styles.layer}>
+    <View style={[styles.layer, { pointerEvents: 'box-none' }]}>
       <View accessibilityRole="alert" style={[styles.card, { top: Math.max(insets.top, 12) + 8 }]}>
         <View style={styles.timerRail}><View style={[styles.timerFill, { width: `${Math.max(0, Math.min(100, remaining / 60 * 100))}%` }]} /></View>
         <View style={styles.heading}>
@@ -74,7 +75,7 @@ export default function MatchInviteOverlay({ onAccepted }) {
 
 const styles = createMobileStyleSheet({
   layer: { ...StyleSheet.absoluteFillObject, zIndex: 1000, elevation: 1000 },
-  card: { position: 'absolute', left: 14, right: 14, overflow: 'hidden', padding: 14, borderWidth: 1, borderColor: '#304743', borderRadius: 22, backgroundColor: '#0E2321', shadowColor: '#07110F', shadowOpacity: .3, shadowRadius: 18, shadowOffset: { width: 0, height: 9 }, elevation: 18 },
+  card: { position: 'absolute', left: 14, right: 14, overflow: 'hidden', padding: 14, borderWidth: 1, borderColor: '#304743', borderRadius: 22, backgroundColor: '#0E2321', ...dropShadow({ color: '#07110F', opacity: .3, radius: 18, y: 9 }), elevation: 18 },
   timerRail: { position: 'absolute', top: 0, left: 0, right: 0, height: 4, backgroundColor: '#304743' },
   timerFill: { height: 4, backgroundColor: '#D6E94A' },
   heading: { flexDirection: 'row', alignItems: 'center', gap: 11 },

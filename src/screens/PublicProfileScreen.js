@@ -15,6 +15,7 @@ import {
 } from '../services/directMessages';
 import { supabase } from '../lib/supabase';
 import { PRIVATE_MESSAGES_ENABLED } from '../config/features';
+import { dropShadow } from '../utils/shadow';
 
 const LIGHT_C = {
   ink: '#0E2321',
@@ -262,17 +263,17 @@ export default function PublicProfileScreen({ navigation, route }) {
             <View style={currentStyles.heroCover}>
               <View style={currentStyles.heroBrand}>
                 <View style={currentStyles.heroBrandIcon}>
-                  <Image accessibilityIgnoresInvertColors accessible={false} source={BALL_IMAGE} resizeMode="contain" style={currentStyles.heroBallImage} />
+                  <Image accessibilityIgnoresInvertColors accessible={false} source={BALL_IMAGE} resizeMode="contain" style={currentStyles.heroBallImage} tintColor="#0E2321" />
                 </View>
                 <Text style={currentStyles.heroBrandText}>READY TO RALLY</Text>
               </View>
               <Image
                 accessibilityIgnoresInvertColors
                 accessible={false}
-                pointerEvents="none"
                 source={BALL_IMAGE}
                 resizeMode="contain"
-                style={currentStyles.heroBallArtwork}
+                style={[currentStyles.heroBallArtwork, { pointerEvents: 'none' }]}
+                tintColor={LIGHT_C.optic}
               />
             </View>
 
@@ -406,7 +407,7 @@ export default function PublicProfileScreen({ navigation, route }) {
               </View>
               <View style={[currentStyles.detailCard, currentStyles.detailCardAccent]}>
                 <View style={currentStyles.detailIconAccent}>
-                  <Image accessibilityIgnoresInvertColors accessible={false} source={BALL_IMAGE} resizeMode="contain" style={currentStyles.detailBallImage} />
+                  <Image accessibilityIgnoresInvertColors accessible={false} source={BALL_IMAGE} resizeMode="contain" style={currentStyles.detailBallImage} tintColor="#0E2321" />
                 </View>
                 <Text style={currentStyles.detailLabelAccent}>PREFERRED PLAY</Text>
                 <Text numberOfLines={2} style={currentStyles.detailValueAccent}>{playPreference}</Text>
@@ -442,15 +443,15 @@ const lightStyles = StyleSheet.create({
   backButton: { width: 32, height: 44, justifyContent: 'center', alignItems: 'flex-start' },
   buttonPressed: { opacity: 0.72, transform: [{ scale: 0.98 }] },
   buttonBusy: { opacity: 0.62 },
-  heroCard: { overflow: 'hidden', backgroundColor: LIGHT_C.surface, borderRadius: 28, borderWidth: 1, borderColor: LIGHT_C.line, shadowColor: LIGHT_C.ink, shadowOpacity: 0.08, shadowRadius: 18, shadowOffset: { width: 0, height: 8 }, elevation: 4 },
+  heroCard: { overflow: 'hidden', backgroundColor: LIGHT_C.surface, borderRadius: 28, borderWidth: 1, borderColor: LIGHT_C.line, ...dropShadow({ color: LIGHT_C.ink, opacity: 0.08, radius: 18, y: 8 }), elevation: 4 },
   heroCover: { height: 126, overflow: 'hidden', paddingHorizontal: 20, paddingTop: 18, backgroundColor: LIGHT_C.ink },
   heroBrand: { flexDirection: 'row', alignItems: 'center', gap: 8 },
   heroBrandIcon: { width: 28, height: 28, alignItems: 'center', justifyContent: 'center', borderRadius: 10, backgroundColor: LIGHT_C.optic },
-  heroBallImage: { width: 17, height: 17, tintColor: '#0E2321' },
+  heroBallImage: { width: 17, height: 17 },
   heroBrandText: { color: LIGHT_C.surface, fontSize: 9, fontWeight: '900', letterSpacing: 1.4 },
-  heroBallArtwork: { position: 'absolute', right: -42, top: -34, width: 210, height: 210, tintColor: LIGHT_C.optic, opacity: 0.16, transform: [{ rotate: '-12deg' }] },
+  heroBallArtwork: { position: 'absolute', right: -42, top: -34, width: 210, height: 210, opacity: 0.16, transform: [{ rotate: '-12deg' }] },
   heroBody: { alignItems: 'center', paddingHorizontal: 18, paddingBottom: 20 },
-  avatarRing: { width: 108, height: 108, alignItems: 'center', justifyContent: 'center', marginTop: -54, borderRadius: 54, backgroundColor: LIGHT_C.surface, shadowColor: LIGHT_C.ink, shadowOpacity: 0.16, shadowRadius: 12, shadowOffset: { width: 0, height: 5 }, elevation: 6 },
+  avatarRing: { width: 108, height: 108, alignItems: 'center', justifyContent: 'center', marginTop: -54, borderRadius: 54, backgroundColor: LIGHT_C.surface, ...dropShadow({ color: LIGHT_C.ink, opacity: 0.16, radius: 12, y: 5 }), elevation: 6 },
   playerName: { maxWidth: '94%', color: LIGHT_C.ink, fontSize: 28, lineHeight: 34, fontWeight: '900', letterSpacing: -0.7, textAlign: 'center', marginTop: 14 },
   locationPill: { maxWidth: '90%', flexDirection: 'row', alignItems: 'center', marginTop: 8, paddingHorizontal: 11, paddingVertical: 6, borderRadius: 999, backgroundColor: LIGHT_C.paper },
   locationText: { flexShrink: 1, color: '#3C4A45', fontSize: 12, fontWeight: '700', marginLeft: 5 },
@@ -488,7 +489,7 @@ const lightStyles = StyleSheet.create({
   detailCardAccent: { backgroundColor: LIGHT_C.optic, borderColor: LIGHT_C.optic },
   detailIcon: { width: 38, height: 38, alignItems: 'center', justifyContent: 'center', marginBottom: 18, borderRadius: 12, backgroundColor: LIGHT_C.paper },
   detailIconAccent: { width: 38, height: 38, alignItems: 'center', justifyContent: 'center', marginBottom: 18, borderRadius: 12, backgroundColor: 'rgba(255,255,255,0.52)' },
-  detailBallImage: { width: 21, height: 21, tintColor: '#0E2321' },
+  detailBallImage: { width: 21, height: 21 },
   detailLabel: { color: LIGHT_C.ink40, fontSize: 9, fontWeight: '900', letterSpacing: 0.85, marginBottom: 5 },
   detailValue: { color: LIGHT_C.ink, fontSize: 25, lineHeight: 28, fontWeight: '900', letterSpacing: -0.5 },
   detailMeta: { color: LIGHT_C.ink40, fontSize: 11, fontWeight: '700', marginTop: 3 },
@@ -507,9 +508,9 @@ const darkStyles = StyleSheet.create({
   backButton: lightStyles.backButton,
   topbarEyebrow: { ...lightStyles.topbarEyebrow, color: DARK_CONTENT_COLORS.teal },
   topbarSubtitle: { ...lightStyles.topbarSubtitle, color: DARK_CONTENT_COLORS.ink },
-  heroCard: { ...lightStyles.heroCard, backgroundColor: DARK_CONTENT_COLORS.surface, borderColor: DARK_CONTENT_COLORS.line, shadowColor: '#000000', shadowOpacity: 0.28 },
+  heroCard: { ...lightStyles.heroCard, backgroundColor: DARK_CONTENT_COLORS.surface, borderColor: DARK_CONTENT_COLORS.line, ...dropShadow({ color: '#000000', opacity: 0.28, radius: 18, y: 8 }) },
   heroCover: { ...lightStyles.heroCover, backgroundColor: '#102825' },
-  avatarRing: { ...lightStyles.avatarRing, backgroundColor: DARK_CONTENT_COLORS.surface, shadowColor: '#000000', shadowOpacity: 0.34 },
+  avatarRing: { ...lightStyles.avatarRing, backgroundColor: DARK_CONTENT_COLORS.surface, ...dropShadow({ color: '#000000', opacity: 0.34, radius: 12, y: 5 }) },
   playerName: { ...lightStyles.playerName, color: DARK_CONTENT_COLORS.ink },
   locationPill: { ...lightStyles.locationPill, backgroundColor: DARK_CONTENT_COLORS.paper },
   locationText: { ...lightStyles.locationText, color: DARK_CONTENT_COLORS.ink40 },

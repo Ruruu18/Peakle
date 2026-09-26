@@ -25,6 +25,7 @@ import {
   MAX_GAME_MINUTES, MIN_GAME_MINUTES, maskClockInput, parseClockInput, parseHoursInput,
   getScheduledGameShareUrl, googleCalendarUrl, inviteToScheduledGame, isOnMyCalendar, openScheduledGameLink, scheduledGameShareMessage, setScheduledGameVisibility, isPlayerScheduledEntry, listScheduledGames, listScheduleEvents, monthGrid, playSetupFromGame, respondToScheduledGame, shiftDayKey, shiftMonthKey,
 } from '../services/schedule';
+import { dropShadow } from '../utils/shadow';
 
 const kindColor = (kind, isDark) => (KINDS[kind] || KINDS.game)[isDark ? 'darkColor' : 'color'];
 const WEEKDAYS = ['S', 'M', 'T', 'W', 'T', 'F', 'S'];
@@ -842,7 +843,7 @@ const lightStyles = StyleSheet.create({
   timeZone: { flexDirection: 'row', alignItems: 'center', gap: 5 },
   segmented: { padding: 4, flexDirection: 'row', borderRadius: 12, backgroundColor: '#E7EBE6' },
   segment: { flex: 1, minHeight: 38, alignItems: 'center', justifyContent: 'center', borderRadius: 9 },
-  segmentActive: { backgroundColor: C.surface, shadowColor: C.ink, shadowOpacity: .08, shadowRadius: 6, shadowOffset: { width: 0, height: 2 }, elevation: 2 },
+  segmentActive: { backgroundColor: C.surface, ...dropShadow({ color: C.ink, opacity: .08, radius: 6, y: 2 }), elevation: 2 },
   segmentText: { color: C.ink40, fontSize: 12, fontWeight: '700' },
   segmentTextActive: { color: C.ink, fontWeight: '900' },
   columns: { marginTop: 20, gap: 18 },

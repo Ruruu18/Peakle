@@ -8,6 +8,7 @@ import { supabase } from '../lib/supabase';
 import { listSupportConversations } from '../services/supportChat';
 import { SupportChatBody } from '../screens/SupportChatScreen';
 import { createMobileStyleSheet } from '../utils/mobileStyles';
+import { dropShadow } from '../utils/shadow';
 
 // Hide the bubble on screens that are already a support conversation, to
 // avoid a redundant floating button over the full chat UI.
@@ -89,10 +90,7 @@ const styles = createMobileStyleSheet({
     borderRadius: 27,
     alignItems: 'center',
     justifyContent: 'center',
-    shadowColor: '#000',
-    shadowOpacity: 0.25,
-    shadowRadius: 10,
-    shadowOffset: { width: 0, height: 4 },
+    ...dropShadow({ color: '#000', opacity: 0.25, radius: 10, y: 4 }),
     elevation: 6,
     zIndex: 40,
   },
