@@ -36,17 +36,20 @@ import ResilientImage from '../components/ResilientImage';
 import { LEGAL_DOCUMENTS } from '../content/legalDocuments';
 import { PH_LOCATIONS, formatLocation, locationMatchesSearch, parseLocation } from '../data/phLocations';
 import { createMobileStyleSheet } from '../utils/mobileStyles';
+import { COURT_BOOKING_ENABLED } from '../config/features';
 import { reverseGeocode } from '../utils/geocode';
 
 WebBrowser.maybeCompleteAuthSession();
 
 const C = { ink: '#0E2321', paper: '#F3F5EF', surface: '#FFFFFF', optic: '#D6E94A', teal: '#1C6B66', brick: '#B6472E', ink70: '#3C4A45', ink40: '#7C8983', line: '#DDE3DA', tealWash: '#E5F0ED' };
 
+// Booking is paused in beta, so only showcase it when the flag turns it on.
 const features = [
-  { icon: 'pulse-outline', eyebrow: 'PLAY SMARTER', title: 'Every match teaches you something.', body: 'Keep score court-side, then see the patterns that actually moved the result.', color: C.teal },
-  { icon: 'calendar-outline', eyebrow: 'BOOK IN SECONDS', title: 'Your next court is already close.', body: 'Find nearby venues, compare times, and keep every booking in one place.', color: '#486B85' },
-  { icon: 'people-outline', eyebrow: 'YOUR PEOPLE', title: 'Turn a regular four into a rivalry.', body: 'Build your squad, send challenges, and settle the table with recorded results.', color: C.brick },
-];
+  { key: 'insights', icon: 'pulse-outline', eyebrow: 'PLAY SMARTER', title: 'Every match teaches you something.', body: 'Keep score court-side, then see the patterns that actually moved the result.', color: C.teal },
+  COURT_BOOKING_ENABLED ? { key: 'booking', icon: 'calendar-outline', eyebrow: 'BOOK IN SECONDS', title: 'Your next court is already close.', body: 'Find nearby venues, compare times, and keep every booking in one place.', color: '#486B85' } : null,
+  { key: 'social', icon: 'chatbubbles-outline', eyebrow: 'STAY CONNECTED', title: 'Your friends are one tap away.', body: 'Follow players you meet, add friends, and chat to lock in the next game.', color: '#486B85' },
+  { key: 'squad', icon: 'people-outline', eyebrow: 'YOUR PEOPLE', title: 'Turn a regular four into a rivalry.', body: 'Build your squad, send challenges, and settle the table with recorded results.', color: C.brick },
+].filter(Boolean);
 
 function Icon({ name, size = 20, color = C.ink }) { return <Ionicons name={name} size={size} color={color} />; }
 
@@ -129,7 +132,7 @@ function LegalDocumentModal({ documentKey, onClose, requireAgreement = false, on
   );
 }
 
-function FeaturePreview({ item, index }) {
+function FeaturePreview({ item }) {
   const [activeStep, setActiveStep] = useState(0);
   const slideAnim = useRef(new Animated.Value(0)).current;
 
@@ -140,13 +143,13 @@ function FeaturePreview({ item, index }) {
   ];
 
   useEffect(() => {
-    if (index === 0) {
+    if (item.key === 'insights') {
       const interval = setInterval(() => {
         setActiveStep(prev => (prev + 1) % 3);
       }, 1200);
       return () => clearInterval(interval);
     }
-    if (index === 2) {
+    if (item.key === 'squad') {
       let step = 0;
       const interval = setInterval(() => {
         step++;
@@ -158,7 +161,7 @@ function FeaturePreview({ item, index }) {
       }, 2500);
       return () => clearInterval(interval);
     }
-  }, [index, slideAnim]);
+  }, [item.key, slideAnim]);
 
   const getAvatarStyle = (i) => {
     const inputRange = [];
@@ -204,7 +207,7 @@ function FeaturePreview({ item, index }) {
     <View style={[styles.featureCard, { backgroundColor: item.color }]}> 
       <View style={styles.cardOrb} />
       <View style={styles.cardCourtLine} />
-      {index === 0 ? <>
+      {item.key === 'insights' ? <>
         <View style={styles.featureCardTop}><View style={styles.featureIcon}><Icon name="pulse-outline" size={23} /></View><Text style={styles.previewKicker}>MATCH INTELLIGENCE</Text></View>
         <Text style={styles.cardTitle}>From scoreline to game plan.</Text>
         <View style={styles.insightPipeline}>
@@ -212,14 +215,22 @@ function FeaturePreview({ item, index }) {
         </View>
         <Text style={styles.previewFooter}>Clear takeaways after every match you record.</Text>
       </> : null}
-      {index === 1 ? <>
+      {item.key === 'booking' ? <>
         <View style={styles.bookingHeader}><View><Text style={styles.previewKicker}>COURT DISCOVERY</Text><Text style={styles.bookingTitle}>Find your next court.</Text></View><View style={styles.mapPin}><Icon name="location" size={20} color={C.ink} /></View></View>
         <View style={styles.bookingPanel}>
           <View style={styles.bookingPanelTop}><View style={styles.venueMark}><Icon name="business-outline" size={16} color={C.surface} /></View><View style={styles.venueCopy}><Text style={styles.venueTitle}>Courts near you</Text><Text style={styles.venueMeta}>Compare place, time, and fit</Text></View></View>
           <View style={styles.slotRow}>{['SEARCH', 'CHOOSE', 'BOOK'].map((label, slot) => <View key={label} style={[styles.slot, slot === 1 && styles.slotActive]}><Text style={[styles.slotNumber, slot === 1 && styles.slotNumberActive]}>0{slot + 1}</Text><Text style={[styles.slotLabel, slot === 1 && styles.slotLabelActive]}>{label}</Text></View>)}</View>
         </View>
       </> : null}
-      {index === 2 ? <>
+      {item.key === 'social' ? <>
+        <View style={styles.featureCardTop}><Text style={styles.previewKicker}>FRIENDS & CHATS</Text><View style={styles.teamCount}><Icon name="person-add" size={12} color={C.optic} /><Text style={styles.teamCountText}>FOLLOWING</Text></View></View>
+        <View style={styles.chatPanel}>
+          <View style={styles.chatRow}><View style={[styles.chatAvatar, { backgroundColor: '#F6B65D' }]}><Text style={styles.playerInitials}>JC</Text></View><View style={styles.chatBubble}><Text style={styles.chatText}>Doubles at 6? I found a court.</Text></View></View>
+          <View style={[styles.chatRow, styles.chatRowMine]}><View style={[styles.chatBubble, styles.chatBubbleMine]}><Text style={[styles.chatText, styles.chatTextMine]}>I'm in. Bringing Alex 🎾</Text></View></View>
+        </View>
+        <View style={styles.teamActions}><Text style={styles.teamAction}>FOLLOW PLAYERS</Text><View style={styles.teamActionDot} /><Text style={styles.teamAction}>ADD FRIENDS</Text><View style={styles.teamActionDot} /><Text style={styles.teamAction}>CHAT & PLAN</Text></View>
+      </> : null}
+      {item.key === 'squad' ? <>
         <View style={styles.featureCardTop}><Text style={styles.previewKicker}>TEAMS & RIVALRIES</Text><View style={styles.teamCount}><Icon name="people" size={13} color={C.optic} /><Text style={styles.teamCountText}>YOUR CREW</Text></View></View>
         <View style={styles.peopleVisual}>
           <View style={styles.connectionLine} />
@@ -440,7 +451,7 @@ function SignInOptions({ onEmail, onCreate, onForgot }) {
           </View>
           <View style={styles.signInHeading}>
             <Text accessibilityRole="header" style={styles.signInTitle}>Log in to Peakle</Text>
-            <Text style={styles.signInSubtitle}>Book courts, find your squad, and keep your game in one place.</Text>
+            <Text style={styles.signInSubtitle}>{COURT_BOOKING_ENABLED ? 'Book courts, find your squad, and keep your game in one place.' : 'Score matches, find your squad, and keep your game in one place.'}</Text>
           </View>
           <View style={styles.signInMethods}>
             <GoogleButton simple label="Continue with Google" lastUsed={lastSignInMethod === 'google'} onError={setGoogleError} onExpoGoSignIn={signInWithGoogleOAuth} onSuccess={signInWithGoogle} />
@@ -481,7 +492,7 @@ function Welcome({ onLogin, onCreate }) {
         <Wordmark light />
         <Text style={styles.welcomeEyebrow}>YOUR GAME, WITH RECEIPTS.</Text>
         <Text style={styles.welcomeTitle}>Play better.{`\n`}<Text style={styles.welcomeTitleAccent}>Know why.</Text></Text>
-        <Text style={styles.welcomeBody}>Book the court, run the score, and turn every match into your next advantage.</Text>
+        <Text style={styles.welcomeBody}>{COURT_BOOKING_ENABLED ? 'Book the court, run the score, and turn every match into your next advantage.' : 'Run the score, rally your friends, and turn every match into your next advantage.'}</Text>
       </View>
 
       <View style={styles.heroWrap}>
@@ -498,7 +509,7 @@ function Welcome({ onLogin, onCreate }) {
             {[
               ['pulse-outline', 'Score every match', 'Fast, court-side scoring.'],
               ['analytics-outline', 'Understand your game', 'See the patterns behind results.'],
-              ['calendar-outline', 'Book your next court', 'Find a place and pick a time.'],
+              COURT_BOOKING_ENABLED ? ['calendar-outline', 'Book your next court', 'Find a place and pick a time.'] : ['chatbubbles-outline', 'Friends & chats', 'Follow players and plan games together.'],
             ].map(([icon, title, body], index) => (
               <View key={title} style={[styles.welcomeFeature, index > 0 && styles.welcomeFeatureBorder]}>
                 <View style={styles.welcomeFeatureIcon}><Icon name={icon} size={18} color={C.ink} /></View>
@@ -797,7 +808,7 @@ function DeviceIntro({ onComplete, initialIndex = 0 }) {
           <Animated.View style={[styles.featureArea, { transform: [{ translateY: translate }], opacity: translate.interpolate({ inputRange: [0, 12], outputRange: [1, .35] }) }]}> 
             <View style={styles.helloRow}><View style={styles.helloDot}><Icon name="sparkles" size={11} color={C.teal} /></View><Text style={styles.hello}>Welcome to Peakle.</Text></View>
             <Text style={styles.featureEyebrow}>{item.eyebrow}</Text><Text style={[styles.featureTitle, compact && styles.featureTitleCompact]}>{item.title}</Text><Text style={styles.featureBody}>{item.body}</Text>
-            <FeaturePreview item={item} index={index} />
+            <FeaturePreview item={item} />
           </Animated.View>
         </ScrollView>
         <View>
@@ -1089,7 +1100,7 @@ const styles = createMobileStyleSheet({
   legalConsentRequired: { color: C.optic, fontSize: 8, fontWeight: '900', letterSpacing: .8 },
   legalConsentLink: { color: C.surface, fontWeight: '900' },
   legalConsentError: { marginTop: 6, marginLeft: 32, color: C.brick, fontSize: 9, lineHeight: 13 },
-  progress: { height: 4, marginTop: 19, flexDirection: 'row', gap: 6 }, progressItem: { flex: 1, borderRadius: 2, backgroundColor: C.line }, progressActive: { backgroundColor: C.ink }, onboardContent: { flex: 1, width: '100%', maxWidth: 560, alignSelf: 'center', padding: 22, paddingBottom: 24, overflow: 'hidden' }, onboardGlow: { position: 'absolute', width: 260, height: 260, borderRadius: 130, right: -150, top: 95, backgroundColor: 'rgba(214,233,74,.15)' }, onboardTop: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }, stepText: { color: C.ink40, fontSize: 8, fontWeight: '900', letterSpacing: 1 }, featureArea: { flexShrink: 0 }, helloRow: { flexDirection: 'row', alignItems: 'center', gap: 8 }, helloDot: { width: 24, height: 24, borderRadius: 12, alignItems: 'center', justifyContent: 'center', backgroundColor: C.tealWash }, hello: { color: C.ink40, fontSize: 12, fontWeight: '700' }, featureEyebrow: { marginTop: 22, color: C.teal, fontSize: 9, fontWeight: '900', letterSpacing: 1.2 }, featureTitle: { maxWidth: 350, marginTop: 8, color: C.ink, fontSize: 34, lineHeight: 38, fontWeight: '900', letterSpacing: -1 }, featureTitleCompact: { fontSize: 28, lineHeight: 32 }, featureBody: { maxWidth: 335, marginTop: 11, color: C.ink70, fontSize: 13, lineHeight: 19 }, featureCard: { minHeight: 252, flexShrink: 0, marginTop: 22, padding: 18, borderRadius: 26, borderBottomLeftRadius: 10, borderBottomRightRadius: 10, overflow: 'hidden', ...shadow }, cardOrb: { position: 'absolute', width: 170, height: 170, borderRadius: 85, right: -76, top: -68, backgroundColor: 'rgba(255,255,255,.07)' }, cardCourtLine: { position: 'absolute', width: 150, height: 210, right: -48, bottom: -85, borderWidth: 1, borderColor: 'rgba(255,255,255,.08)', transform: [{ rotate: '18deg' }] }, featureCardTop: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }, featureIcon: { width: 46, height: 46, borderRadius: 14, alignItems: 'center', justifyContent: 'center', backgroundColor: C.optic, ...shadow }, previewKicker: { color: 'rgba(255,255,255,.7)', fontSize: 7, fontWeight: '900', letterSpacing: 1.1 }, cardTitle: { maxWidth: 280, marginTop: 20, color: C.surface, fontSize: 23, lineHeight: 27, fontWeight: '900', letterSpacing: -.6 }, insightPipeline: { marginTop: 23, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }, pipelineStep: { alignItems: 'center', gap: 7 }, pipelineIcon: { width: 42, height: 42, borderRadius: 13, alignItems: 'center', justifyContent: 'center', borderWidth: 1, borderColor: 'rgba(255,255,255,.18)', backgroundColor: 'rgba(14,35,33,.14)' }, pipelineIconActive: { borderColor: C.optic, backgroundColor: C.optic }, pipelineLabel: { color: C.surface, fontSize: 8, fontWeight: '800' }, pipelineLine: { flex: 1, height: 1, marginHorizontal: 4, alignItems: 'center', justifyContent: 'center', backgroundColor: 'rgba(255,255,255,.16)' }, previewFooter: { marginTop: 17, color: 'rgba(255,255,255,.66)', fontSize: 8, textAlign: 'center' }, bookingHeader: { flexDirection: 'row', alignItems: 'flex-start', justifyContent: 'space-between' }, bookingTitle: { marginTop: 8, color: C.surface, fontSize: 23, fontWeight: '900', letterSpacing: -.6 }, mapPin: { width: 43, height: 43, borderRadius: 14, alignItems: 'center', justifyContent: 'center', backgroundColor: C.optic }, bookingPanel: { marginTop: 23, padding: 14, borderWidth: 1, borderColor: 'rgba(255,255,255,.16)', borderRadius: 18, backgroundColor: 'rgba(14,35,33,.18)' }, bookingPanelTop: { flexDirection: 'row', alignItems: 'center' }, venueMark: { width: 36, height: 36, borderRadius: 11, alignItems: 'center', justifyContent: 'center', backgroundColor: 'rgba(255,255,255,.13)' }, venueCopy: { flex: 1, marginLeft: 10 }, venueTitle: { color: C.surface, fontSize: 11, fontWeight: '900' }, venueMeta: { marginTop: 3, color: 'rgba(255,255,255,.58)', fontSize: 8 }, slotRow: { marginTop: 15, flexDirection: 'row', gap: 7 }, slot: { flex: 1, height: 53, padding: 8, justifyContent: 'space-between', borderRadius: 11, backgroundColor: 'rgba(255,255,255,.1)' }, slotActive: { backgroundColor: C.optic }, slotNumber: { color: 'rgba(255,255,255,.5)', fontSize: 8, fontWeight: '900' }, slotNumberActive: { color: C.ink40 }, slotLabel: { color: C.surface, fontSize: 7, fontWeight: '900' }, slotLabelActive: { color: C.ink }, teamCount: { height: 27, paddingHorizontal: 9, flexDirection: 'row', alignItems: 'center', gap: 5, borderRadius: 14, backgroundColor: 'rgba(14,35,33,.2)' }, teamCountText: { color: C.surface, fontSize: 7, fontWeight: '900' }, peopleVisual: { height: 70, marginTop: 15, flexDirection: 'row', alignItems: 'center', justifyContent: 'center' }, connectionLine: { position: 'absolute', left: '25%', right: '25%', height: 1, backgroundColor: 'rgba(255,255,255,.25)' }, playerAvatar: { width: 48, height: 48, marginHorizontal: -3, borderRadius: 24, alignItems: 'center', justifyContent: 'center', borderWidth: 3, borderColor: C.brick }, playerAvatarCenter: { width: 62, height: 62, borderRadius: 31, zIndex: 2 }, playerInitials: { color: C.ink, fontSize: 11, fontWeight: '900' }, playerCrown: { position: 'absolute', right: -1, top: -1, width: 19, height: 19, borderRadius: 10, alignItems: 'center', justifyContent: 'center', backgroundColor: C.optic }, teamTitle: { color: C.surface, fontSize: 22, fontWeight: '900', textAlign: 'center', letterSpacing: -.5 }, teamActions: { marginTop: 14, flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center', justifyContent: 'center', gap: 6 }, teamAction: { color: 'rgba(255,255,255,.64)', fontSize: 6, fontWeight: '900', letterSpacing: .45 }, teamActionDot: { width: 3, height: 3, borderRadius: 2, backgroundColor: C.optic }, onboardPrimary: { minHeight: 60, paddingLeft: 20, paddingRight: 8, borderRadius: 20, borderBottomLeftRadius: 8, borderBottomRightRadius: 8, backgroundColor: C.ink }, onboardPrimaryText: { color: C.surface, fontSize: 14, fontWeight: '900' }, primaryArrow: { width: 44, height: 44, borderRadius: 15, alignItems: 'center', justifyContent: 'center', backgroundColor: C.teal }, skip: { minHeight: 38, alignItems: 'center', justifyContent: 'center' }, skipText: { color: C.ink40, fontSize: 10, fontWeight: '800' }, onboardingError: { marginBottom: 10, color: C.brick, fontSize: 10, lineHeight: 14, textAlign: 'center' },
+  progress: { height: 4, marginTop: 19, flexDirection: 'row', gap: 6 }, progressItem: { flex: 1, borderRadius: 2, backgroundColor: C.line }, progressActive: { backgroundColor: C.ink }, onboardContent: { flex: 1, width: '100%', maxWidth: 560, alignSelf: 'center', padding: 22, paddingBottom: 24, overflow: 'hidden' }, onboardGlow: { position: 'absolute', width: 260, height: 260, borderRadius: 130, right: -150, top: 95, backgroundColor: 'rgba(214,233,74,.15)' }, onboardTop: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }, stepText: { color: C.ink40, fontSize: 8, fontWeight: '900', letterSpacing: 1 }, featureArea: { flexShrink: 0 }, helloRow: { flexDirection: 'row', alignItems: 'center', gap: 8 }, helloDot: { width: 24, height: 24, borderRadius: 12, alignItems: 'center', justifyContent: 'center', backgroundColor: C.tealWash }, hello: { color: C.ink40, fontSize: 12, fontWeight: '700' }, featureEyebrow: { marginTop: 22, color: C.teal, fontSize: 9, fontWeight: '900', letterSpacing: 1.2 }, featureTitle: { maxWidth: 350, marginTop: 8, color: C.ink, fontSize: 34, lineHeight: 38, fontWeight: '900', letterSpacing: -1 }, featureTitleCompact: { fontSize: 28, lineHeight: 32 }, featureBody: { maxWidth: 335, marginTop: 11, color: C.ink70, fontSize: 13, lineHeight: 19 }, featureCard: { minHeight: 252, flexShrink: 0, marginTop: 22, padding: 18, borderRadius: 26, borderBottomLeftRadius: 10, borderBottomRightRadius: 10, overflow: 'hidden', ...shadow }, cardOrb: { position: 'absolute', width: 170, height: 170, borderRadius: 85, right: -76, top: -68, backgroundColor: 'rgba(255,255,255,.07)' }, cardCourtLine: { position: 'absolute', width: 150, height: 210, right: -48, bottom: -85, borderWidth: 1, borderColor: 'rgba(255,255,255,.08)', transform: [{ rotate: '18deg' }] }, featureCardTop: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }, featureIcon: { width: 46, height: 46, borderRadius: 14, alignItems: 'center', justifyContent: 'center', backgroundColor: C.optic, ...shadow }, previewKicker: { color: 'rgba(255,255,255,.7)', fontSize: 7, fontWeight: '900', letterSpacing: 1.1 }, cardTitle: { maxWidth: 280, marginTop: 20, color: C.surface, fontSize: 23, lineHeight: 27, fontWeight: '900', letterSpacing: -.6 }, insightPipeline: { marginTop: 23, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }, pipelineStep: { alignItems: 'center', gap: 7 }, pipelineIcon: { width: 42, height: 42, borderRadius: 13, alignItems: 'center', justifyContent: 'center', borderWidth: 1, borderColor: 'rgba(255,255,255,.18)', backgroundColor: 'rgba(14,35,33,.14)' }, pipelineIconActive: { borderColor: C.optic, backgroundColor: C.optic }, pipelineLabel: { color: C.surface, fontSize: 8, fontWeight: '800' }, pipelineLine: { flex: 1, height: 1, marginHorizontal: 4, alignItems: 'center', justifyContent: 'center', backgroundColor: 'rgba(255,255,255,.16)' }, previewFooter: { marginTop: 17, color: 'rgba(255,255,255,.66)', fontSize: 8, textAlign: 'center' }, bookingHeader: { flexDirection: 'row', alignItems: 'flex-start', justifyContent: 'space-between' }, bookingTitle: { marginTop: 8, color: C.surface, fontSize: 23, fontWeight: '900', letterSpacing: -.6 }, mapPin: { width: 43, height: 43, borderRadius: 14, alignItems: 'center', justifyContent: 'center', backgroundColor: C.optic }, bookingPanel: { marginTop: 23, padding: 14, borderWidth: 1, borderColor: 'rgba(255,255,255,.16)', borderRadius: 18, backgroundColor: 'rgba(14,35,33,.18)' }, bookingPanelTop: { flexDirection: 'row', alignItems: 'center' }, venueMark: { width: 36, height: 36, borderRadius: 11, alignItems: 'center', justifyContent: 'center', backgroundColor: 'rgba(255,255,255,.13)' }, venueCopy: { flex: 1, marginLeft: 10 }, venueTitle: { color: C.surface, fontSize: 11, fontWeight: '900' }, venueMeta: { marginTop: 3, color: 'rgba(255,255,255,.58)', fontSize: 8 }, slotRow: { marginTop: 15, flexDirection: 'row', gap: 7 }, slot: { flex: 1, height: 53, padding: 8, justifyContent: 'space-between', borderRadius: 11, backgroundColor: 'rgba(255,255,255,.1)' }, slotActive: { backgroundColor: C.optic }, slotNumber: { color: 'rgba(255,255,255,.5)', fontSize: 8, fontWeight: '900' }, slotNumberActive: { color: C.ink40 }, slotLabel: { color: C.surface, fontSize: 7, fontWeight: '900' }, slotLabelActive: { color: C.ink }, chatPanel: { marginTop: 18, padding: 12, gap: 9, borderWidth: 1, borderColor: 'rgba(255,255,255,.16)', borderRadius: 18, backgroundColor: 'rgba(14,35,33,.18)' }, chatRow: { flexDirection: 'row', alignItems: 'flex-end', gap: 8 }, chatRowMine: { justifyContent: 'flex-end' }, chatAvatar: { width: 30, height: 30, borderRadius: 15, alignItems: 'center', justifyContent: 'center' }, chatBubble: { maxWidth: '78%', paddingHorizontal: 11, paddingVertical: 8, borderRadius: 14, borderBottomLeftRadius: 4, backgroundColor: 'rgba(255,255,255,.14)' }, chatBubbleMine: { borderBottomLeftRadius: 14, borderBottomRightRadius: 4, backgroundColor: C.optic }, chatText: { color: C.surface, fontSize: 10, fontWeight: '700' }, chatTextMine: { color: C.ink }, teamCount: { height: 27, paddingHorizontal: 9, flexDirection: 'row', alignItems: 'center', gap: 5, borderRadius: 14, backgroundColor: 'rgba(14,35,33,.2)' }, teamCountText: { color: C.surface, fontSize: 7, fontWeight: '900' }, peopleVisual: { height: 70, marginTop: 15, flexDirection: 'row', alignItems: 'center', justifyContent: 'center' }, connectionLine: { position: 'absolute', left: '25%', right: '25%', height: 1, backgroundColor: 'rgba(255,255,255,.25)' }, playerAvatar: { width: 48, height: 48, marginHorizontal: -3, borderRadius: 24, alignItems: 'center', justifyContent: 'center', borderWidth: 3, borderColor: C.brick }, playerAvatarCenter: { width: 62, height: 62, borderRadius: 31, zIndex: 2 }, playerInitials: { color: C.ink, fontSize: 11, fontWeight: '900' }, playerCrown: { position: 'absolute', right: -1, top: -1, width: 19, height: 19, borderRadius: 10, alignItems: 'center', justifyContent: 'center', backgroundColor: C.optic }, teamTitle: { color: C.surface, fontSize: 22, fontWeight: '900', textAlign: 'center', letterSpacing: -.5 }, teamActions: { marginTop: 14, flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center', justifyContent: 'center', gap: 6 }, teamAction: { color: 'rgba(255,255,255,.64)', fontSize: 6, fontWeight: '900', letterSpacing: .45 }, teamActionDot: { width: 3, height: 3, borderRadius: 2, backgroundColor: C.optic }, onboardPrimary: { minHeight: 60, paddingLeft: 20, paddingRight: 8, borderRadius: 20, borderBottomLeftRadius: 8, borderBottomRightRadius: 8, backgroundColor: C.ink }, onboardPrimaryText: { color: C.surface, fontSize: 14, fontWeight: '900' }, primaryArrow: { width: 44, height: 44, borderRadius: 15, alignItems: 'center', justifyContent: 'center', backgroundColor: C.teal }, skip: { minHeight: 38, alignItems: 'center', justifyContent: 'center' }, skipText: { color: C.ink40, fontSize: 10, fontWeight: '800' }, onboardingError: { marginBottom: 10, color: C.brick, fontSize: 10, lineHeight: 14, textAlign: 'center' },
   personalContent: { flexGrow: 1, width: '100%', maxWidth: 560, alignSelf: 'center', padding: 22, paddingBottom: 34 }, personalHead: { marginTop: 38, marginBottom: 28 }, nameSpotlight: { marginBottom: 4, padding: 18, paddingBottom: 2, borderWidth: 1, borderColor: C.line, borderRadius: 20, backgroundColor: C.surface }, nameIcon: { width: 48, height: 48, marginBottom: 17, alignItems: 'center', justifyContent: 'center', borderRadius: 15, backgroundColor: C.tealWash }, stageButton: { marginTop: 14 }, optionGrid: { flexDirection: 'row', gap: 7 }, skillOption: { minHeight: 49, flex: 1, alignItems: 'center', justifyContent: 'center', borderWidth: 1, borderColor: C.line, borderRadius: 12, backgroundColor: C.surface }, optionActive: { borderColor: C.ink, backgroundColor: C.optic }, optionValue: { color: C.ink40, fontSize: 13, fontWeight: '900' }, optionActiveText: { color: C.ink }, help: { marginTop: 8, color: C.ink40, fontSize: 8, lineHeight: 12 }, sectionLabel: { marginTop: 24 }, choiceRow: { flexDirection: 'row', gap: 8, marginBottom: 22 }, choice: { minHeight: 59, flex: 1, gap: 5, alignItems: 'center', justifyContent: 'center', borderWidth: 1, borderColor: C.line, borderRadius: 14, backgroundColor: C.surface }, choiceText: { color: C.ink40, fontSize: 9, fontWeight: '800' }, permissionNote: { marginBottom: 20, padding: 12, flexDirection: 'row', alignItems: 'center', gap: 10, borderRadius: 14, backgroundColor: C.tealWash }, noteIcon: { width: 35, height: 35, borderRadius: 11, alignItems: 'center', justifyContent: 'center', backgroundColor: C.surface }, noteText: { flex: 1, color: C.ink70, fontSize: 9, lineHeight: 14 }, noteStrong: { color: C.ink, fontWeight: '900' },
   avatarPicker: { marginBottom: 24, flexDirection: 'row', flexWrap: 'wrap', gap: 10 }, avatarChoice: { width: '30%', minHeight: 76, alignItems: 'center', justifyContent: 'center', borderWidth: 2, borderColor: C.line, borderRadius: 16, backgroundColor: C.surface }, avatarChoiceActive: { borderColor: C.ink, backgroundColor: C.optic }, avatarCheck: { position: 'absolute', right: 6, bottom: 6, width: 19, height: 19, borderRadius: 10, alignItems: 'center', justifyContent: 'center', backgroundColor: C.ink },
   backSpacer: { width: 43, height: 43 },
