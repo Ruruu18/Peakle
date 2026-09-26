@@ -209,7 +209,8 @@ function Root() {
       const opensConversation = Boolean(data.conversationId);
       const opensFollowNotification = ['follow_request', 'follow_accepted'].includes(data.notificationKind)
         || Boolean(data.requesterId);
-      if ((!opensConversation && !opensFollowNotification) || responseId === handledNotificationResponse.current) return;
+      const opensTeamInvitation = ['team_invite', 'team_invite_response'].includes(data.notificationKind) && Boolean(data.teamId);
+      if ((!opensConversation && !opensFollowNotification && !opensTeamInvitation) || responseId === handledNotificationResponse.current) return;
       handledNotificationResponse.current = responseId;
       const open = () => {
         if (!navigationRef.isReady()) {
@@ -223,6 +224,8 @@ function Root() {
             player: data.playerId ? { id: data.playerId } : undefined,
             ownerTab: 'Team',
           });
+        } else if (opensTeamInvitation) {
+          navigationRef.navigate('Team', { openInvitationTeamId: data.teamId, openInvitationToken: Date.now() });
         } else {
           navigationRef.navigate('Profile', { openNotificationsToken: Date.now() });
         }

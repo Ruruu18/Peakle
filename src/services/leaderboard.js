@@ -78,7 +78,8 @@ function standingRow(row) {
     id: row.user_id,
     name: row.display_name || 'Peakle player',
     avatar: row.avatar_url || null,
-    area: row.home_area || '',
+    // Home areas are "City · Region · Country" (or a legacy bare city); rows show the city.
+    area: (row.home_area || '').split(' · ')[0].trim(),
     rating: Number(row.rating),
     verifiedMatches: Number(row.verified_matches || 0),
     wins: Number(row.wins || 0),

@@ -11,6 +11,9 @@ export const copyText = (text) => navigator.clipboard.writeText(text).catch(() =
 // Long-pressing a bubble opens the focus view; on web it must not start a text selection or the iOS callout.
 export const unselectable = Platform.select({ web: { userSelect: 'none', WebkitUserSelect: 'none', WebkitTouchCallout: 'none' }, default: null });
 const PILL_PADDING = 8;
+// A full-screen backdrop blur is too heavy for Android browsers and makes the
+// menu stutter; they get a denser tint instead.
+const ANDROID_WEB = Platform.OS === 'web' && typeof navigator !== 'undefined' && /Android/i.test(navigator.userAgent || '');
 
 /**
  * Messenger-style message focus: the whole screen blurs, the chosen message
@@ -38,12 +41,16 @@ export default function MessageFocusModal({ visible, mine, dark, reactions, sele
     Animated.timing(appear, { toValue: 1, duration: 190, easing: Easing.out(Easing.cubic), useNativeDriver: Platform.OS !== 'web' }).start();
   }, [appear, visible]);
 
-  const chooseAt = useCallback((locationX) => {
-    const index = Math.floor((locationX - PILL_PADDING) / REACTION_SIZE);
-    const next = index >= 0 && index < reactions.length ? index : -1;
+  // Only re-render when the finger crosses onto a different emoji.
+  const hover = useCallback((next) => {
+    if (hoveredRef.current === next) return;
     hoveredRef.current = next;
     setHovered(next);
-  }, [reactions.length]);
+  }, []);
+  const chooseAt = useCallback((locationX) => {
+    const index = Math.floor((locationX - PILL_PADDING) / REACTION_SIZE);
+    hover(index >= 0 && index < reactions.length ? index : -1);
+  }, [hover, reactions.length]);
   const pan = useMemo(() => PanResponder.create({
     onStartShouldSetPanResponder: () => false,
     onMoveShouldSetPanResponder: (_, gesture) => Math.abs(gesture.dx) > 4,
@@ -66,15 +73,16 @@ export default function MessageFocusModal({ visible, mine, dark, reactions, sele
   // (blocking the page scroll) so sliding across the pill still picks a reaction.
   useEffect(() => {
     if (Platform.OS !== 'web' || !visible || !isTouchHeld()) return undefined;
+    let rect = null;
     const hoverAt = (touch) => {
-      const rect = pillRef.current?.getBoundingClientRect?.();
+      // Measured once the finger moves, after the pill has animated in.
+      rect = rect || pillRef.current?.getBoundingClientRect?.();
       let next = -1;
       if (rect && touch && touch.clientY >= rect.top - 24 && touch.clientY <= rect.bottom + 24) {
         const index = Math.floor((touch.clientX - rect.left - PILL_PADDING) / ((rect.width - PILL_PADDING * 2) / reactions.length));
         if (index >= 0 && index < reactions.length) next = index;
       }
-      hoveredRef.current = next;
-      setHovered(next);
+      hover(next);
     };
     const move = (event) => {
       event.preventDefault();
@@ -103,7 +111,7 @@ export default function MessageFocusModal({ visible, mine, dark, reactions, sele
     window.addEventListener('touchend', end, { passive: false });
     window.addEventListener('touchcancel', end);
     return detach;
-  }, [visible, onClose, onReact, reactions]);
+  }, [visible, hover, onClose, onReact, reactions]);
 
   if (!visible) return null;
   const palette = dark ? DARK : LIGHT;
@@ -112,7 +120,7 @@ export default function MessageFocusModal({ visible, mine, dark, reactions, sele
 
   return (
     <Modal visible transparent animationType="none" statusBarTranslucent onRequestClose={onClose}>
-      <Animated.View style={[styles.backdrop, { opacity: appear, backgroundColor: palette.tint }]}>
+      <Animated.View style={[styles.backdrop, ANDROID_WEB && styles.backdropFlat, { opacity: appear, backgroundColor: ANDROID_WEB ? palette.flatTint : palette.tint }]}>
         <Pressable accessibilityLabel="Close message actions" onPress={onClose} style={StyleSheet.absoluteFillObject} />
         <ScrollView pointerEvents="box-none" style={styles.stage} contentContainerStyle={[styles.stageContent, desktop && styles.stageDesktop]} showsVerticalScrollIndicator={false}>
           <Pressable accessible={false} focusable={false} onPress={onClose} style={StyleSheet.absoluteFillObject} />
@@ -144,8 +152,8 @@ export default function MessageFocusModal({ visible, mine, dark, reactions, sele
   );
 }
 
-const DARK = { tint: 'rgba(8,12,14,.55)', pill: 'rgba(38,42,46,.94)', menu: 'rgba(38,42,46,.96)', chosen: 'rgba(255,255,255,.16)', line: 'rgba(255,255,255,.1)', gap: 'rgba(0,0,0,.35)', pressed: 'rgba(255,255,255,.08)', ink: '#F3F5EF', danger: '#FF6B5B' };
-const LIGHT = { tint: 'rgba(236,240,234,.5)', pill: 'rgba(255,255,255,.96)', menu: 'rgba(255,255,255,.97)', chosen: 'rgba(14,35,33,.1)', line: 'rgba(14,35,33,.1)', gap: 'rgba(14,35,33,.07)', pressed: 'rgba(14,35,33,.06)', ink: '#0E2321', danger: '#A53F29' };
+const DARK = { tint: 'rgba(8,12,14,.55)', flatTint: 'rgba(8,12,14,.82)', pill: 'rgba(38,42,46,.94)', menu: 'rgba(38,42,46,.96)', chosen: 'rgba(255,255,255,.16)', line: 'rgba(255,255,255,.1)', gap: 'rgba(0,0,0,.35)', pressed: 'rgba(255,255,255,.08)', ink: '#F3F5EF', danger: '#FF6B5B' };
+const LIGHT = { tint: 'rgba(236,240,234,.5)', flatTint: 'rgba(236,240,234,.9)', pill: 'rgba(255,255,255,.96)', menu: 'rgba(255,255,255,.97)', chosen: 'rgba(14,35,33,.1)', line: 'rgba(14,35,33,.1)', gap: 'rgba(14,35,33,.07)', pressed: 'rgba(14,35,33,.06)', ink: '#0E2321', danger: '#A53F29' };
 
 const shadow = Platform.select({
   ios: { shadowColor: '#000000', shadowOpacity: 0.22, shadowRadius: 22, shadowOffset: { width: 0, height: 10 } },
@@ -158,6 +166,7 @@ const styles = StyleSheet.create({
     flex: 1,
     ...Platform.select({ web: { backdropFilter: 'blur(26px) saturate(140%)', WebkitBackdropFilter: 'blur(26px) saturate(140%)' } }),
   },
+  backdropFlat: Platform.select({ web: { backdropFilter: 'none', WebkitBackdropFilter: 'none' }, default: {} }),
   stage: { flex: 1, width: '100%', maxWidth: 560, alignSelf: 'center' },
   stageContent: { flexGrow: 1, paddingHorizontal: 16, paddingTop: 16, paddingBottom: 34, justifyContent: 'flex-end' },
   stageDesktop: { justifyContent: 'center', paddingBottom: 0 },

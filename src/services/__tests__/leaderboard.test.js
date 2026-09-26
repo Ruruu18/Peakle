@@ -106,6 +106,18 @@ describe('loadLeaderboard - standings mapping', () => {
   });
 });
 
+describe('loadLeaderboard - home area display', () => {
+  it('shows only the city for picker-format and legacy home areas', async () => {
+    const standings = [
+      { user_id: 'a', home_area: 'Surigao City · Region XIII · Philippines', rating: 3.1, rank: 1 },
+      { user_id: 'b', home_area: 'Surigao City', rating: 3, rank: 2 },
+    ];
+    requireSupabase.mockReturnValue(buildLeaderboardClient({ board: { scope: 'local', area: 'Surigao City', standings, own: null } }));
+    const result = await loadLeaderboard();
+    expect(result.standings.map((s) => s.area)).toEqual(['Surigao City', 'Surigao City']);
+  });
+});
+
 describe('loadLeaderboard - caller summary', () => {
   it("returns the caller's rating and server-computed rank", async () => {
     requireSupabase.mockReturnValue(buildLeaderboardClient({

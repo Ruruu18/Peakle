@@ -76,6 +76,7 @@ import {
 } from '../services/directMessages';
 import { createReactionTracker, toggleOwnReaction } from '../utils/reactions';
 import { webLongPress } from '../utils/webLongPress';
+import useStableHandlers from '../hooks/useStableHandlers';
 
 const LIGHT_C = {
   ink: '#0E2321',
@@ -815,7 +816,7 @@ export function InboxScreen({ navigation }) {
     }
     navigation.navigate('DirectChat', { player, ownerTab: 'Team' });
   };
-  const openTeam = (team) => navigation.navigate('Team', { openChatTeamId: team.id, openChatToken: Date.now() });
+  const openTeam = (team) => navigation.navigate('Team', { openChatTeamId: team.id, openChatToken: Date.now(), chatReturnTo: 'Inbox' });
   const choosePlayer = (player) => {
     setComposeOpen(false);
     navigation.navigate('DirectChat', { player, ownerTab: 'Team' });
@@ -1201,7 +1202,9 @@ function PeerProfileCard({ peer, canBlock, onViewProfile, onBlock, onClose, colo
   );
 }
 
-function DirectChatMessage({ message, grouped, interactive, peer, seen, timeVisible, currentUserId, colors, onToggleTime, onOpenActions, onOpenProfile, onReact, onPreview, onOpenGame }) {
+// Memoized so opening the reaction menu (or typing) doesn't re-render every bubble;
+// DirectChatScreen passes stable handlers from useStableHandlers.
+const DirectChatMessage = React.memo(function DirectChatMessage({ message, grouped, interactive, peer, seen, timeVisible, currentUserId, colors, onToggleTime, onOpenActions, onOpenProfile, onReact, onPreview, onOpenGame }) {
   const gameShareCode = message.deletedAt || message.mediaType ? null : shareCodeFromText(message.text);
   const visualMedia = !message.deletedAt && ['image', 'video'].includes(message.mediaType);
   const reactionGroups = DIRECT_REACTION_OPTIONS.map((emoji) => ({
@@ -1225,7 +1228,7 @@ function DirectChatMessage({ message, grouped, interactive, peer, seen, timeVisi
       </View>
     </View>
   );
-}
+});
 
 export function DirectChatScreen({ route, navigation }) {
   const target = route?.params?.conversationId
@@ -1727,6 +1730,13 @@ function DirectChatConversation({ route, navigation }) {
   const relationshipLocked = !conversationId && !messagePermission?.canMessage;
   const declined = conversation?.status === 'declined';
   const latestMine = [...messages].reverse().find((message) => message.mine);
+  const rowHandlers = useStableHandlers({
+    onToggleTime: toggleMessageTime,
+    onOpenActions: openMessageActions,
+    onOpenProfile: () => setProfileCardOpen(true),
+    onReact: reactToMessage,
+    onOpenGame: (code) => navigation.navigate('Schedule', { shareCode: code, shareToken: Date.now() }),
+  });
   const latestMineSeen = latestMine && conversation?.peerLastReadAt && new Date(conversation.peerLastReadAt) >= new Date(latestMine.createdAt);
   const selectedMessage = messages.find((message) => message.id === selectedMessageId) || null;
 
@@ -1748,7 +1758,7 @@ function DirectChatConversation({ route, navigation }) {
             <View style={styles.messageTapArea}>
             {messages.map((message, index) => {
               const grouped = messages[index - 1]?.senderId === message.senderId;
-              return <DirectChatMessage key={message.id} message={message} grouped={grouped} interactive={conversation?.status === 'accepted' && !blocked} peer={peer} seen={message.id === latestMine?.id && Boolean(latestMineSeen)} timeVisible={timeMessageId === message.id} currentUserId={user?.id} colors={colors} onToggleTime={toggleMessageTime} onOpenActions={openMessageActions} onPreview={setPreviewMessage} onOpenProfile={() => setProfileCardOpen(true)} onReact={reactToMessage} onOpenGame={(code) => navigation.navigate('Schedule', { shareCode: code, shareToken: Date.now() })} />;
+              return <DirectChatMessage key={message.id} message={message} grouped={grouped} interactive={conversation?.status === 'accepted' && !blocked} peer={peer} seen={message.id === latestMine?.id && Boolean(latestMineSeen)} timeVisible={timeMessageId === message.id} currentUserId={user?.id} colors={colors} onToggleTime={rowHandlers.onToggleTime} onOpenActions={rowHandlers.onOpenActions} onPreview={setPreviewMessage} onOpenProfile={rowHandlers.onOpenProfile} onReact={rowHandlers.onReact} onOpenGame={rowHandlers.onOpenGame} />;
             })}
             {remoteTyping ? <View accessibilityLiveRegion="polite" accessibilityLabel={`${peer?.name || 'Player'} is typing`} style={styles.remoteTypingRow}><ProfilePhoto photo={peer?.avatar} name={peer?.name} size={30} /><AnimatedTypingDots colors={colors} /></View> : null}
             </View>

@@ -137,9 +137,21 @@ export async function saveDirectMedia(message) {
   const fileName = `peakle-${message.id || Date.now()}.${mediaExtension(message)}`;
   try {
     if (Platform.OS === 'web') {
-      const response = await fetch(message.mediaUrl);
-      if (!response.ok) throw new Error('The file could not be downloaded.');
-      const url = URL.createObjectURL(await response.blob());
+      let blob = null;
+      try {
+        const response = await fetch(message.mediaUrl);
+        if (response.ok) blob = await response.blob();
+      } catch {}
+      if (!blob) {
+        // The browser couldn't read the file itself (network or CORS), and Alert
+        // is silent on web. Hand the URL to the browser instead; Supabase Storage
+        // serves it as an attachment when `download` is set.
+        const link = new URL(message.mediaUrl);
+        if (link.pathname.includes('/storage/v1/object/')) link.searchParams.set('download', fileName);
+        window.open(link.toString(), '_blank', 'noopener');
+        return;
+      }
+      const url = URL.createObjectURL(blob);
       const link = document.createElement('a');
       link.href = url;
       link.download = fileName;

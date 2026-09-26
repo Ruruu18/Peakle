@@ -24,6 +24,8 @@ const ICONS_BY_KIND = {
   game_invite: 'calendar-outline',
   game_response: 'checkmark-circle-outline',
   game_update: 'calendar-clear-outline',
+  team_invite: 'shield-outline',
+  team_invite_response: 'people-outline',
 };
 
 export function presentNotification(notice) {

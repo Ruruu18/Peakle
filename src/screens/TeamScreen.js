@@ -39,6 +39,8 @@ import LocationPicker from '../components/LocationPicker';
 import ScrollView from '../components/FocusResetScrollView';
 import useResponsiveWidth from '../hooks/useResponsiveWidth';
 import { webLongPress } from '../utils/webLongPress';
+import useStableHandlers from '../hooks/useStableHandlers';
+import { saveDirectMedia } from '../components/DirectMessageMedia';
 import { PH_LOCATIONS, formatLocation, locationMatchesSearch, parseLocation } from '../data/phLocations';
 import { useAuth } from '../context/AuthContext';
 import { distanceInKm, formatDistance, geocodeArea, useUserLocation } from '../context/LocationContext';
@@ -272,7 +274,7 @@ function ClubWarsTeaser() {
   );
 }
 
-function TeamCard({ team, joined, requested, requesting, cancelling, summary, onJoin, onCancel, onOpen, onChat }) {
+function TeamCard({ team, joined, invited, requested, requesting, cancelling, summary, onJoin, onCancel, onOpen, onChat }) {
   return (
     <Pressable onPress={onOpen} style={({ pressed }) => [styles.teamCard, pressed && styles.pressed]}>
       <TeamCover team={team}>
@@ -281,12 +283,12 @@ function TeamCard({ team, joined, requested, requesting, cancelling, summary, on
       </TeamCover>
       <View style={styles.stats}><View style={styles.stat}><Text style={styles.statValue}>{team.rating}</Text><Text style={styles.statLabel}>RATING</Text></View><View style={styles.stat}><Text style={styles.statValue}>{team.members}/{team.capacity}</Text><Text style={styles.statLabel}>MEMBERS</Text></View><View style={[styles.level, team.level === 'Advanced' && styles.levelAdvanced]}><Text style={[styles.levelText, team.level === 'Advanced' && styles.levelTextAdvanced]}>{team.level}</Text></View></View>
       {joined && <Pressable accessibilityLabel={`Open ${team.name} chat`} onPress={(event) => { event.stopPropagation?.(); onChat?.(); }} style={styles.conversationRow}><View style={[styles.conversationIcon, summary?.unread_count > 0 && styles.conversationIconUnread]}><Icon name="chatbubble-outline" size={17} color={C.teal} /></View><View style={styles.conversationCopy}><Text numberOfLines={1} style={styles.conversationText}>{summary?.last_body || (summary?.last_has_image ? 'Shared a photo' : 'Start the team conversation')}</Text><Text style={styles.conversationMeta}>{summary?.last_sender_name ? `${summary.last_sender_name} · ` : ''}{summary?.last_created_at ? new Date(summary.last_created_at).toLocaleDateString([], { month: 'short', day: 'numeric' }) : 'TEAM CHAT'}</Text></View>{summary?.unread_count > 0 ? <View style={styles.unreadBadge}><Text style={styles.unreadBadgeText}>{summary.unread_count > 99 ? '99+' : summary.unread_count}</Text></View> : <Icon name="chevron-forward" size={17} color={C.teal} />}</Pressable>}
-      {!joined && (requested ? <View style={styles.pendingRequestActions}><View style={styles.requestSentStatus}><Icon name="checkmark-circle-outline" size={17} color={C.teal} /><Text style={styles.requestSentStatusText}>Request sent</Text></View><Pressable onPress={(event) => { event.stopPropagation?.(); onCancel(); }} disabled={cancelling} style={[styles.cancelRequestButton, cancelling && styles.saveButtonDisabled]}>{cancelling ? <ActivityIndicator size="small" color={C.brick} /> : <Icon name="close-circle-outline" size={17} color={C.brick} />}<Text style={styles.cancelRequestText}>{cancelling ? 'Cancelling…' : 'Cancel'}</Text></Pressable></View> : <Pressable onPress={(event) => { event.stopPropagation?.(); onJoin(); }} disabled={requesting} style={[styles.joinButton, requesting && styles.requestedButton]}>{requesting ? <ActivityIndicator size="small" color="#0E2321" /> : <Icon name="add" size={17} color="#0E2321" />}<Text style={[styles.joinButtonText, requesting && styles.requestedText]}>{requesting ? 'Sending request…' : 'Ask to join'}</Text></Pressable>)}
+      {!joined && (requested ? <View style={styles.pendingRequestActions}><View style={styles.requestSentStatus}><Icon name="checkmark-circle-outline" size={17} color={C.teal} /><Text style={styles.requestSentStatusText}>Request sent</Text></View><Pressable onPress={(event) => { event.stopPropagation?.(); onCancel(); }} disabled={cancelling} style={[styles.cancelRequestButton, cancelling && styles.saveButtonDisabled]}>{cancelling ? <ActivityIndicator size="small" color={C.brick} /> : <Icon name="close-circle-outline" size={17} color={C.brick} />}<Text style={styles.cancelRequestText}>{cancelling ? 'Cancelling…' : 'Cancel'}</Text></Pressable></View> : <Pressable onPress={(event) => { event.stopPropagation?.(); onJoin(); }} disabled={requesting} style={[styles.joinButton, requesting && styles.requestedButton]}>{requesting ? <ActivityIndicator size="small" color="#0E2321" /> : <Icon name="add" size={17} color="#0E2321" />}<Text style={[styles.joinButtonText, requesting && styles.requestedText]}>{requesting ? (invited ? 'Joining…' : 'Sending request…') : invited ? 'Accept invite' : 'Ask to join'}</Text></Pressable>)}
     </Pressable>
   );
 }
 
-function TeamDetail({ team, joined, requested, requesting, cancelling, onBack, onJoin, onCancel, onViewHub, onChat, onUpdateImage, onShare }) {
+function TeamDetail({ team, joined, invited, requested, requesting, cancelling, onBack, onJoin, onCancel, onViewHub, onChat, onUpdateImage, onShare }) {
   const editable = canEditTeam(team);
   const width = useResponsiveWidth();
   const compactPhone = width <= 440;
@@ -298,7 +300,7 @@ function TeamDetail({ team, joined, requested, requesting, cancelling, onBack, o
       <Text style={[styles.sectionLabel, compactPhone && styles.sectionLabelCompact]}>ABOUT THE TEAM</Text><Text style={styles.about}>{team.about || 'A friendly local team looking for reliable players and great games.'}</Text>
       <View style={[styles.requirement, compactPhone && styles.requirementCompact]}><Icon name="checkmark-circle-outline" color={C.teal} /><View style={styles.requirementCopy}><Text style={styles.requirementTitle}>Good fit for you</Text><Text style={styles.footText}>{team.level} · Doubles · Weekday evenings</Text></View></View>
       <View style={styles.sectionHead}><Text style={[styles.sectionLabel, compactPhone && styles.sectionLabelCompact]}>MEMBERS</Text><Text style={styles.sectionLink}>{team.members} total</Text></View><View style={[styles.members, compactPhone && styles.membersCompact]}>{(team.roster || []).slice(0, 4).map((member, index) => <ProfilePhoto key={member.id} photo={member.avatar} name={member.name} size={42} style={[styles.avatar, index > 0 && styles.avatarOffset]} />)}</View>
-      {joined ? <View style={[styles.memberActions, compactPhone && styles.detailActionsCompact]}><Pressable onPress={onChat} style={[styles.messageButton, compactPhone && styles.detailActionButtonCompact]}><Icon name="chatbubble-outline" size={18} color={C.teal} /><Text style={styles.messageText}>Team chat</Text></Pressable><Pressable onPress={onViewHub} style={[styles.primaryButton, compactPhone && styles.detailActionButtonCompact]}><Text style={styles.primaryText}>View team hub</Text><Icon name="arrow-forward" size={17} color="#0E2321" /></Pressable></View> : requested ? <View style={[styles.pendingRequestActions, compactPhone && styles.detailActionsCompact]}><View style={[styles.requestSentStatus, styles.requestSentStatusLarge, compactPhone && styles.detailActionButtonCompact]}><Icon name="checkmark-circle-outline" color={C.teal} /><Text style={styles.requestSentStatusText}>Request sent</Text></View><Pressable disabled={cancelling} onPress={onCancel} style={[styles.cancelRequestButton, styles.cancelRequestLarge, compactPhone && styles.detailActionButtonCompact, cancelling && styles.saveButtonDisabled]}>{cancelling ? <ActivityIndicator size="small" color={C.brick} /> : <Icon name="close-circle-outline" color={C.brick} />}<Text style={styles.cancelRequestText}>{cancelling ? 'Cancelling…' : 'Cancel request'}</Text></Pressable></View> : <Pressable disabled={requesting} onPress={onJoin} style={[styles.primaryButton, compactPhone && styles.detailActionButtonCompact, compactPhone && styles.detailActionsCompact, requesting && styles.requestedLarge]}>{requesting ? <ActivityIndicator size="small" color="#0E2321" /> : <Icon name="people-outline" color="#0E2321" />}<Text style={styles.primaryText}>{requesting ? 'Sending request…' : 'Ask to join team'}</Text></Pressable>}
+      {joined ? <View style={[styles.memberActions, compactPhone && styles.detailActionsCompact]}><Pressable onPress={onChat} style={[styles.messageButton, compactPhone && styles.detailActionButtonCompact]}><Icon name="chatbubble-outline" size={18} color={C.teal} /><Text style={styles.messageText}>Team chat</Text></Pressable><Pressable onPress={onViewHub} style={[styles.primaryButton, compactPhone && styles.detailActionButtonCompact]}><Text style={styles.primaryText}>View team hub</Text><Icon name="arrow-forward" size={17} color="#0E2321" /></Pressable></View> : requested ? <View style={[styles.pendingRequestActions, compactPhone && styles.detailActionsCompact]}><View style={[styles.requestSentStatus, styles.requestSentStatusLarge, compactPhone && styles.detailActionButtonCompact]}><Icon name="checkmark-circle-outline" color={C.teal} /><Text style={styles.requestSentStatusText}>Request sent</Text></View><Pressable disabled={cancelling} onPress={onCancel} style={[styles.cancelRequestButton, styles.cancelRequestLarge, compactPhone && styles.detailActionButtonCompact, cancelling && styles.saveButtonDisabled]}>{cancelling ? <ActivityIndicator size="small" color={C.brick} /> : <Icon name="close-circle-outline" color={C.brick} />}<Text style={styles.cancelRequestText}>{cancelling ? 'Cancelling…' : 'Cancel request'}</Text></Pressable></View> : <Pressable disabled={requesting} onPress={onJoin} style={[styles.primaryButton, compactPhone && styles.detailActionButtonCompact, compactPhone && styles.detailActionsCompact, requesting && styles.requestedLarge]}>{requesting ? <ActivityIndicator size="small" color="#0E2321" /> : <Icon name="people-outline" color="#0E2321" />}<Text style={styles.primaryText}>{requesting ? (invited ? 'Joining team…' : 'Sending request…') : invited ? 'Accept invitation' : 'Ask to join team'}</Text></Pressable>}
     </ScrollView>
   );
 }
@@ -585,7 +587,32 @@ function MessageInteractionModal({ message, visible, canModerate, currentUserId,
   );
 }
 
-function ChatMessage({ message, grouped, highlighted, seenBy, showDeliveryStatus, currentUserId, peopleById, onLayout, onOpenActions, onReact, onShowPeople, onPreview }) {
+// Full-screen photo or video from a team chat, with a save button (a download on
+// web, the photo library on phones).
+function TeamMediaPreview({ message, onClose }) {
+  const [saving, setSaving] = useState(false);
+  const uri = message?.video || message?.image;
+  const save = async () => {
+    setSaving(true);
+    try { await saveDirectMedia({ id: message.id, mediaUrl: uri, mediaType: message.video ? 'video' : 'image' }); } finally { setSaving(false); }
+  };
+  return (
+    <Modal visible={Boolean(message)} transparent animationType="fade" onRequestClose={onClose}>
+      <View style={styles.mediaPreviewBackdrop}>
+        {uri ? <Pressable accessibilityRole="button" accessibilityLabel={message.video ? 'Save video' : 'Save photo'} disabled={saving} onPress={save} style={[styles.mediaPreviewClose, styles.mediaPreviewSave]}>{saving ? <ActivityIndicator color="#FFFFFF" /> : <Icon name="download-outline" size={22} color="#FFFFFF" />}</Pressable> : null}
+        <Pressable accessibilityLabel="Close media preview" onPress={onClose} style={styles.mediaPreviewClose}><Icon name="close" size={22} color="#FFFFFF" /></Pressable>
+        {message?.image && !message.video ? <ExpoImage source={{ uri: message.image }} contentFit="contain" style={styles.mediaPreviewImage} /> : null}
+        {message?.video ? <VideoAttachment uri={message.video} style={styles.mediaPreviewVideo} /> : null}
+      </View>
+    </Modal>
+  );
+}
+
+const NO_PEOPLE = [];
+
+// Memoized so opening the reaction menu (or typing) doesn't re-render every bubble;
+// TeamChat passes stable handlers from useStableHandlers.
+const ChatMessage = React.memo(function ChatMessage({ message, grouped, highlighted, seenBy, showDeliveryStatus, currentUserId, peopleById, onMessageLayout, onOpenActions, onReact, onShowPeople, onPreview }) {
   const enter = useRef(new Animated.Value(0)).current;
   useEffect(() => {
     Animated.timing(enter, { toValue: 1, duration: 190, easing: Easing.out(Easing.cubic), useNativeDriver: Platform.OS !== 'web' }).start();
@@ -601,7 +628,7 @@ function ChatMessage({ message, grouped, highlighted, seenBy, showDeliveryStatus
   const mediaOnly = hasMedia && !visibleText;
   const status = message.deliveryState === 'uploading' ? 'Uploading…' : message.deliveryState === 'sending' ? 'Sending…' : 'Sent';
   return (
-    <Animated.View onLayout={onLayout} style={[styles.messageRow, message.mine && styles.messageRowMine, grouped && styles.messageGrouped, {
+    <Animated.View onLayout={({ nativeEvent }) => onMessageLayout(message.id, nativeEvent.layout.y)} style={[styles.messageRow, message.mine && styles.messageRowMine, grouped && styles.messageGrouped, {
       opacity: enter,
       transform: [{ translateY: enter.interpolate({ inputRange: [0, 1], outputRange: [8, 0] }) }],
     }]}>
@@ -625,7 +652,7 @@ function ChatMessage({ message, grouped, highlighted, seenBy, showDeliveryStatus
       </View>
     </Animated.View>
   );
-}
+});
 
 function TeamChat({ team, messages, readStates, currentUser, typing, liveMatch, hasEarlier, loadingEarlier, focusMessageId, onFocusHandled, onLoadEarlier, onBack, onSend, onEdit, onDelete, onUnsend, onReact, onPin, onReport, onBlock, onModerate, onTypingChange, onWatchLive, onInfo, onMessageMember, onJumpToMessage, onAttach }) {
   const [draft, setDraft] = useState('');
@@ -654,6 +681,12 @@ function TeamChat({ team, messages, readStates, currentUser, typing, liveMatch, 
   const currentUserId = currentUser?.id;
   const pinnedMessages = useMemo(() => messages.filter((m) => m.pinned).sort((a, b) => new Date(b.pinnedAt || 0) - new Date(a.pinnedAt || 0)), [messages]);
   const latestPinned = pinnedMessages[0];
+  const rowHandlers = useStableHandlers({
+    onMessageLayout: (messageId, y) => { messageLayoutsRef.current[messageId] = y; revealMessage(messageId, y); },
+    onOpenActions: (messageId) => openMessageActions(messageId),
+    onReact: (...args) => onReact(...args),
+    onShowPeople: (title, people) => setPeopleDetails({ title, people }),
+  });
   const peopleById = useMemo(() => {
     const people = {};
     (team.roster || []).forEach((member) => {
@@ -824,7 +857,7 @@ function TeamChat({ team, messages, readStates, currentUser, typing, liveMatch, 
           if (message.kind === 'member_joined') return message.text ? <View key={message.id} accessibilityRole="text" style={styles.memberJoinedNotice}><Icon name="person-add-outline" size={13} color={C.teal} /><Text style={styles.memberJoinedText}>{message.mine ? 'You joined the club' : message.text}</Text><Text style={styles.memberJoinedTime}>{message.time}</Text></View> : null;
           const previous = messages[index - 1];
           const grouped = previous?.kind !== 'member_joined' && previous?.sender === message.sender && previous?.mine === message.mine;
-          return <ChatMessage key={message.id} message={message} grouped={grouped} highlighted={highlightedMessageId === message.id} seenBy={seenByMessage[message.id] || []} showDeliveryStatus={message.id === latestMineId} currentUserId={currentUserId} peopleById={peopleById} onLayout={({ nativeEvent }) => { const y = nativeEvent.layout.y; messageLayoutsRef.current[message.id] = y; revealMessage(message.id, y); }} onOpenActions={openMessageActions} onReact={onReact} onShowPeople={(title, people) => setPeopleDetails({ title, people })} onPreview={setPreviewMessage} />;
+          return <ChatMessage key={message.id} message={message} grouped={grouped} highlighted={highlightedMessageId === message.id} seenBy={seenByMessage[message.id] || NO_PEOPLE} showDeliveryStatus={message.id === latestMineId} currentUserId={currentUserId} peopleById={peopleById} onMessageLayout={rowHandlers.onMessageLayout} onOpenActions={rowHandlers.onOpenActions} onReact={rowHandlers.onReact} onShowPeople={rowHandlers.onShowPeople} onPreview={setPreviewMessage} />;
         })}
         {typing?.length > 0 && <TypingBubble people={typing} />}
         </View>
@@ -849,9 +882,7 @@ function TeamChat({ team, messages, readStates, currentUser, typing, liveMatch, 
       <ChatReportModal message={reportingMessage} onClose={() => setReportingMessage(null)} onSubmit={onReport} />
       <PeopleModal details={peopleDetails} onClose={() => setPeopleDetails(null)} />
       <TeamChatMenu team={team} visible={menuOpen} currentUserId={currentUserId} onClose={() => setMenuOpen(false)} onInfo={onInfo} onMessageMember={onMessageMember} />
-      <Modal visible={Boolean(previewMessage)} transparent animationType="fade" onRequestClose={() => setPreviewMessage(null)}>
-        <View style={styles.mediaPreviewBackdrop}><Pressable accessibilityLabel="Close media preview" onPress={() => setPreviewMessage(null)} style={styles.mediaPreviewClose}><Icon name="close" size={22} color="#FFFFFF" /></Pressable>{previewMessage?.image && <ExpoImage source={{ uri: previewMessage.image }} contentFit="contain" style={styles.mediaPreviewImage} />}</View>
-      </Modal>
+      <TeamMediaPreview message={previewMessage} onClose={() => setPreviewMessage(null)} />
     </KeyboardAvoidingView>
   );
 }
@@ -989,9 +1020,7 @@ function TeamChatInfo({ team, currentUserId, pinnedMessages, sharedMedia, blocke
         <View style={styles.chatInfoSafetyNote}><Icon name="information-circle-outline" size={17} color={C.teal} /><Text style={styles.chatInfoSafetyText}>If someone may be in immediate danger, contact local emergency services. Reporting in Peakle does not replace emergency help.</Text></View>
       </ScrollView>
       <MemberManagementModal member={managedMember} visible={Boolean(managedMember)} managerRole={team.role} onClose={() => setManagedMember(null)} onChangeRole={onChangeMemberRole} onRemove={onRemoveMember} />
-      <Modal visible={Boolean(previewMessage)} transparent animationType="fade" onRequestClose={() => setPreviewMessage(null)}>
-        <View style={styles.mediaPreviewBackdrop}><Pressable accessibilityLabel="Close media preview" onPress={() => setPreviewMessage(null)} style={styles.mediaPreviewClose}><Icon name="close" size={22} color="#FFFFFF" /></Pressable>{previewMessage?.image && <ExpoImage source={{ uri: previewMessage.image }} contentFit="contain" style={styles.mediaPreviewImage} />}{previewMessage?.video && <VideoAttachment uri={previewMessage.video} style={styles.mediaPreviewVideo} />}</View>
-      </Modal>
+      <TeamMediaPreview message={previewMessage} onClose={() => setPreviewMessage(null)} />
     </View>
   );
 }
@@ -1376,6 +1405,9 @@ export default function TeamScreen({ navigation, route }) {
   const [hubTeam, setHubTeam] = useState(null);
   const [chatTeam, setChatTeam] = useState(null);
   const [chatInfoTeam, setChatInfoTeam] = useState(null);
+  // The tab a team chat was opened from (Chats). While set, the chat belongs to
+  // that tab in the navigation and Back returns there instead of the team page.
+  const [chatReturnTo, setChatReturnTo] = useState(null);
   const [chatInfo, setChatInfo] = useState({ loading: false, pinned: [], media: [], blocked: [] });
   const [chatSafetyTeam, setChatSafetyTeam] = useState(null);
   const [chatSafetyStatus, setChatSafetyStatus] = useState(null);
@@ -1469,6 +1501,7 @@ export default function TeamScreen({ navigation, route }) {
     setHubTeam(null);
     setChatTeam(null);
     setChatInfoTeam(null);
+    setChatReturnTo(null);
     setChatSafetyTeam(null);
     setLiveScoreTeam(null);
     setEditingTeam(null);
@@ -1881,9 +1914,28 @@ export default function TeamScreen({ navigation, route }) {
     const team = joined.find((item) => item.id === teamId);
     if (!team) return;
     handledOpenChatToken.current = token;
+    setChatReturnTo(route.params.chatReturnTo || null);
     openTeamChat(team);
-    navigation.setParams({ openChatTeamId: undefined, openChatToken: undefined });
-  }, [joined, navigation, openTeamChat, route?.params?.openChatTeamId, route?.params?.openChatToken]);
+    navigation.setParams({ openChatTeamId: undefined, openChatToken: undefined, chatReturnTo: undefined });
+  }, [joined, navigation, openTeamChat, route?.params?.openChatTeamId, route?.params?.openChatToken, route?.params?.chatReturnTo]);
+  const chatOwner = chatReturnTo && (chatTeam || chatInfoTeam) ? chatReturnTo : undefined;
+  useEffect(() => {
+    // Lets the tab bar highlight Chats rather than Teams for a chat opened there.
+    if (route?.params?.chatOwner !== chatOwner) navigation.setParams({ chatOwner });
+  }, [chatOwner, navigation, route?.params?.chatOwner]);
+  // Tapping a team invite notification lands on the Teams list with the
+  // invitation cards on top, fetched fresh so a just-sent invite is there.
+  const handledOpenInvitationToken = useRef(null);
+  useEffect(() => {
+    const token = route?.params?.openInvitationToken;
+    if (!token || handledOpenInvitationToken.current === token) return;
+    handledOpenInvitationToken.current = token;
+    setSelected(null);
+    setHubTeam(null);
+    setTab((current) => current || 'Joined');
+    loadTeamData().catch(() => {});
+    navigation.setParams({ openInvitationTeamId: undefined, openInvitationToken: undefined });
+  }, [loadTeamData, navigation, route?.params?.openInvitationToken]);
   const confirmChatSafety = useCallback(async (isAdult) => {
     if (!chatSafetyTeam || chatSafetyBusy) return;
     const team = chatSafetyTeam;
@@ -1946,6 +1998,12 @@ export default function TeamScreen({ navigation, route }) {
   }, []);
   const openJoinRequest = (team) => {
     if (!team || requested.includes(team.id) || requesting.includes(team.id)) return;
+    const invitation = invitations.find((item) => item.team_id === team.id);
+    if (invitation) {
+      setRequesting((value) => [...value, team.id]);
+      respondInvitation(invitation, true).finally(() => setRequesting((value) => value.filter((id) => id !== team.id)));
+      return;
+    }
     setJoinTeam(team);
   };
   const requestJoin = async (introduction) => {
@@ -2468,11 +2526,11 @@ export default function TeamScreen({ navigation, route }) {
   if (invitingTeam) return <SafeAreaView style={styles.safe}><StatusBar style={isDark ? 'light' : 'dark'} backgroundColor={C.paper} /><PlayerInviteScreen team={invitingTeam} onBack={() => { setInvitingTeam(null); setHubTeam(invitingTeam); }} /></SafeAreaView>;
   if (liveScoreTeam) return <SafeAreaView style={styles.safe}><StatusBar style={isDark ? 'light' : 'dark'} backgroundColor={C.paper} /><LiveScore team={liveScoreTeam} match={liveMatches[liveScoreTeam.id]} scoringMode={liveScoreMode === 'scorer'} busy={matchBusy} currentUserId={user?.id} onRally={(winner) => recordRally(liveScoreTeam.id, winner)} onUndo={() => undoRally(liveScoreTeam.id)} onFinishGame={() => finishGame(liveScoreTeam.id)} onFinishMatch={() => finishMatch(liveScoreTeam.id)} onChangeScorer={() => setScorerChangeMatchId(liveMatches[liveScoreTeam.id]?.id)} onBack={() => { setScorerChangeMatchId(null); setLiveScoreTeam(null); setLiveScoreMode('viewer'); }} /><TeamScorerPicker visible={Boolean(scorerChangeMatchId)} team={liveScoreTeam} currentUserId={user?.id} selectedId={liveMatches[liveScoreTeam.id]?.scorerId} busy={matchBusy} changing onClose={() => setScorerChangeMatchId(null)} onSelect={(scorerId) => changeTeamMatchScorer(liveScoreTeam.id, scorerChangeMatchId, scorerId)} /></SafeAreaView>;
   if (chatSafetyTeam) return <SafeAreaView style={styles.safe}><StatusBar style={isDark ? 'light' : 'dark'} backgroundColor={C.paper} /><ChatSafetyScreen team={chatSafetyTeam} status={chatSafetyStatus} busy={chatSafetyBusy} onConfirm={confirmChatSafety} onBack={() => setChatSafetyTeam(null)} /></SafeAreaView>;
-  if (chatInfoTeam) return <SafeAreaView style={styles.safe}><StatusBar style={isDark ? 'light' : 'dark'} backgroundColor={C.paper} /><TeamChatInfo team={chatInfoTeam} currentUserId={user?.id} pinnedMessages={chatInfo.pinned} sharedMedia={chatInfo.media} blockedUsers={chatInfo.blocked} loading={chatInfo.loading} openingMessageId={openingPinnedMessageId} onViewMessage={jumpToPinnedMessage} onPin={pinMessage} onUnblock={unblockPlayer} onChangeMemberRole={changeMemberRole} onRemoveMember={removeMember} onMessageMember={(member) => navigation.navigate('DirectChat', { player: { id: member.id, name: member.name, avatar: member.avatar }, ownerTab: 'Team' })} onBack={() => setChatInfoTeam(null)} onViewTeam={() => { setSelected(chatInfoTeam); setChatInfoTeam(null); setChatTeam(null); }} /></SafeAreaView>;
-  if (chatTeam) return <SafeAreaView style={styles.safe}><StatusBar style={isDark ? 'light' : 'dark'} backgroundColor={C.paper} /><TeamChat team={chatTeam} messages={messages[chatTeam.id] || []} readStates={messageReadStates[chatTeam.id] || []} currentUser={user} typing={Object.values(typingByTeam[chatTeam.id] || {})} liveMatch={liveMatches[chatTeam.id]} hasEarlier={messagePagination[chatTeam.id]?.hasMore} loadingEarlier={messagePagination[chatTeam.id]?.loading} focusMessageId={focusMessageId} onFocusHandled={() => setFocusMessageId(null)} onLoadEarlier={loadEarlierMessages} onWatchLive={() => { setLiveScoreMode('viewer'); setLiveScoreTeam(chatTeam); }} onSend={sendMessage} onEdit={editMessage} onDelete={deleteMessageForMe} onUnsend={unsendMessage} onReact={reactToMessage} onPin={pinMessage} onReport={reportMessage} onBlock={blockMessageSender} onModerate={moderateMessage} onTypingChange={changeChatTyping} onAttach={attachMedia} onJumpToMessage={jumpToPinnedMessage} onInfo={() => { changeChatTyping(false); setChatInfoTeam(chatTeam); }} onMessageMember={(member) => { changeChatTyping(false); navigation.navigate('DirectChat', { player: { id: member.id, name: member.name, avatar: member.avatar }, ownerTab: 'Team' }); }} onBack={() => { changeChatTyping(false); setFocusMessageId(null); setSelected(chatTeam); setChatTeam(null); }} /></SafeAreaView>;
+  if (chatInfoTeam) return <SafeAreaView style={styles.safe}><StatusBar style={isDark ? 'light' : 'dark'} backgroundColor={C.paper} /><TeamChatInfo team={chatInfoTeam} currentUserId={user?.id} pinnedMessages={chatInfo.pinned} sharedMedia={chatInfo.media} blockedUsers={chatInfo.blocked} loading={chatInfo.loading} openingMessageId={openingPinnedMessageId} onViewMessage={jumpToPinnedMessage} onPin={pinMessage} onUnblock={unblockPlayer} onChangeMemberRole={changeMemberRole} onRemoveMember={removeMember} onMessageMember={(member) => navigation.navigate('DirectChat', { player: { id: member.id, name: member.name, avatar: member.avatar }, ownerTab: 'Team' })} onBack={() => setChatInfoTeam(null)} onViewTeam={() => { setChatReturnTo(null); setSelected(chatInfoTeam); setChatInfoTeam(null); setChatTeam(null); }} /></SafeAreaView>;
+  if (chatTeam) return <SafeAreaView style={styles.safe}><StatusBar style={isDark ? 'light' : 'dark'} backgroundColor={C.paper} /><TeamChat team={chatTeam} messages={messages[chatTeam.id] || []} readStates={messageReadStates[chatTeam.id] || []} currentUser={user} typing={Object.values(typingByTeam[chatTeam.id] || {})} liveMatch={liveMatches[chatTeam.id]} hasEarlier={messagePagination[chatTeam.id]?.hasMore} loadingEarlier={messagePagination[chatTeam.id]?.loading} focusMessageId={focusMessageId} onFocusHandled={() => setFocusMessageId(null)} onLoadEarlier={loadEarlierMessages} onWatchLive={() => { setLiveScoreMode('viewer'); setLiveScoreTeam(chatTeam); }} onSend={sendMessage} onEdit={editMessage} onDelete={deleteMessageForMe} onUnsend={unsendMessage} onReact={reactToMessage} onPin={pinMessage} onReport={reportMessage} onBlock={blockMessageSender} onModerate={moderateMessage} onTypingChange={changeChatTyping} onAttach={attachMedia} onJumpToMessage={jumpToPinnedMessage} onInfo={() => { changeChatTyping(false); setChatInfoTeam(chatTeam); }} onMessageMember={(member) => { changeChatTyping(false); navigation.navigate('DirectChat', { player: { id: member.id, name: member.name, avatar: member.avatar }, ownerTab: 'Team' }); }} onBack={() => { changeChatTyping(false); setFocusMessageId(null); if (chatReturnTo) { navigation.navigate(chatReturnTo); return; } setSelected(chatTeam); setChatTeam(null); }} /></SafeAreaView>;
   if (joinTeam) return <SafeAreaView style={styles.safe}><StatusBar style={isDark ? 'light' : 'dark'} backgroundColor={C.paper} /><JoinRequestScreen team={joinTeam} user={user} submitting={requesting.includes(joinTeam.id)} onBack={() => setJoinTeam(null)} onSubmit={requestJoin} /></SafeAreaView>;
   if (hubTeam) return <SafeAreaView style={styles.safe}><StatusBar style={isDark ? 'light' : 'dark'} backgroundColor={C.paper} /><TeamHub team={hubTeam} requests={joinRequests[hubTeam.id] || []} liveMatch={liveMatches[hubTeam.id]} nextChallenges={teamChallenges[hubTeam.id] || []} matchBusy={matchBusy} onOpenMatch={() => { setLiveScoreMode(liveMatches[hubTeam.id]?.canScore ? 'scorer' : 'viewer'); setLiveScoreTeam(hubTeam); }} onStartMatch={(challengeId) => setScorerChallengeId(challengeId)} onRefreshRequests={() => refreshJoinRequests([hubTeam.id]).catch(() => {})} onBack={() => { setScorerChallengeId(null); setHubTeam(null); setSelected(hubTeam); }} onUpdateImage={updateTeamImage} onEdit={() => { if (canEditTeam(hubTeam)) { setEditingTeam(hubTeam); setHubTeam(null); } }} onInvite={() => { setInvitingTeam(hubTeam); setHubTeam(null); }} onChallenges={() => navigation.navigate('Pickleball', { openTab: 'Compete', ownerTab: 'Team' })} onAccept={(request) => acceptRequest(hubTeam, request)} onDecline={(requestId) => declineRequest(hubTeam, requestId)} /><TeamScorerPicker visible={Boolean(scorerChallengeId)} team={hubTeam} currentUserId={user?.id} busy={matchBusy} onClose={() => setScorerChallengeId(null)} onSelect={(scorerId) => startMatchForChallenge(hubTeam.id, scorerChallengeId, scorerId)} /></SafeAreaView>;
-  if (selected) return <SafeAreaView style={styles.safe}><StatusBar style={isDark ? 'light' : 'dark'} backgroundColor={C.paper} /><TeamDetail team={selected} joined={joined.some((team) => team.id === selected.id)} requested={requested.includes(selected.id)} requesting={requesting.includes(selected.id)} cancelling={cancellingRequests.includes(selected.id)} onBack={() => setSelected(null)} onJoin={() => openJoinRequest(selected)} onCancel={() => cancelJoinRequest(selected)} onShare={() => shareTeam(selected)} onChat={() => openTeamChat(selected)} onViewHub={() => { setHubTeam(selected); setSelected(null); }} onUpdateImage={updateTeamImage} /></SafeAreaView>;
+  if (selected) return <SafeAreaView style={styles.safe}><StatusBar style={isDark ? 'light' : 'dark'} backgroundColor={C.paper} /><TeamDetail team={selected} joined={joined.some((team) => team.id === selected.id)} invited={invitations.some((item) => item.team_id === selected.id)} requested={requested.includes(selected.id)} requesting={requesting.includes(selected.id)} cancelling={cancellingRequests.includes(selected.id)} onBack={() => setSelected(null)} onJoin={() => openJoinRequest(selected)} onCancel={() => cancelJoinRequest(selected)} onShare={() => shareTeam(selected)} onChat={() => openTeamChat(selected)} onViewHub={() => { setHubTeam(selected); setSelected(null); }} onUpdateImage={updateTeamImage} /></SafeAreaView>;
   return (
     <SafeAreaView style={styles.safe}>
       <StatusBar style={isDark ? 'light' : 'dark'} backgroundColor={C.paper} />
@@ -2493,8 +2551,9 @@ export default function TeamScreen({ navigation, route }) {
         </View>
         <KitchenLine style={styles.headerLine} />
         {!tab ? <View style={styles.teamLoading}><ActivityIndicator color={C.teal} /><Text style={styles.footText}>Loading your teams…</Text></View> : <View style={styles.tabs}>{['Joined', 'Discover'].map((item) => <Pressable key={item} onPress={() => setTab(item)} style={[styles.tab, tab === item && styles.tabActive]}><Text style={[styles.tabText, tab === item && styles.tabTextActive]}>{item}</Text>{item === 'Joined' && <View style={[styles.count, tab === item && styles.countActive]}><Text style={[styles.countText, tab === item && styles.countTextActive]}>{joined.length}</Text></View>}</Pressable>)}</View>}
-        {tab === 'Discover' && <><View style={styles.search}><Icon name="search-outline" color={C.ink40} /><TextInput value={query} onChangeText={setQuery} placeholder="Search teams, area, or level" placeholderTextColor={C.ink40} style={styles.searchInput} /></View><ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.filters}>{['For you', 'Nearby', 'My level', 'Open spots'].map((item) => <Pressable key={item} onPress={() => setFilter(item)} style={[styles.filter, filter === item && styles.filterActive]}><Text style={filter === item ? styles.filterActiveText : styles.filterText}>{item}</Text></Pressable>)}</ScrollView><View style={styles.sectionHead}><View style={styles.discoverSectionCopy}><Text numberOfLines={1} style={styles.eyebrow}>NEAREST TO {userLocation.label.toUpperCase()}</Text><Text style={styles.h2}>{discoverTeams.length} teams to explore</Text></View><Pressable accessibilityLabel="Change team search location" onPress={() => setLocationOpen(true)} style={styles.discoveryLocationChange}><Icon name="location-outline" size={14} color={C.teal} /><Text style={styles.discoveryLocationChangeText}>Change</Text></Pressable></View><View {...webLayout('two-columns')}>{discoverTeams.map((team) => <TeamCard key={team.id} team={team} requested={requested.includes(team.id)} requesting={requesting.includes(team.id)} cancelling={cancellingRequests.includes(team.id)} onJoin={() => openJoinRequest(team)} onCancel={() => cancelJoinRequest(team)} onOpen={() => setSelected(team)} />)}</View>{!discoverTeams.length && <View style={styles.empty}><Icon name="people-outline" size={35} color={C.ink40} /><Text style={styles.emptyTitle}>No teams found</Text><Text style={styles.footText}>Try another filter or change your search location.</Text></View>}</>}
-        {tab === 'Joined' && <>{invitations.length > 0 && <><View style={styles.sectionHead}><View><Text style={styles.eyebrow}>ACTION REQUIRED</Text><Text style={styles.h2}>Team invitations</Text></View><Text style={styles.sectionLink}>{invitations.length} pending</Text></View>{invitations.map((invitation) => <TeamInvitationCard key={invitation.id} invitation={invitation} onAccept={() => respondInvitation(invitation, true)} onDecline={() => respondInvitation(invitation, false)} />)}</>}<View style={styles.sectionHead}><View><Text style={styles.eyebrow}>TEAM INBOX</Text><Text style={styles.h2}>Your teams</Text></View></View><View {...webLayout('two-columns')}>{joined.map((team) => <TeamCard key={team.id} team={team} joined summary={chatSafetyStatus?.eligible ? conversationSummaries[team.id] : undefined} onOpen={() => setSelected(team)} onChat={() => openTeamChat(team)} />)}</View><ClubWarsTeaser /><Pressable onPress={() => setTab('Discover')} style={styles.exploreButton}><Icon name="compass-outline" color={C.teal} /><View style={styles.exploreCopy}><Text style={styles.exploreTitle}>Find another team</Text><Text style={styles.footText}>Browse public teams with open spots.</Text></View><Icon name="arrow-forward" color={C.teal} /></Pressable></>}
+        {tab && invitations.length > 0 && <><View style={styles.sectionHead}><View><Text style={styles.eyebrow}>ACTION REQUIRED</Text><Text style={styles.h2}>Team invitations</Text></View><Text style={styles.sectionLink}>{invitations.length} pending</Text></View>{invitations.map((invitation) => <TeamInvitationCard key={invitation.id} invitation={invitation} onAccept={() => respondInvitation(invitation, true)} onDecline={() => respondInvitation(invitation, false)} />)}</>}
+        {tab === 'Discover' && <><View style={styles.search}><Icon name="search-outline" color={C.ink40} /><TextInput value={query} onChangeText={setQuery} placeholder="Search teams, area, or level" placeholderTextColor={C.ink40} style={styles.searchInput} /></View><ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.filters}>{['For you', 'Nearby', 'My level', 'Open spots'].map((item) => <Pressable key={item} onPress={() => setFilter(item)} style={[styles.filter, filter === item && styles.filterActive]}><Text style={filter === item ? styles.filterActiveText : styles.filterText}>{item}</Text></Pressable>)}</ScrollView><View style={styles.sectionHead}><View style={styles.discoverSectionCopy}><Text numberOfLines={1} style={styles.eyebrow}>NEAREST TO {userLocation.label.toUpperCase()}</Text><Text style={styles.h2}>{discoverTeams.length} teams to explore</Text></View><Pressable accessibilityLabel="Change team search location" onPress={() => setLocationOpen(true)} style={styles.discoveryLocationChange}><Icon name="location-outline" size={14} color={C.teal} /><Text style={styles.discoveryLocationChangeText}>Change</Text></Pressable></View><View {...webLayout('two-columns')}>{discoverTeams.map((team) => <TeamCard key={team.id} team={team} invited={invitations.some((item) => item.team_id === team.id)} requested={requested.includes(team.id)} requesting={requesting.includes(team.id)} cancelling={cancellingRequests.includes(team.id)} onJoin={() => openJoinRequest(team)} onCancel={() => cancelJoinRequest(team)} onOpen={() => setSelected(team)} />)}</View>{!discoverTeams.length && <View style={styles.empty}><Icon name="people-outline" size={35} color={C.ink40} /><Text style={styles.emptyTitle}>No teams found</Text><Text style={styles.footText}>Try another filter or change your search location.</Text></View>}</>}
+        {tab === 'Joined' && <><View style={styles.sectionHead}><View><Text style={styles.eyebrow}>TEAM INBOX</Text><Text style={styles.h2}>Your teams</Text></View></View><View {...webLayout('two-columns')}>{joined.map((team) => <TeamCard key={team.id} team={team} joined summary={chatSafetyStatus?.eligible ? conversationSummaries[team.id] : undefined} onOpen={() => setSelected(team)} onChat={() => openTeamChat(team)} />)}</View><ClubWarsTeaser /><Pressable onPress={() => setTab('Discover')} style={styles.exploreButton}><Icon name="compass-outline" color={C.teal} /><View style={styles.exploreCopy}><Text style={styles.exploreTitle}>Find another team</Text><Text style={styles.footText}>Browse public teams with open spots.</Text></View><Icon name="arrow-forward" color={C.teal} /></Pressable></>}
       </ScrollView>
       <LocationPicker visible={locationOpen} onClose={() => setLocationOpen(false)} />
 
@@ -2550,6 +2609,7 @@ const lightStyles = createMobileStyleSheet({
   chatAttachmentMediaOnly: { marginBottom: 0 },
   mediaPreviewBackdrop: { flex: 1, alignItems: 'center', justifyContent: 'center', backgroundColor: 'rgba(5,14,13,.94)' },
   mediaPreviewClose: { position: 'absolute', zIndex: 2, top: 54, right: 18, width: 42, height: 42, alignItems: 'center', justifyContent: 'center', borderRadius: 21, backgroundColor: 'rgba(255,255,255,.14)' },
+  mediaPreviewSave: { right: 72 },
   mediaPreviewImage: { width: '94%', height: '76%' },
   mediaPreviewVideo: { width: '94%', height: '76%', marginBottom: 0, borderRadius: 0 },
   messageMetaRow: { marginTop: 3, flexDirection: 'row', alignItems: 'center', gap: 5 },

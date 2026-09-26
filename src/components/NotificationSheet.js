@@ -12,6 +12,7 @@ const GROUP_LABELS = { TODAY: 'Today', 'THIS WEEK': 'This week', EARLIER: 'Earli
 function NotificationRow({ item, onRead, onDelete, onOpen, onFollowResponse, menuOpen, onToggleMenu, styles, colors }) {
   const unread = !item.read_at;
   const opensDestination = Boolean(onOpen && (item.data?.conversationId || item.data?.sessionId || item.data?.gameId
+    || (item.kind?.startsWith('team_invite') && item.data?.teamId)
     || (item.kind === 'community_announcement' && item.data?.eventKind && item.data?.eventId)));
   const followRequest = Boolean(item.kind === 'follow_request' && item.data?.requesterId && onFollowResponse);
   const [busy, setBusy] = useState('');

@@ -145,6 +145,8 @@ function PeakleTabBar({ state, descriptors, navigation }) {
   const [pendingRoute, setPendingRoute] = useState(null);
   const alwaysHiddenRoutes = new Set([COURT_BOOKING_ENABLED ? 'Schedule' : 'Book', 'Pickleball', 'Activities', 'ActivityDetails', 'OpenPlayActivity', 'Privacy', 'LegalDocument', 'AccountDeletion', 'PaymentHistory', 'HelpSupport', 'SupportChat', 'CommunityChat', 'NotificationTest', 'Inbox', 'DirectChat', 'PublicProfile', 'Connections', 'Leaderboard', 'CompetitionDivision', 'OrganizerPreview']);
   const currentRoute = state.routes[state.index];
+  // A team chat opened from Chats lives on the Team route but belongs to Chats.
+  const chatOwner = currentRoute.name === 'Team' ? currentRoute.params?.chatOwner : undefined;
   const theme = isDark
     ? { background: '#0E2321', surface: '#17302D', line: '#304743', activeText: colors.ink, activeLabel: colors.ink, centerActiveLabel: colors.surface, muted: '#9FB3AC', active: colors.optic, kitchenLine: colors.optic }
     : { background: '#F3F5EF', surface: colors.surface, line: colors.line, activeText: colors.ink, activeLabel: colors.ink, centerActiveLabel: colors.ink, muted: colors.ink40, active: colors.optic, kitchenLine: colors.teal };
@@ -174,12 +176,12 @@ function PeakleTabBar({ state, descriptors, navigation }) {
     : ['Inbox', 'DirectChat', 'CommunityChat'].includes(currentRoute.name) ? 'Inbox'
     : legacyMobileOwner === 'Profile' ? null
     : legacyMobileOwner;
-  const contextualOwner = desktop ? ({
+  const contextualOwner = chatOwner || (desktop ? ({
     ...(COURT_BOOKING_ENABLED ? { ActivityDetails: 'Activities', OpenPlayActivity: 'Activities' } : {}),
     Privacy: 'Profile', LegalDocument: 'Profile', AccountDeletion: 'Profile',
     PaymentHistory: 'Profile', PublicProfile: 'Profile', Connections: 'Profile', OrganizerPreview: 'Profile',
     SupportChat: 'HelpSupport', CommunityChat: 'Inbox', CompetitionDivision: DISCOVERY_TAB,
-  }[currentRoute.name] || mobileOwner) : mobileOwner;
+  }[currentRoute.name] || mobileOwner) : mobileOwner);
   const guardedNavigate = (name, params) => {
     if (currentRoute.name === 'Play' && joinedInvite) {
       if (leaveDialogOpen) return;
@@ -195,9 +197,9 @@ function PeakleTabBar({ state, descriptors, navigation }) {
       {desktop ? <View dataSet={{ sidebarPart: 'brand' }} style={styles.sidebarBrand}><Image source={isDark ? BALL_IMAGE : BRAND_BALL_IMAGE} style={[styles.sidebarLogo, isDark && { tintColor: colors.optic }]} /><Text accessibilityRole="header" style={[styles.sidebarWordmark, { color: isDark ? '#F3F5EF' : colors.ink }]}>Peakle</Text><Text style={styles.sidebarBeta}>BETA</Text></View> : null}
       <View accessibilityRole={desktop ? 'navigation' : undefined} accessibilityLabel={desktop ? 'Main navigation' : undefined} style={[styles.tabBar, { backgroundColor: theme.surface, borderColor: theme.line }, desktop && styles.sidebarLinks]}>
         {visibleRoutes.map((route) => {
-          const routeFocused = currentRoute.key === route.key;
+          const routeFocused = currentRoute.key === route.key && !chatOwner;
           const focused = routeFocused
-            || (route.name === contextualOwner && !(desktop && desktopRoutes.includes(currentRoute.name)));
+            || (route.name === contextualOwner && (Boolean(chatOwner) || !(desktop && desktopRoutes.includes(currentRoute.name))));
           const play = route.name === 'Play';
           const label = desktopLabels[route.name] ?? descriptors[route.key].options.tabBarLabel ?? route.name;
           const onPress = () => {
