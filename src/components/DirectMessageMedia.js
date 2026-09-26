@@ -77,37 +77,139 @@ function VideoContent({ uri, style }) {
   return <VideoView player={player} nativeControls contentFit="contain" style={[styles.video, style]} />;
 }
 
+// Voice notes are downloaded before they play so a slow connection cannot
+// make them stutter mid-sentence. The copy is kept per message, so replaying
+// or reopening the chat does not download it again. If the download fails
+// the note streams as before.
+const voiceCache = new Map();
+const isRemote = (uri) => /^https?:/i.test(uri || '');
+const voiceExtension = (uri) => (uri.split('?')[0].match(/\.(m4a|mp4|aac|mp3|webm|ogg|wav)$/i)?.[1] || 'm4a').toLowerCase();
+
+function downloadVoice(key, uri) {
+  if (!voiceCache.has(key)) {
+    const download = (async () => {
+      if (Platform.OS === 'web') {
+        const response = await fetch(uri);
+        if (!response.ok) throw new Error(`HTTP ${response.status}`);
+        return URL.createObjectURL(await response.blob());
+      }
+      const file = new File(Paths.cache, `peakle-voice-${String(key).replace(/[^\w-]/g, '')}.${voiceExtension(uri)}`);
+      if (!file.exists) await File.downloadFileAsync(uri, file, { idempotent: true });
+      return file.uri;
+    })();
+    voiceCache.set(key, download);
+    download.catch(() => voiceCache.delete(key));
+  }
+  return voiceCache.get(key);
+}
+
+function usePlayableVoice(message) {
+  const uri = message.mediaUrl;
+  const remote = isRemote(uri) && !message.uploading;
+  const [local, setLocal] = useState(null);
+  useEffect(() => {
+    if (!remote) { setLocal(null); return undefined; }
+    let cancelled = false;
+    setLocal(null);
+    downloadVoice(message.id, uri)
+      .then((result) => { if (!cancelled) setLocal(result); })
+      .catch(() => { if (!cancelled) setLocal(uri); });
+    return () => { cancelled = true; };
+  }, [message.id, remote, uri]);
+  return remote ? local : uri || null;
+}
+
+function Waveform({ bars, color }) {
+  return bars.map((height, index) => <View key={index} style={[styles.waveBar, { height: 4 + height * 22, backgroundColor: color }]} />);
+}
+
 function VoiceContent({ message, colors }) {
-  const player = useAudioPlayer(message.mediaUrl ? { uri: message.mediaUrl } : null);
+  const playableUri = usePlayableVoice(message);
+  const player = useAudioPlayer(playableUri ? { uri: playableUri } : null, { updateInterval: 250 });
   const status = useAudioPlayerStatus(player);
   const bars = useMemo(() => waveformFor(message.id), [message.id]);
   const duration = (status.duration ? status.duration * 1000 : 0) || message.mediaDurationMs || 0;
   const position = (status.currentTime || 0) * 1000;
-  const progress = duration ? Math.min(1, position / duration) : 0;
   const tint = message.mine ? '#FFFFFF' : colors.teal;
   const muted = message.mine ? 'rgba(255,255,255,.4)' : colors.line;
+  const [waveWidth, setWaveWidth] = useState(0);
+  // Players briefly report "not playing" while audio warms up after play(),
+  // which made the icon and waveform flicker. A pressed play counts as
+  // playing until the audio clock starts moving (or a second passes).
+  const [starting, setStarting] = useState(false);
+  useEffect(() => {
+    if (!starting) return undefined;
+    if (status.didJustFinish || (status.playing && position > 0)) { setStarting(false); return undefined; }
+    const timer = setTimeout(() => setStarting(false), 1000);
+    return () => clearTimeout(timer);
+  }, [position, starting, status.didJustFinish, status.playing]);
+  const playing = status.playing || starting;
+  // The played part of the waveform sweeps continuously toward the end at
+  // playback speed. Status updates only re-anchor it when playback starts,
+  // stops, seeks, or drifts noticeably, so the sweep never stutters.
+  const progress = useRef(new Animated.Value(0)).current;
+  const sweep = useRef(null);
+  const rate = status.playbackRate || 1;
+  useEffect(() => {
+    const current = duration ? Math.min(1, position / duration) : 0;
+    const running = sweep.current;
+    if (playing && duration && current < 1) {
+      const expected = running ? running.position + (Date.now() - running.startedAt) * running.rate : null;
+      const drift = running ? Math.abs(expected - position) : Infinity;
+      if (running && (starting || (running.duration === duration && running.rate === rate && drift < 200))) return;
+      running?.animation.stop();
+      // Small drift is absorbed by gliding from where the sweep is at a
+      // slightly adjusted speed, so it never jumps backward; a seek snaps.
+      if (drift > 1000) progress.setValue(current);
+      const animation = Animated.timing(progress, { toValue: 1, duration: (duration - position) / rate, easing: Easing.linear, useNativeDriver: true });
+      sweep.current = { animation, position, startedAt: Date.now(), rate, duration };
+      animation.start();
+      return;
+    }
+    running?.animation.stop();
+    sweep.current = null;
+    progress.setValue(current);
+  }, [duration, playing, position, progress, rate, starting]);
+  useEffect(() => () => sweep.current?.animation.stop(), []);
+  // Slide a clipping window right while sliding its contents left by the
+  // same amount, so tinted bars are revealed in place (native-driver safe).
+  const hidden = progress.interpolate({ inputRange: [0, 1], outputRange: [-waveWidth, 0], extrapolate: 'clamp' });
+  const reveal = progress.interpolate({ inputRange: [0, 1], outputRange: [waveWidth, 0], extrapolate: 'clamp' });
   // Replaying a finished note starts from the beginning.
   const toggle = () => {
-    if (status.playing) { player.pause(); return; }
+    if (playing) { setStarting(false); player.pause(); return; }
     if (status.didJustFinish || (duration && position >= duration - 150)) player.seekTo(0);
+    setStarting(true);
     player.play();
   };
+  const loading = Boolean(message.mediaUrl) && !message.uploading && !playableUri;
   return (
     <View style={styles.voiceRow}>
       <Pressable
         accessibilityRole="button"
-        accessibilityLabel={status.playing ? 'Pause voice message' : 'Play voice message'}
-        disabled={!message.mediaUrl}
+        accessibilityLabel={playing ? 'Pause voice message' : 'Play voice message'}
+        disabled={!message.mediaUrl || loading}
         onPress={toggle}
         hitSlop={6}
         style={[styles.voiceButton, { backgroundColor: message.mine ? '#FFFFFF' : colors.teal }]}
       >
-        {message.uploading ? <UploadProgressRing progress={message.uploadProgress || 0} size={26} strokeWidth={3} showLabel={false} color={message.mine ? colors.teal : '#FFFFFF'} trackColor={message.mine ? 'rgba(28,107,102,.25)' : 'rgba(255,255,255,.35)'} /> : <AppIcon name={status.playing ? 'pause' : 'play'} size={16} color={message.mine ? colors.teal : '#FFFFFF'} />}
+        {message.uploading
+          ? <UploadProgressRing progress={message.uploadProgress || 0} size={26} strokeWidth={3} showLabel={false} color={message.mine ? colors.teal : '#FFFFFF'} trackColor={message.mine ? 'rgba(28,107,102,.25)' : 'rgba(255,255,255,.35)'} />
+          : loading
+            ? <ActivityIndicator size="small" color={message.mine ? colors.teal : '#FFFFFF'} />
+            : <AppIcon name={playing ? 'pause' : 'play'} size={16} color={message.mine ? colors.teal : '#FFFFFF'} />}
       </Pressable>
-      <View style={styles.wave} accessibilityElementsHidden importantForAccessibility="no-hide-descendants">
-        {bars.map((height, index) => <View key={index} style={[styles.waveBar, { height: 4 + height * 22, backgroundColor: index / bars.length < progress ? tint : muted }]} />)}
+      <View style={styles.wave} onLayout={(event) => setWaveWidth(event.nativeEvent.layout.width)} accessibilityElementsHidden importantForAccessibility="no-hide-descendants">
+        <Waveform bars={bars} color={muted} />
+        {waveWidth ? (
+          <Animated.View style={[styles.wavePlayed, { width: waveWidth, transform: [{ translateX: hidden }] }, { pointerEvents: 'none' }]}>
+            <Animated.View style={[styles.wave, { width: waveWidth, transform: [{ translateX: reveal }] }]}>
+              <Waveform bars={bars} color={tint} />
+            </Animated.View>
+          </Animated.View>
+        ) : null}
       </View>
-      <Text style={[styles.voiceTime, { color: message.mine ? 'rgba(255,255,255,.85)' : colors.ink70 || colors.ink }]}>{formatClock(status.playing || position ? duration - position : duration)}</Text>
+      <Text style={[styles.voiceTime, { color: message.mine ? 'rgba(255,255,255,.85)' : colors.ink70 || colors.ink }]}>{formatClock(playing || position ? duration - position : duration)}</Text>
     </View>
   );
 }
@@ -119,7 +221,7 @@ const blockWebImageMenu = Platform.OS === 'web' ? { onContextMenu: (event) => ev
 
 function StillImage({ uri, contentFit, style }) {
   return (
-    <View pointerEvents="none" style={[style, webStill]}>
+    <View style={[style, webStill, { pointerEvents: 'none' }]}>
       <ExpoImage source={{ uri }} contentFit={contentFit} transition={120} draggable={false} style={[StyleSheet.absoluteFillObject, webStill]} />
     </View>
   );
@@ -339,6 +441,7 @@ const styles = StyleSheet.create({
   voiceButton: { width: 32, height: 32, alignItems: 'center', justifyContent: 'center', borderRadius: 16 },
   wave: { flex: 1, height: 28, flexDirection: 'row', alignItems: 'center', gap: 2 },
   waveBar: { flex: 1, maxWidth: 3, borderRadius: 2 },
+  wavePlayed: { position: 'absolute', top: 0, bottom: 0, left: 0, overflow: 'hidden' },
   voiceTime: { minWidth: 34, textAlign: 'right', fontSize: 12, fontWeight: '700', fontVariant: ['tabular-nums'] },
   previewBackdrop: { flex: 1, alignItems: 'center', justifyContent: 'center', backgroundColor: 'rgba(5,14,13,.94)' },
   previewImage: { width: '100%', height: '82%' },
