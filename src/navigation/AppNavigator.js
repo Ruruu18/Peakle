@@ -146,7 +146,7 @@ function PeakleTabBar({ state, descriptors, navigation }) {
   const alwaysHiddenRoutes = new Set([COURT_BOOKING_ENABLED ? 'Schedule' : 'Book', 'Pickleball', 'Activities', 'ActivityDetails', 'OpenPlayActivity', 'Privacy', 'LegalDocument', 'AccountDeletion', 'PaymentHistory', 'HelpSupport', 'SupportChat', 'CommunityChat', 'NotificationTest', 'Inbox', 'DirectChat', 'PublicProfile', 'Connections', 'Leaderboard', 'CompetitionDivision', 'OrganizerPreview']);
   const currentRoute = state.routes[state.index];
   // A team chat opened from Chats lives on the Team route but belongs to Chats.
-  const chatOwner = currentRoute.name === 'Team' ? currentRoute.params?.chatOwner : undefined;
+  const chatOwner = currentRoute.name === 'Team' ? (currentRoute.params?.chatOwner || currentRoute.params?.chatReturnTo) : undefined;
   const theme = isDark
     ? { background: '#0E2321', surface: '#17302D', line: '#304743', activeText: colors.ink, activeLabel: colors.ink, centerActiveLabel: colors.surface, muted: '#9FB3AC', active: colors.optic, kitchenLine: colors.optic }
     : { background: '#F3F5EF', surface: colors.surface, line: colors.line, activeText: colors.ink, activeLabel: colors.ink, centerActiveLabel: colors.ink, muted: colors.ink40, active: colors.optic, kitchenLine: colors.teal };

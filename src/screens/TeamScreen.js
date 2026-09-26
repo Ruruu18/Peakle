@@ -1412,6 +1412,8 @@ export default function TeamScreen({ navigation, route }) {
   const [chatSafetyTeam, setChatSafetyTeam] = useState(null);
   const [chatSafetyStatus, setChatSafetyStatus] = useState(null);
   const [chatSafetyBusy, setChatSafetyBusy] = useState(false);
+  const chatSafetyStatusRef = useRef(null);
+  chatSafetyStatusRef.current = chatSafetyStatus;
   const [openingPinnedMessageId, setOpeningPinnedMessageId] = useState(null);
   const [focusMessageId, setFocusMessageId] = useState(null);
   const [liveScoreTeam, setLiveScoreTeam] = useState(null);
@@ -1892,14 +1894,23 @@ export default function TeamScreen({ navigation, route }) {
     if (!team) return;
     const requestId = chatOpenRequestRef.current + 1;
     chatOpenRequestRef.current = requestId;
+    // Already confirmed this session: open straight away and re-check quietly,
+    // so the chat appears without waiting on the network.
+    const knownEligible = Boolean(chatSafetyStatusRef.current?.eligible);
+    if (knownEligible) enterTeamChat(team);
     setChatSafetyBusy(true);
     try {
       const status = await getChatSafetyStatus();
       if (requestId !== chatOpenRequestRef.current || !navigation.isFocused()) return;
       setChatSafetyStatus(status);
-      if (status.eligible) enterTeamChat(team);
-      else setChatSafetyTeam(team);
+      if (status.eligible) {
+        if (!knownEligible) enterTeamChat(team);
+      } else {
+        setChatTeam(null);
+        setChatSafetyTeam(team);
+      }
     } catch (error) {
+      if (knownEligible) return;
       if (requestId === chatOpenRequestRef.current && navigation.isFocused()) {
         Alert.alert('Chat safety unavailable', error.message || 'Peakle could not verify chat access.');
       }
@@ -1912,13 +1923,24 @@ export default function TeamScreen({ navigation, route }) {
     const teamId = route?.params?.openChatTeamId;
     if (!token || !teamId || handledOpenChatToken.current === token || !joined.length) return;
     const team = joined.find((item) => item.id === teamId);
-    if (!team) return;
     handledOpenChatToken.current = token;
-    setChatReturnTo(route.params.chatReturnTo || null);
+    if (!team) {
+      // No longer on this team: fall back to the Teams list.
+      navigation.setParams({ openChatTeamId: undefined, openChatToken: undefined, chatReturnTo: undefined });
+      return;
+    }
+    const returnTo = route.params.chatReturnTo || null;
+    setChatReturnTo(returnTo);
     openTeamChat(team);
-    navigation.setParams({ openChatTeamId: undefined, openChatToken: undefined, chatReturnTo: undefined });
+    // Hand ownership straight from chatReturnTo to chatOwner so the tab bar
+    // never flips to Teams in between.
+    navigation.setParams({ openChatTeamId: undefined, openChatToken: undefined, chatReturnTo: undefined, chatOwner: returnTo || undefined });
   }, [joined, navigation, openTeamChat, route?.params?.openChatTeamId, route?.params?.openChatToken, route?.params?.chatReturnTo]);
-  const chatOwner = chatReturnTo && (chatTeam || chatInfoTeam) ? chatReturnTo : undefined;
+  // A chat requested from Chats that isn't on screen yet (teams still loading
+  // or the safety check in flight) shows a loading chat, never the Teams list.
+  const openingChatFromInbox = Boolean(route?.params?.chatReturnTo && route?.params?.openChatToken && handledOpenChatToken.current !== route.params.openChatToken)
+    || Boolean(chatReturnTo && chatSafetyBusy && !chatTeam && !chatSafetyTeam);
+  const chatOwner = chatReturnTo && (chatTeam || chatInfoTeam || chatSafetyTeam || chatSafetyBusy) ? chatReturnTo : undefined;
   useEffect(() => {
     // Lets the tab bar highlight Chats rather than Teams for a chat opened there.
     if (route?.params?.chatOwner !== chatOwner) navigation.setParams({ chatOwner });
@@ -2525,7 +2547,8 @@ export default function TeamScreen({ navigation, route }) {
   if (editingTeam) return <SafeAreaView style={styles.safe}><StatusBar style={isDark ? 'light' : 'dark'} backgroundColor={C.paper} /><TeamForm team={editingTeam} onBack={() => { setEditingTeam(null); setHubTeam(editingTeam); }} onSave={saveTeam} /></SafeAreaView>;
   if (invitingTeam) return <SafeAreaView style={styles.safe}><StatusBar style={isDark ? 'light' : 'dark'} backgroundColor={C.paper} /><PlayerInviteScreen team={invitingTeam} onBack={() => { setInvitingTeam(null); setHubTeam(invitingTeam); }} /></SafeAreaView>;
   if (liveScoreTeam) return <SafeAreaView style={styles.safe}><StatusBar style={isDark ? 'light' : 'dark'} backgroundColor={C.paper} /><LiveScore team={liveScoreTeam} match={liveMatches[liveScoreTeam.id]} scoringMode={liveScoreMode === 'scorer'} busy={matchBusy} currentUserId={user?.id} onRally={(winner) => recordRally(liveScoreTeam.id, winner)} onUndo={() => undoRally(liveScoreTeam.id)} onFinishGame={() => finishGame(liveScoreTeam.id)} onFinishMatch={() => finishMatch(liveScoreTeam.id)} onChangeScorer={() => setScorerChangeMatchId(liveMatches[liveScoreTeam.id]?.id)} onBack={() => { setScorerChangeMatchId(null); setLiveScoreTeam(null); setLiveScoreMode('viewer'); }} /><TeamScorerPicker visible={Boolean(scorerChangeMatchId)} team={liveScoreTeam} currentUserId={user?.id} selectedId={liveMatches[liveScoreTeam.id]?.scorerId} busy={matchBusy} changing onClose={() => setScorerChangeMatchId(null)} onSelect={(scorerId) => changeTeamMatchScorer(liveScoreTeam.id, scorerChangeMatchId, scorerId)} /></SafeAreaView>;
-  if (chatSafetyTeam) return <SafeAreaView style={styles.safe}><StatusBar style={isDark ? 'light' : 'dark'} backgroundColor={C.paper} /><ChatSafetyScreen team={chatSafetyTeam} status={chatSafetyStatus} busy={chatSafetyBusy} onConfirm={confirmChatSafety} onBack={() => setChatSafetyTeam(null)} /></SafeAreaView>;
+  if (openingChatFromInbox) return <SafeAreaView style={styles.safe}><StatusBar style={isDark ? 'light' : 'dark'} backgroundColor={C.paper} /><View accessibilityLabel="Opening team chat" accessibilityLiveRegion="polite" style={styles.chatOpening}><ActivityIndicator color={C.teal} /></View></SafeAreaView>;
+  if (chatSafetyTeam) return <SafeAreaView style={styles.safe}><StatusBar style={isDark ? 'light' : 'dark'} backgroundColor={C.paper} /><ChatSafetyScreen team={chatSafetyTeam} status={chatSafetyStatus} busy={chatSafetyBusy} onConfirm={confirmChatSafety} onBack={() => { setChatSafetyTeam(null); if (chatReturnTo) navigation.navigate(chatReturnTo); }} /></SafeAreaView>;
   if (chatInfoTeam) return <SafeAreaView style={styles.safe}><StatusBar style={isDark ? 'light' : 'dark'} backgroundColor={C.paper} /><TeamChatInfo team={chatInfoTeam} currentUserId={user?.id} pinnedMessages={chatInfo.pinned} sharedMedia={chatInfo.media} blockedUsers={chatInfo.blocked} loading={chatInfo.loading} openingMessageId={openingPinnedMessageId} onViewMessage={jumpToPinnedMessage} onPin={pinMessage} onUnblock={unblockPlayer} onChangeMemberRole={changeMemberRole} onRemoveMember={removeMember} onMessageMember={(member) => navigation.navigate('DirectChat', { player: { id: member.id, name: member.name, avatar: member.avatar }, ownerTab: 'Team' })} onBack={() => setChatInfoTeam(null)} onViewTeam={() => { setChatReturnTo(null); setSelected(chatInfoTeam); setChatInfoTeam(null); setChatTeam(null); }} /></SafeAreaView>;
   if (chatTeam) return <SafeAreaView style={styles.safe}><StatusBar style={isDark ? 'light' : 'dark'} backgroundColor={C.paper} /><TeamChat team={chatTeam} messages={messages[chatTeam.id] || []} readStates={messageReadStates[chatTeam.id] || []} currentUser={user} typing={Object.values(typingByTeam[chatTeam.id] || {})} liveMatch={liveMatches[chatTeam.id]} hasEarlier={messagePagination[chatTeam.id]?.hasMore} loadingEarlier={messagePagination[chatTeam.id]?.loading} focusMessageId={focusMessageId} onFocusHandled={() => setFocusMessageId(null)} onLoadEarlier={loadEarlierMessages} onWatchLive={() => { setLiveScoreMode('viewer'); setLiveScoreTeam(chatTeam); }} onSend={sendMessage} onEdit={editMessage} onDelete={deleteMessageForMe} onUnsend={unsendMessage} onReact={reactToMessage} onPin={pinMessage} onReport={reportMessage} onBlock={blockMessageSender} onModerate={moderateMessage} onTypingChange={changeChatTyping} onAttach={attachMedia} onJumpToMessage={jumpToPinnedMessage} onInfo={() => { changeChatTyping(false); setChatInfoTeam(chatTeam); }} onMessageMember={(member) => { changeChatTyping(false); navigation.navigate('DirectChat', { player: { id: member.id, name: member.name, avatar: member.avatar }, ownerTab: 'Team' }); }} onBack={() => { changeChatTyping(false); setFocusMessageId(null); if (chatReturnTo) { navigation.navigate(chatReturnTo); return; } setSelected(chatTeam); setChatTeam(null); }} /></SafeAreaView>;
   if (joinTeam) return <SafeAreaView style={styles.safe}><StatusBar style={isDark ? 'light' : 'dark'} backgroundColor={C.paper} /><JoinRequestScreen team={joinTeam} user={user} submitting={requesting.includes(joinTeam.id)} onBack={() => setJoinTeam(null)} onSubmit={requestJoin} /></SafeAreaView>;
@@ -2610,6 +2633,7 @@ const lightStyles = createMobileStyleSheet({
   mediaPreviewBackdrop: { flex: 1, alignItems: 'center', justifyContent: 'center', backgroundColor: 'rgba(5,14,13,.94)' },
   mediaPreviewClose: { position: 'absolute', zIndex: 2, top: 54, right: 18, width: 42, height: 42, alignItems: 'center', justifyContent: 'center', borderRadius: 21, backgroundColor: 'rgba(255,255,255,.14)' },
   mediaPreviewSave: { right: 72 },
+  chatOpening: { flex: 1, alignItems: 'center', justifyContent: 'center' },
   mediaPreviewImage: { width: '94%', height: '76%' },
   mediaPreviewVideo: { width: '94%', height: '76%', marginBottom: 0, borderRadius: 0 },
   messageMetaRow: { marginTop: 3, flexDirection: 'row', alignItems: 'center', gap: 5 },
