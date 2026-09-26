@@ -167,6 +167,20 @@ export async function getExpoGoOAuthRedirectUrl() {
   return `${launchBase}/--/oauth/callback`;
 }
 
+// Supabase answers a failed confirmation email with a 500 and an empty body,
+// which surfaces as the message "{}". Give players something they can act on.
+function readableSignUpError(error) {
+  const message = String(error?.message || '').trim();
+  const unreadable = !message || message === '{}' || /^\{.*\}$/.test(message);
+  if (error?.status >= 500 || unreadable || /sending confirmation email/i.test(message)) {
+    const friendly = new Error('We couldn’t send your verification email right now. Please try again in a few minutes, or continue with Google.');
+    friendly.code = error?.code;
+    friendly.status = error?.status;
+    return friendly;
+  }
+  return error;
+}
+
 export function AuthProvider({ children }) {
   const authGeneration = useRef(0);
   const [user, setUser] = useState(null);
@@ -455,7 +469,7 @@ export function AuthProvider({ children }) {
         emailRedirectTo,
       },
     });
-    if (error) throw error;
+    if (error) throw readableSignUpError(error);
     const needsEmailConfirmation = !data.session;
     if (needsEmailConfirmation) {
       await rememberPendingVerification(email);

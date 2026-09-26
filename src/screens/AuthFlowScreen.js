@@ -73,6 +73,7 @@ function LegalDocumentModal({ documentKey, onClose, requireAgreement = false, on
   const insets = useSafeAreaInsets();
   const document = LEGAL_DOCUMENTS[documentKey] || LEGAL_DOCUMENTS.terms;
   const [hasReachedEnd, setHasReachedEnd] = useState(false);
+  const scrollHeights = useRef({ view: 0, content: 0 });
 
   useEffect(() => {
     setHasReachedEnd(false);
@@ -81,6 +82,14 @@ function LegalDocumentModal({ documentKey, onClose, requireAgreement = false, on
   const trackReadingProgress = ({ nativeEvent }) => {
     const { contentOffset, contentSize, layoutMeasurement } = nativeEvent;
     if (layoutMeasurement.height + contentOffset.y >= contentSize.height - 24) setHasReachedEnd(true);
+  };
+
+  // On tall screens the whole document can fit without scrolling, so no scroll
+  // event ever fires. Treat a document that fits as already read.
+  const checkFitsWithoutScrolling = (next) => {
+    scrollHeights.current = { ...scrollHeights.current, ...next };
+    const { view, content } = scrollHeights.current;
+    if (view > 0 && content > 0 && content <= view + 24) setHasReachedEnd(true);
   };
 
   return (
@@ -98,7 +107,7 @@ function LegalDocumentModal({ documentKey, onClose, requireAgreement = false, on
             </Pressable>
           </View>
           <View style={styles.legalModalRule} />
-          <ScrollView style={styles.legalModalScroll} contentContainerStyle={styles.legalModalContent} showsVerticalScrollIndicator={false} onScroll={trackReadingProgress} scrollEventThrottle={16}>
+          <ScrollView style={styles.legalModalScroll} contentContainerStyle={styles.legalModalContent} showsVerticalScrollIndicator={false} onScroll={trackReadingProgress} scrollEventThrottle={16} onLayout={({ nativeEvent }) => checkFitsWithoutScrolling({ view: nativeEvent.layout.height })} onContentSizeChange={(_, height) => checkFitsWithoutScrolling({ content: height })}>
             <Text style={styles.legalModalIntroduction}>{document.introduction}</Text>
             {document.sections.map((section) => (
               <View key={section.title} style={styles.legalModalSection}>
@@ -513,6 +522,7 @@ function AccountForm({ kind, onBack, onAlternate, onNewAccount, onForgot, onNeed
   const [name, setName] = useState('');
   const [email, setEmail] = useState(kind === 'login' ? rememberedEmail : '');
   const [password, setPassword] = useState('');
+  const [confirmPassword, setConfirmPassword] = useState('');
   const [rememberMe, setRememberMe] = useState(kind === 'login' && Boolean(rememberedEmail));
   const [acceptedTerms, setAcceptedTerms] = useState(false);
   const [legalDocument, setLegalDocument] = useState(null);
@@ -555,6 +565,7 @@ function AccountForm({ kind, onBack, onAlternate, onNewAccount, onForgot, onNeed
     if (create && name.trim().length < 2) { setErrors({ name: 'Tell us what to call you.' }); return; }
     if (!/^\S+@\S+\.\S+$/.test(email.trim())) { setErrors({ email: 'Enter a valid email address.' }); return; }
     if (password.length < 6) { setErrors({ password: 'Use at least 6 characters.' }); return; }
+    if (create && password !== confirmPassword) { setErrors({ confirmPassword: 'The passwords do not match.' }); return; }
     if (create && !acceptedTerms) {
       const agreed = await requestRegistrationConsent({ waitForDecision: true });
       if (!agreed) return;
@@ -593,6 +604,7 @@ function AccountForm({ kind, onBack, onAlternate, onNewAccount, onForgot, onNeed
           {create && <Field dark label="YOUR NAME" icon="person-outline" value={name} onChangeText={setName} placeholder="Julian Cruz" autoCapitalize="words" autoComplete="name" textContentType="name" error={errors.name} />}
           <Field dark label="EMAIL" icon="mail-outline" value={email} onChangeText={setEmail} placeholder="you@example.com" keyboardType="email-address" autoCapitalize="none" autoCorrect={false} autoComplete="email" textContentType="emailAddress" error={errors.email} />
           <Field dark label="PASSWORD" icon="lock-closed-outline" value={password} onChangeText={setPassword} placeholder={create ? 'At least 6 characters' : 'Password'} secureTextEntry autoComplete={create ? 'new-password' : 'current-password'} textContentType={create ? 'newPassword' : 'password'} importantForAutofill="yes" error={errors.password} />
+          {create && <Field dark label="CONFIRM PASSWORD" icon="shield-checkmark-outline" value={confirmPassword} onChangeText={setConfirmPassword} placeholder="Enter it again" secureTextEntry autoComplete="new-password" textContentType="newPassword" importantForAutofill="yes" error={errors.confirmPassword} />}
           {!create ? <View style={styles.loginOptions}>
             <Pressable accessibilityRole="checkbox" accessibilityState={{ checked: rememberMe }} onPress={() => setRememberMe((value) => !value)} style={({ pressed }) => [styles.checkboxRow, pressed && styles.pressed]}>
               <View style={[styles.checkbox, rememberMe && styles.checkboxChecked]}>{rememberMe ? <Icon name="checkmark" size={14} color={C.ink} /> : null}</View>
