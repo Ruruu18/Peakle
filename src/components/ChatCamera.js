@@ -1,11 +1,13 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { ActivityIndicator, Alert, Linking, Modal, Platform, Pressable, StyleSheet, Text, View } from 'react-native';
-import { CameraView, useCameraPermissions, useMicrophonePermissions } from 'expo-camera';
+import { CameraView, useCameraPermissions, useMicrophonePermissions } from './NativeCamera';
 import { Image as ExpoImage } from 'expo-image';
 import { VideoView, useVideoPlayer } from 'expo-video';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import Svg, { Circle } from 'react-native-svg';
 import AppIcon from './AppIcon';
+import WebCameraView from './WebCameraView';
+import { ChatGalleryPicker, getLatestMediaThumbnail, prepareGalleryItems } from './ChatGallery';
 
 // Messenger-style chat camera: tap the shutter for a photo, hold it to record
 // a video of up to a minute. The capture is reviewed before it is sent.
@@ -22,8 +24,17 @@ const RING_RADIUS = (SHUTTER_SIZE - RING_STROKE) / 2;
 const RING_LENGTH = 2 * Math.PI * RING_RADIUS;
 // iOS keeps a photo output in video mode, so one session serves both. Android
 // (CameraX) binds either photo or video, so it switches when a hold begins.
-const SINGLE_SESSION = Platform.OS === 'ios';
+// Browsers record the same stream they preview.
+const IS_WEB = Platform.OS === 'web';
+const SINGLE_SESSION = Platform.OS === 'ios' || IS_WEB;
 
+// iOS offers a "Photo" preset at full sensor resolution; other platforms list
+// WxH sizes, so take the largest.
+const bestPictureSize = (sizes = []) => {
+  if (sizes.includes('Photo')) return 'Photo';
+  const area = (size) => size.split('x').map(Number).reduce((a, b) => a * b, 1) || 0;
+  return sizes.filter((size) => /^\d+x\d+$/.test(size)).sort((a, b) => area(b) - area(a))[0];
+};
 const formatSeconds = (seconds) => `${Math.floor(seconds / 60)}:${String(Math.floor(seconds % 60)).padStart(2, '0')}`;
 const wait = (ms) => new Promise((resolve) => { setTimeout(resolve, ms); });
 
@@ -35,7 +46,7 @@ function ReviewVideo({ uri }) {
   return <VideoView player={player} nativeControls={false} contentFit="cover" style={StyleSheet.absoluteFill} />;
 }
 
-export default function ChatCamera({ visible, onClose, onCapture, onLibrary }) {
+export default function ChatCamera({ visible, onClose, onCapture, onLibrary, onSendGallery }) {
   const insets = useSafeAreaInsets();
   const cameraRef = useRef(null);
   const [cameraPermission, requestCameraPermission] = useCameraPermissions();
@@ -48,6 +59,12 @@ export default function ChatCamera({ visible, onClose, onCapture, onLibrary }) {
   const [recording, setRecording] = useState(false);
   const [elapsed, setElapsed] = useState(0);
   const [captured, setCaptured] = useState(null);
+  const [webError, setWebError] = useState(null);
+  const [torchAvailable, setTorchAvailable] = useState(false);
+  const [screenFlash, setScreenFlash] = useState(false);
+  const [pictureSize, setPictureSize] = useState(undefined);
+  const [galleryOpen, setGalleryOpen] = useState(false);
+  const [latestThumb, setLatestThumb] = useState(null);
   const holdingRef = useRef(false);
   const recordingRef = useRef(false);
   const readyWaiterRef = useRef(null);
@@ -58,6 +75,14 @@ export default function ChatCamera({ visible, onClose, onCapture, onLibrary }) {
     setCaptured(null);
     setReady(false);
     setElapsed(0);
+    setWebError(null);
+    // Like the phone's own camera: always start on the back lens, flash off.
+    setFacing('back');
+    setFlash('off');
+    setGalleryOpen(false);
+    if (!IS_WEB) getLatestMediaThumbnail().then(setLatestThumb).catch(() => setLatestThumb(null));
+    // The browser asks for the camera and microphone when the preview starts.
+    if (IS_WEB) return;
     (async () => {
       const camera = cameraPermission?.granted ? cameraPermission : await requestCameraPermission();
       if (!camera.granted) return;
@@ -76,6 +101,11 @@ export default function ChatCamera({ visible, onClose, onCapture, onLibrary }) {
 
   const handleReady = () => {
     setReady(true);
+    if (!IS_WEB && !pictureSize) {
+      cameraRef.current?.getAvailablePictureSizesAsync?.()
+        .then((sizes) => { const best = bestPictureSize(sizes); if (best) setPictureSize(best); })
+        .catch(() => {});
+    }
     readyWaiterRef.current?.();
     readyWaiterRef.current = null;
   };
@@ -91,12 +121,20 @@ export default function ChatCamera({ visible, onClose, onCapture, onLibrary }) {
   const takePhoto = async () => {
     if (!ready || busy || recordingRef.current) return;
     setBusy(true);
+    const flashOn = flash === 'on';
+    // The front camera has no flash: light the face with a white screen.
+    const useScreenFlash = flashOn && facing === 'front';
+    const useTorch = flashOn && IS_WEB && !useScreenFlash && torchAvailable;
     try {
-      const photo = await cameraRef.current?.takePictureAsync({ quality: 1, exif: false, shutterSound: false });
+      if (useScreenFlash) { setScreenFlash(true); await wait(300); }
+      if (useTorch) { await cameraRef.current?.setTorch(true); await wait(400); }
+      const photo = await cameraRef.current?.takePictureAsync({ quality: 1, exif: false, shutterSound: false, flash: useTorch });
       if (photo?.uri) setCaptured({ type: 'image', asset: { uri: photo.uri, width: photo.width, height: photo.height, mimeType: 'image/jpeg', fileName: 'photo.jpg' } });
     } catch (error) {
       Alert.alert('Photo not taken', error.message);
     } finally {
+      if (useScreenFlash) setScreenFlash(false);
+      if (useTorch) cameraRef.current?.setTorch(false);
       setBusy(false);
     }
   };
@@ -117,19 +155,22 @@ export default function ChatCamera({ visible, onClose, onCapture, onLibrary }) {
       if (!holdingRef.current) return;
       recordingRef.current = true;
       setRecording(true);
+      if (IS_WEB && flash === 'on' && facing === 'back' && torchAvailable) await cameraRef.current?.setTorch(true);
       setElapsed(0);
       const startedAt = Date.now();
       const video = await cameraRef.current?.recordAsync({ maxDuration: MAX_CAMERA_VIDEO_SECONDS, maxFileSize: MAX_VIDEO_BYTES });
       const duration = Math.min(MAX_CAMERA_VIDEO_SECONDS * 1000, Date.now() - startedAt);
       if (video?.uri && duration >= 500) {
-        const fileName = video.uri.toLowerCase().endsWith('.mov') ? 'video.mov' : 'video.mp4';
-        setCaptured({ type: 'video', asset: { uri: video.uri, duration, fileName, mimeType: fileName.endsWith('.mov') ? 'video/quicktime' : 'video/mp4' } });
+        const mimeType = video.mimeType || (video.uri.toLowerCase().endsWith('.mov') ? 'video/quicktime' : 'video/mp4');
+        const fileName = `video.${{ 'video/quicktime': 'mov', 'video/webm': 'webm' }[mimeType] || 'mp4'}`;
+        setCaptured({ type: 'video', asset: { uri: video.uri, duration, fileName, mimeType } });
       }
     } catch (error) {
       if (holdingRef.current || recordingRef.current) Alert.alert('Video not recorded', error.message);
     } finally {
       holdingRef.current = false;
       recordingRef.current = false;
+      if (IS_WEB) cameraRef.current?.setTorch?.(false);
       setRecording(false);
       setBusy(false);
       if (!SINGLE_SESSION) setMode('picture');
@@ -151,128 +192,170 @@ export default function ChatCamera({ visible, onClose, onCapture, onLibrary }) {
     onCapture(captured.asset, captured.type);
   };
 
-  const denied = cameraPermission && !cameraPermission.granted;
+  // Phones browse recent photos in Peakle; browsers only offer the system picker.
+  const openLibrary = () => {
+    if (!IS_WEB && onSendGallery) setGalleryOpen(true);
+    else onLibrary?.();
+  };
+  const sendFromGallery = async (items, hd) => {
+    const prepared = await prepareGalleryItems(items, hd).catch((error) => { Alert.alert('Could not open that item', error.message); return null; });
+    if (!prepared?.length) return;
+    setGalleryOpen(false);
+    onSendGallery(prepared);
+  };
+
+  const denied = IS_WEB ? Boolean(webError) : cameraPermission && !cameraPermission.granted;
+  const canShoot = IS_WEB ? ready : cameraPermission?.granted;
   const progress = elapsed / MAX_CAMERA_VIDEO_SECONDS;
 
   return (
     <Modal visible={visible} animationType="slide" presentationStyle="fullScreen" statusBarTranslucent onRequestClose={captured ? retake : close}>
-      <View style={[styles.screen, { paddingTop: insets.top + 8, paddingBottom: insets.bottom + 12 }]}>
-        <View style={styles.preview}>
-          {captured ? (
-            captured.type === 'video'
-              ? <ReviewVideo uri={captured.asset.uri} />
-              : <ExpoImage source={{ uri: captured.asset.uri }} contentFit="cover" style={StyleSheet.absoluteFill} />
-          ) : cameraPermission?.granted && visible ? (
-            <CameraView
-              ref={cameraRef}
-              style={StyleSheet.absoluteFill}
-              facing={facing}
-              flash={flash}
-              mode={mode}
-              mute={!micPermission?.granted}
-              videoQuality="720p"
-              videoBitrate={VIDEO_BITRATE}
-              mirror={facing === 'front'}
-              onCameraReady={handleReady}
-              onMountError={(event) => Alert.alert('Camera unavailable', event.message)}
-            />
-          ) : denied ? (
-            <View style={styles.permission}>
-              <AppIcon name="camera-outline" size={38} color="#FFFFFF" />
-              <Text style={styles.permissionTitle}>Camera access is off</Text>
-              <Text style={styles.permissionBody}>Allow Peakle to use your camera to take photos and videos for your chats.</Text>
-              <Pressable accessibilityRole="button" onPress={cameraPermission.canAskAgain ? requestCameraPermission : () => Linking.openSettings()} style={styles.permissionButton}>
-                <Text style={styles.permissionButtonText}>{cameraPermission.canAskAgain ? 'Allow camera' : 'Open Settings'}</Text>
-              </Pressable>
-            </View>
-          ) : <ActivityIndicator color="#FFFFFF" style={styles.loading} />}
-
-          <View style={styles.topBar}>
-            <Pressable accessibilityRole="button" accessibilityLabel={captured ? 'Retake' : 'Close camera'} onPress={captured ? retake : close} hitSlop={10} style={styles.topButton}>
-              <AppIcon name={captured ? 'arrow-back' : 'close'} size={28} color="#FFFFFF" />
-            </Pressable>
-            {recording ? (
-              <View style={styles.timerPill}>
-                <View style={styles.timerDot} />
-                <Text style={styles.timerText}>{formatSeconds(elapsed)} / {formatSeconds(MAX_CAMERA_VIDEO_SECONDS)}</Text>
+      <View style={styles.backdrop}>
+        <View style={[styles.screen, IS_WEB && styles.screenWeb, { paddingTop: insets.top + 8, paddingBottom: insets.bottom + 12 }]}>
+          <View style={styles.preview}>
+            {captured ? (
+              captured.type === 'video'
+                ? <ReviewVideo uri={captured.asset.uri} />
+                : <ExpoImage source={{ uri: captured.asset.uri }} contentFit="cover" style={StyleSheet.absoluteFill} />
+            ) : IS_WEB && visible && !webError ? (
+              <WebCameraView
+                ref={cameraRef}
+                style={StyleSheet.absoluteFill}
+                facing={facing}
+                withAudio
+                videoBitrate={VIDEO_BITRATE}
+                onCameraReady={handleReady}
+                onMountError={setWebError}
+                onTorchAvailable={setTorchAvailable}
+              />
+            ) : !IS_WEB && cameraPermission?.granted && visible ? (
+              <CameraView
+                ref={cameraRef}
+                style={StyleSheet.absoluteFill}
+                facing={facing}
+                flash={facing === 'front' ? 'off' : flash}
+                enableTorch={flash === 'on' && facing === 'back' && recording}
+                pictureSize={pictureSize}
+                mode={mode}
+                mute={!micPermission?.granted}
+                videoQuality="720p"
+                videoBitrate={VIDEO_BITRATE}
+                mirror={facing === 'front'}
+                onCameraReady={handleReady}
+                onMountError={(event) => Alert.alert('Camera unavailable', event.message)}
+              />
+            ) : denied ? (
+              <View style={styles.permission}>
+                <AppIcon name="camera-outline" size={38} color="#FFFFFF" />
+                <Text style={styles.permissionTitle}>Camera access is off</Text>
+                <Text style={styles.permissionBody}>{IS_WEB
+                  ? webError?.name === 'NotFoundError' ? 'No camera was found on this device.' : 'Allow camera access for this site in your browser, then try again.'
+                  : 'Allow Peakle to use your camera to take photos and videos for your chats.'}</Text>
+                {IS_WEB ? (
+                  <Pressable accessibilityRole="button" onPress={() => setWebError(null)} style={styles.permissionButton}>
+                    <Text style={styles.permissionButtonText}>Try again</Text>
+                  </Pressable>
+                ) : (
+                  <Pressable accessibilityRole="button" onPress={cameraPermission.canAskAgain ? requestCameraPermission : () => Linking.openSettings()} style={styles.permissionButton}>
+                    <Text style={styles.permissionButtonText}>{cameraPermission.canAskAgain ? 'Allow camera' : 'Open Settings'}</Text>
+                  </Pressable>
+                )}
               </View>
-            ) : !captured ? (
-              <View style={styles.topCenter}>
-                <Pressable accessibilityRole="button" accessibilityLabel="Switch camera" disabled={busy} onPress={() => setFacing((current) => (current === 'back' ? 'front' : 'back'))} hitSlop={10} style={styles.topButton}>
-                  <AppIcon name="camera-reverse-outline" size={28} color="#FFFFFF" />
+            ) : <ActivityIndicator color="#FFFFFF" style={styles.loading} />}
+
+            <View style={styles.topBar}>
+              <Pressable accessibilityRole="button" accessibilityLabel={captured ? 'Retake' : 'Close camera'} onPress={captured ? retake : close} hitSlop={10} style={styles.topButton}>
+                <AppIcon name={captured ? 'arrow-back' : 'close'} size={28} color="#FFFFFF" />
+              </Pressable>
+              {recording ? (
+                <View style={styles.timerPill}>
+                  <View style={styles.timerDot} />
+                  <Text style={styles.timerText}>{formatSeconds(elapsed)} / {formatSeconds(MAX_CAMERA_VIDEO_SECONDS)}</Text>
+                </View>
+              ) : !captured ? (
+                <View style={styles.topCenter}>
+                  <Pressable accessibilityRole="button" accessibilityLabel="Switch camera" disabled={busy} onPress={() => { if (IS_WEB) { setReady(false); setTorchAvailable(false); } setFacing((current) => (current === 'back' ? 'front' : 'back')); }} hitSlop={10} style={styles.topButton}>
+                    <AppIcon name="camera-reverse-outline" size={28} color="#FFFFFF" />
+                  </Pressable>
+                  {!IS_WEB || facing === 'front' || torchAvailable ? (
+                    <Pressable accessibilityRole="button" accessibilityLabel={flash === 'on' ? 'Turn flash off' : 'Turn flash on'} onPress={() => setFlash((current) => (current === 'on' ? 'off' : 'on'))} hitSlop={10} style={styles.topButton}>
+                      <AppIcon name={flash === 'on' ? 'flash' : 'flash-off'} size={25} color="#FFFFFF" />
+                    </Pressable>
+                  ) : null}
+                </View>
+              ) : null}
+              <View style={styles.topButton} />
+            </View>
+
+            {!captured ? (
+              <View style={styles.bottomBar}>
+                <View style={styles.sideSlot}>
+                  {!recording && (onLibrary || onSendGallery) ? (
+                    <Pressable accessibilityRole="button" accessibilityLabel="Choose from library" onPress={openLibrary} hitSlop={8} style={styles.libraryButton}>
+                      {latestThumb ? <ExpoImage source={{ uri: latestThumb }} contentFit="cover" style={StyleSheet.absoluteFill} /> : <AppIcon name="images-outline" size={24} color="#FFFFFF" />}
+                    </Pressable>
+                  ) : null}
+                </View>
+                <Pressable
+                  accessibilityRole="button"
+                  accessibilityLabel="Shutter"
+                  accessibilityHint="Tap to take a photo, hold to record a video"
+                  disabled={!canShoot}
+                  onPress={takePhoto}
+                  onLongPress={startRecording}
+                  onPressOut={stopRecording}
+                  delayLongPress={HOLD_DELAY_MS}
+                  style={styles.shutter}
+                >
+                  <Svg width={SHUTTER_SIZE} height={SHUTTER_SIZE} style={StyleSheet.absoluteFill}>
+                    <Circle cx={SHUTTER_SIZE / 2} cy={SHUTTER_SIZE / 2} r={RING_RADIUS} stroke="rgba(255,255,255,.55)" strokeWidth={RING_STROKE} fill="none" />
+                    {recording ? (
+                      <Circle
+                        cx={SHUTTER_SIZE / 2}
+                        cy={SHUTTER_SIZE / 2}
+                        r={RING_RADIUS}
+                        stroke="#FF3B30"
+                        strokeWidth={RING_STROKE}
+                        fill="none"
+                        strokeLinecap="round"
+                        strokeDasharray={`${RING_LENGTH} ${RING_LENGTH}`}
+                        strokeDashoffset={RING_LENGTH * (1 - progress)}
+                        transform={`rotate(-90 ${SHUTTER_SIZE / 2} ${SHUTTER_SIZE / 2})`}
+                      />
+                    ) : null}
+                  </Svg>
+                  <View style={[styles.shutterInner, recording && styles.shutterInnerRecording]} />
                 </Pressable>
-                <Pressable accessibilityRole="button" accessibilityLabel={flash === 'on' ? 'Turn flash off' : 'Turn flash on'} onPress={() => setFlash((current) => (current === 'on' ? 'off' : 'on'))} hitSlop={10} style={styles.topButton}>
-                  <AppIcon name={flash === 'on' ? 'flash' : 'flash-off'} size={25} color="#FFFFFF" />
-                </Pressable>
+                <View style={styles.sideSlot} />
               </View>
             ) : null}
-            <View style={styles.topButton} />
           </View>
 
-          {!captured ? (
-            <View style={styles.bottomBar}>
-              <View style={styles.sideSlot}>
-                {!recording && onLibrary ? (
-                  <Pressable accessibilityRole="button" accessibilityLabel="Choose from library" onPress={onLibrary} hitSlop={8} style={styles.libraryButton}>
-                    <AppIcon name="images-outline" size={24} color="#FFFFFF" />
-                  </Pressable>
-                ) : null}
-              </View>
-              <Pressable
-                accessibilityRole="button"
-                accessibilityLabel="Shutter"
-                accessibilityHint="Tap to take a photo, hold to record a video"
-                disabled={!cameraPermission?.granted}
-                onPress={takePhoto}
-                onLongPress={startRecording}
-                onPressOut={stopRecording}
-                delayLongPress={HOLD_DELAY_MS}
-                style={styles.shutter}
-              >
-                <Svg width={SHUTTER_SIZE} height={SHUTTER_SIZE} style={StyleSheet.absoluteFill}>
-                  <Circle cx={SHUTTER_SIZE / 2} cy={SHUTTER_SIZE / 2} r={RING_RADIUS} stroke="rgba(255,255,255,.55)" strokeWidth={RING_STROKE} fill="none" />
-                  {recording ? (
-                    <Circle
-                      cx={SHUTTER_SIZE / 2}
-                      cy={SHUTTER_SIZE / 2}
-                      r={RING_RADIUS}
-                      stroke="#FF3B30"
-                      strokeWidth={RING_STROKE}
-                      fill="none"
-                      strokeLinecap="round"
-                      strokeDasharray={`${RING_LENGTH} ${RING_LENGTH}`}
-                      strokeDashoffset={RING_LENGTH * (1 - progress)}
-                      transform={`rotate(-90 ${SHUTTER_SIZE / 2} ${SHUTTER_SIZE / 2})`}
-                    />
-                  ) : null}
-                </Svg>
-                <View style={[styles.shutterInner, recording && styles.shutterInnerRecording]} />
+          {captured ? (
+            <View style={styles.reviewBar}>
+              <Pressable accessibilityRole="button" onPress={retake} style={styles.retakeButton}>
+                <Text style={styles.retakeText}>Retake</Text>
               </Pressable>
-              <View style={styles.sideSlot} />
+              <Pressable accessibilityRole="button" accessibilityLabel={captured.type === 'video' ? 'Send video' : 'Send photo'} onPress={send} style={styles.sendButton}>
+                <Text style={styles.sendText}>Send</Text>
+                <AppIcon name="send" size={18} color="#0E2321" />
+              </Pressable>
             </View>
-          ) : null}
+          ) : (
+            <Text style={styles.hint}>{recording ? 'Release to stop' : 'Tap for photo, hold for video'}</Text>
+          )}
         </View>
-
-        {captured ? (
-          <View style={styles.reviewBar}>
-            <Pressable accessibilityRole="button" onPress={retake} style={styles.retakeButton}>
-              <Text style={styles.retakeText}>Retake</Text>
-            </Pressable>
-            <Pressable accessibilityRole="button" accessibilityLabel={captured.type === 'video' ? 'Send video' : 'Send photo'} onPress={send} style={styles.sendButton}>
-              <Text style={styles.sendText}>Send</Text>
-              <AppIcon name="send" size={18} color="#0E2321" />
-            </Pressable>
-          </View>
-        ) : (
-          <Text style={styles.hint}>{recording ? 'Release to stop' : 'Tap for photo, hold for video'}</Text>
-        )}
+        {screenFlash ? <View pointerEvents="none" style={styles.screenFlash} /> : null}
       </View>
+      {!IS_WEB ? <ChatGalleryPicker visible={galleryOpen} onClose={() => setGalleryOpen(false)} onSend={sendFromGallery} /> : null}
     </Modal>
   );
 }
 
 const styles = StyleSheet.create({
+  backdrop: { flex: 1, backgroundColor: '#000000' },
   screen: { flex: 1, backgroundColor: '#000000' },
+  screenWeb: { width: '100%', maxWidth: 520, alignSelf: 'center', paddingHorizontal: 8 },
   preview: { flex: 1, overflow: 'hidden', borderRadius: 22, backgroundColor: '#111111' },
   loading: { flex: 1 },
   topBar: { position: 'absolute', top: 0, left: 0, right: 0, paddingHorizontal: 18, paddingTop: 16, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
@@ -283,7 +366,8 @@ const styles = StyleSheet.create({
   timerText: { color: '#FFFFFF', fontSize: 15, fontWeight: '700', fontVariant: ['tabular-nums'] },
   bottomBar: { position: 'absolute', left: 0, right: 0, bottom: 26, paddingHorizontal: 30, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
   sideSlot: { width: 52, height: 52, alignItems: 'center', justifyContent: 'center' },
-  libraryButton: { width: 48, height: 48, alignItems: 'center', justifyContent: 'center', borderRadius: 12, backgroundColor: 'rgba(0,0,0,.4)', borderWidth: 1.5, borderColor: 'rgba(255,255,255,.8)' },
+  screenFlash: { ...StyleSheet.absoluteFillObject, backgroundColor: '#FFFFFF' },
+  libraryButton: { width: 48, height: 48, overflow: 'hidden', alignItems: 'center', justifyContent: 'center', borderRadius: 12, backgroundColor: 'rgba(0,0,0,.4)', borderWidth: 1.5, borderColor: 'rgba(255,255,255,.8)' },
   shutter: { width: SHUTTER_SIZE, height: SHUTTER_SIZE, alignItems: 'center', justifyContent: 'center' },
   shutterInner: { width: SHUTTER_SIZE - 20, height: SHUTTER_SIZE - 20, borderRadius: (SHUTTER_SIZE - 20) / 2, backgroundColor: '#FFFFFF' },
   shutterInnerRecording: { width: 30, height: 30, borderRadius: 8, backgroundColor: '#FF3B30' },

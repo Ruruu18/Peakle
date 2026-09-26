@@ -7,6 +7,7 @@ import {
   Animated,
   Easing,
   FlatList,
+  Keyboard,
   KeyboardAvoidingView,
   PanResponder,
   Platform,
@@ -28,6 +29,7 @@ import ScrollView from '../components/FocusResetScrollView';
 import ProfilePhoto from '../components/ProfilePhoto';
 import MessageFocusModal, { canCopyText, copyText, unselectable } from '../components/MessageFocusModal';
 import ChatCamera from '../components/ChatCamera';
+import { ChatGallerySheet, prepareGalleryItems } from '../components/ChatGallery';
 import { DirectMediaContent, MediaPreviewModal, MediaThumbnail, saveDirectMedia, VoiceRecorderBar } from '../components/DirectMessageMedia';
 import ChatInfoScreen, { ChatSearchModal, NicknamesModal, chatInfoColors, extractChatLinks } from '../components/ChatInfoScreen';
 import { listChatNicknames, setChatNickname } from '../services/chatInfo';
@@ -1211,14 +1213,14 @@ function PeerProfileCard({ peer, canBlock, onViewProfile, onBlock, onClose, colo
 const RECEIPTS = {
   sending: { icon: 'time-outline', label: 'Sending…' },
   failed: { icon: 'alert-circle-outline', label: 'Not sent · Tap to retry' },
-  sent: { icon: 'checkmark', label: 'Sent' },
-  delivered: { icon: 'checkmark-done', label: 'Delivered' },
+  sent: { icon: null, label: 'Sent' },
+  delivered: { icon: null, label: 'Delivered' },
 };
 function MessageReceipt({ receipt, peer, colors }) {
   if (receipt === 'seen') return <View accessibilityLabel={`Seen by ${peer?.name || 'player'}`} style={styles.directSeenReceipt}><ProfilePhoto photo={peer?.avatar} name={peer?.name} size={17} /><Icon name="checkmark-done" size={13} color={colors.teal} /><Text style={[styles.directSeenText, { color: colors.ink40 }]}>Seen</Text></View>;
   const { icon, label } = RECEIPTS[receipt];
   const tint = receipt === 'failed' ? colors.brick : colors.ink40;
-  return <View accessibilityLiveRegion="polite" accessibilityLabel={label} style={styles.directSeenReceipt}><Icon name={icon} size={13} color={tint} /><Text style={[styles.directSeenText, { color: tint }]}>{label}</Text></View>;
+  return <View accessibilityLiveRegion="polite" accessibilityLabel={label} style={styles.directSeenReceipt}>{icon ? <Icon name={icon} size={13} color={tint} /> : null}<Text style={[styles.directSeenText, { color: tint }]}>{label}</Text></View>;
 }
 
 // Memoized so opening the reaction menu (or typing) doesn't re-render every bubble;
@@ -1283,7 +1285,12 @@ function DirectChatConversation({ route, navigation }) {
   // player opened the buttons and then went back to typing.
   const [trayMode, setTrayMode] = useState('closed');
   const [cameraOpen, setCameraOpen] = useState(false);
-  const minimizeTray = () => setTrayMode((mode) => (mode === 'open' ? 'minimized' : mode));
+  // Phones pick photos from a sheet under the composer, like Messenger.
+  const [galleryOpen, setGalleryOpen] = useState(false);
+  const minimizeTray = () => {
+    setGalleryOpen(false);
+    setTrayMode((mode) => (mode === 'open' ? 'minimized' : mode));
+  };
   const [recordingVoice, setRecordingVoice] = useState(false);
   const [previewMessage, setPreviewMessage] = useState(null);
   const [loading, setLoading] = useState(true);
@@ -1605,17 +1612,29 @@ function DirectChatConversation({ route, navigation }) {
       Alert.alert(`${{ video: 'Video', audio: 'Voice message' }[type] || 'Photo'} not sent`, error.message);
     }
   };
-  // Phones open Peakle's own camera: tap for a photo, hold for a video.
-  // Mobile browsers can capture a photo or a video, not either at once:
-  // asking for both opens the file picker instead of the camera.
+  // Peakle's own camera on phones and in the browser: tap for a photo, hold
+  // for a video.
   const openCamera = () => {
     setTrayMode('closed');
-    if (Platform.OS !== 'web') { setCameraOpen(true); return; }
-    Alert.alert('Camera', 'What would you like to capture?', [
-      { text: 'Take photo', onPress: () => pickMedia('camera', ['images']) },
-      { text: 'Record video', onPress: () => pickMedia('camera', ['videos']) },
-      { text: 'Cancel', style: 'cancel' },
-    ]);
+    setCameraOpen(true);
+  };
+  const openGallery = () => {
+    if (Platform.OS === 'web') { pickMedia('library'); return; }
+    Keyboard.dismiss();
+    setGalleryOpen(true);
+  };
+  // Sends picks one after another so they arrive in the order chosen.
+  const sendGalleryItems = async (items) => {
+    setCameraOpen(false);
+    setGalleryOpen(false);
+    for (const { asset, type } of items) await sendMedia(asset, type);
+  };
+  const sendFromGallerySheet = async (items, hd) => {
+    try {
+      await sendGalleryItems(await prepareGalleryItems(items, hd));
+    } catch (error) {
+      Alert.alert('Could not open that item', error.message);
+    }
   };
   const sendCameraCapture = (asset, type) => {
     setCameraOpen(false);
@@ -1886,7 +1905,8 @@ function DirectChatConversation({ route, navigation }) {
           {outboundRequest && !blocked ? <View style={[styles.pendingBanner, { backgroundColor: isDark ? colors.surface : '#E5F0ED', borderColor: colors.line }]}><Icon name="time-outline" color={colors.teal} /><Text style={[styles.pendingText, { color: colors.ink70 }]}>Message request sent. You can continue after {peer?.name} accepts.</Text></View> : null}
           {declined && !blocked ? <View style={[styles.pendingBanner, { backgroundColor: colors.surface, borderColor: colors.line }]}><Icon name="lock-closed-outline" color={colors.ink40} /><Text style={[styles.pendingText, { color: colors.ink70 }]}>This conversation is closed.</Text></View> : null}
           {blocked ? <View style={[styles.pendingBanner, { backgroundColor: colors.surface, borderColor: colors.line }]}><Icon name="ban-outline" color={colors.brick} /><Text style={[styles.pendingText, { color: colors.ink70 }]}>Private messaging is unavailable for this player.</Text></View> : null}
-          {!incomingRequest && !outboundRequest && !declined && !blocked ? <View style={[styles.composer, { backgroundColor: colors.surface, borderColor: colors.line }]}>{recordingVoice ? <VoiceRecorderBar colors={colors} onCancel={() => setRecordingVoice(false)} onSend={sendVoice} /> : <View style={styles.composerRow}>{conversationId && conversation?.status === 'accepted' ? <ComposerAttachments mode={trayMode} colors={colors} onOpen={() => setTrayMode('open')} onCamera={openCamera} onLibrary={() => pickMedia('library')} onVoice={startVoice} /> : null}<View style={[styles.composerInput, styles.composerInputFlex, { backgroundColor: colors.paper }]}><TextInput value={draft} onChangeText={changeDraft} onBlur={stopTyping} onFocus={minimizeTray} onPressIn={minimizeTray} onSubmitEditing={send} returnKeyType="send" multiline maxLength={4000} placeholder={trayMode === 'open' ? 'Message' : `Message ${peer?.name || 'player'}`} placeholderTextColor={colors.ink40} style={[styles.input, { color: colors.ink }]} /><Pressable disabled={!draft.trim() || composerDisabled} accessibilityLabel="Send message" onPress={send} style={[styles.sendButton, { backgroundColor: colors.optic }, (!draft.trim() || composerDisabled) && styles.sendDisabled]}><Icon name="arrow-up" size={18} color="#0E2321" /></Pressable></View></View>}</View> : null}
+          {!incomingRequest && !outboundRequest && !declined && !blocked ? <View style={[styles.composer, { backgroundColor: colors.surface, borderColor: colors.line }]}>{recordingVoice ? <VoiceRecorderBar colors={colors} onCancel={() => setRecordingVoice(false)} onSend={sendVoice} /> : <View style={styles.composerRow}>{conversationId && conversation?.status === 'accepted' ? <ComposerAttachments mode={trayMode} colors={colors} onOpen={() => setTrayMode('open')} onCamera={openCamera} onLibrary={openGallery} onVoice={startVoice} /> : null}<View style={[styles.composerInput, styles.composerInputFlex, { backgroundColor: colors.paper }]}><TextInput value={draft} onChangeText={changeDraft} onBlur={stopTyping} onFocus={minimizeTray} onPressIn={minimizeTray} onSubmitEditing={send} returnKeyType="send" multiline maxLength={4000} placeholder={trayMode === 'open' ? 'Message' : `Message ${peer?.name || 'player'}`} placeholderTextColor={colors.ink40} style={[styles.input, { color: colors.ink }]} /><Pressable disabled={!draft.trim() || composerDisabled} accessibilityLabel="Send message" onPress={send} style={[styles.sendButton, { backgroundColor: colors.optic }, (!draft.trim() || composerDisabled) && styles.sendDisabled]}><Icon name="arrow-up" size={18} color="#0E2321" /></Pressable></View></View>}</View> : null}
+          <ChatGallerySheet visible={galleryOpen && conversation?.status === 'accepted'} colors={colors} isDark={isDark} onClose={() => setGalleryOpen(false)} onSend={sendFromGallerySheet} />
         </KeyboardAvoidingView>
       )}
       <DirectMessageInteractionModal
@@ -1905,7 +1925,7 @@ function DirectChatConversation({ route, navigation }) {
         onUnsend={unsendMessage}
       />
       <MediaPreviewModal message={previewMessage} onClose={() => setPreviewMessage(null)} />
-      <ChatCamera visible={cameraOpen} onClose={() => setCameraOpen(false)} onCapture={sendCameraCapture} onLibrary={pickFromCamera} />
+      <ChatCamera visible={cameraOpen} onClose={() => setCameraOpen(false)} onCapture={sendCameraCapture} onLibrary={pickFromCamera} onSendGallery={sendGalleryItems} />
       <Modal visible={infoOpen && Boolean(conversationId)} animationType="slide" onRequestClose={infoPanel ? () => setInfoPanel(null) : closeInfo}>
         <SafeAreaView style={[styles.safe, { backgroundColor: infoColors.paper }]}>
           <ChatInfoScreen
