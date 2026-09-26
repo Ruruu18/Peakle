@@ -686,6 +686,22 @@ export async function sendDirectMessage(conversationId, body) {
   return getDirectMessage(data);
 }
 
+// Sends the same text to several players, one at a time so the server's
+// per-sender rate limit is respected. Opens a chat where there isn't one yet.
+export async function sendTextToPlayers(players, body) {
+  const sent = [];
+  const failed = [];
+  for (const player of players) {
+    try {
+      await startDirectConversation(player.id, body);
+      sent.push(player);
+    } catch (error) {
+      failed.push({ player, message: error.message || 'Could not send.' });
+    }
+  }
+  return { sent, failed };
+}
+
 export async function toggleDirectMessageReaction(messageId, emoji) {
   const client = requireSupabase();
   const { error } = await client.rpc('toggle_direct_message_reaction', {
@@ -715,9 +731,10 @@ export async function unsendDirectMessage(messageId, mediaPath = null) {
 
 // Uploads a picked photo or video, or a recorded voice message, into this
 // conversation's folder, then sends it. A failed send removes the upload so no orphaned file is left behind.
-export async function sendDirectMediaMessage(conversationId, asset, type) {
+export async function sendDirectMediaMessage(conversationId, asset, type, { onProgress } = {}) {
   const client = requireSupabase();
-  const uploaded = await uploadChatMedia(DIRECT_MEDIA_BUCKET, (userId) => `${conversationId}/${userId}`, asset, type, 'Private');
+  // Keep the ring below 100% until the message has been saved and loaded.
+  const uploaded = await uploadChatMedia(DIRECT_MEDIA_BUCKET, (userId) => `${conversationId}/${userId}`, asset, type, 'Private', { onProgress: onProgress ? (value) => onProgress(value * 0.95) : undefined });
   const { data, error } = await client.rpc('send_direct_media_message', {
     p_conversation_id: conversationId,
     p_media_path: uploaded.path,
@@ -733,7 +750,9 @@ export async function sendDirectMediaMessage(conversationId, asset, type) {
     if (['PGRST202', '42883'].includes(error.code)) throw new Error('Sending photos and videos is not available yet. Please try again after the next update.');
     throw error;
   }
-  return getDirectMessage(data);
+  const message = await getDirectMessage(data);
+  onProgress?.(1);
+  return message;
 }
 
 // Delete for you: hides the message from this player only.

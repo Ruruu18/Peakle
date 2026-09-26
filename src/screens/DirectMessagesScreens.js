@@ -27,7 +27,7 @@ import { PRIVATE_MESSAGES_ENABLED } from '../config/features';
 import ScrollView from '../components/FocusResetScrollView';
 import ProfilePhoto from '../components/ProfilePhoto';
 import MessageFocusModal, { canCopyText, copyText, unselectable } from '../components/MessageFocusModal';
-import { DirectMediaContent, MediaPreviewModal, VoiceRecorderBar } from '../components/DirectMessageMedia';
+import { DirectMediaContent, MediaPreviewModal, MediaThumbnail, saveDirectMedia, VoiceRecorderBar } from '../components/DirectMessageMedia';
 import * as ImagePicker from 'expo-image-picker';
 import { useAuth } from '../context/AuthContext';
 import { DARK_CONTENT_COLORS, useTheme } from '../context/ThemeContext';
@@ -40,6 +40,7 @@ import {
   listTeams,
 } from '../services/database';
 import { subscribePlayerStatus } from '../services/playerStatus';
+import { shareCodeFromText } from '../services/schedule';
 import { listMyCommunityChats } from '../services/communityChat';
 import { ACCOUNT_MENU_NAV, HeaderAvatar } from '../components/AccountMenu';
 import {
@@ -74,6 +75,7 @@ import {
   toggleDirectMessageReaction,
 } from '../services/directMessages';
 import { createReactionTracker, toggleOwnReaction } from '../utils/reactions';
+import { webLongPress } from '../utils/webLongPress';
 
 const LIGHT_C = {
   ink: '#0E2321',
@@ -366,12 +368,13 @@ function ConversationRow({ conversation, currentUserId, onPress, onLongPress, ac
       onPress={onPress}
       onLongPress={onLongPress}
       delayLongPress={380}
+      {...webLongPress(onLongPress)}
       accessibilityRole="button"
       accessibilityLabel={`${conversation.peer.name}${muted ? ', muted' : ''}${conversation.unreadCount ? `, ${conversation.unreadCount} unread` : ''}. ${preview}`}
       accessibilityHint={onLongPress ? 'Opens the conversation. Long press for more options.' : undefined}
       accessibilityActions={accessibilityActions}
       onAccessibilityAction={onAccessibilityAction}
-      style={({ pressed }) => [styles.conversationRow, { borderColor: colors.line }, isLast && styles.conversationRowLast, pressed && styles.pressed]}
+      style={({ pressed }) => [styles.conversationRow, onLongPress && unselectable, { borderColor: colors.line }, isLast && styles.conversationRowLast, pressed && styles.pressed]}
     >
       <View>
         <ProfilePhoto photo={conversation.peer.avatar} name={conversation.peer.name} size={52} />
@@ -1143,8 +1146,11 @@ function UnsentMessageText({ message, colors, style }) {
 
 function DirectMessageInteractionModal({ message, peer, seen, isDark, colors, currentUserId, onClose, onReact, onDetails, onReport, onBlock, onDeleteForMe, onUnsend }) {
   const unsent = Boolean(message?.deletedAt);
+  const photo = !unsent && message?.mediaType === 'image' && message.mediaUrl;
+  const savable = !unsent && ['image', 'video'].includes(message?.mediaType) && message.mediaUrl;
   const actions = message ? [
     canCopyText && message.text ? { key: 'copy', label: 'Copy', icon: 'copy-outline', onPress: () => copyText(message.text) } : null,
+    savable ? { key: 'save', label: message.mediaType === 'video' ? 'Save video' : 'Save photo', icon: 'download-outline', onPress: () => saveDirectMedia(message) } : null,
     !unsent ? { key: 'details', label: 'Message details', icon: 'information-circle-outline', onPress: () => onDetails(message, seen) } : null,
     !message.mine && !unsent ? { key: 'report', label: 'Report message', icon: 'flag-outline', destructive: true, separated: true, onPress: () => onReport(message) } : null,
     !message.mine ? { key: 'block', label: `Block ${peer?.name || 'player'}`, icon: 'ban-outline', destructive: true, separated: unsent, onPress: onBlock } : null,
@@ -1162,7 +1168,7 @@ function DirectMessageInteractionModal({ message, peer, seen, isDark, colors, cu
       actions={actions}
       onClose={onClose}
     >
-      {message ? <View style={[styles.messageBubble, { backgroundColor: colors.surface, borderColor: colors.line }, message.mine && { backgroundColor: colors.teal, borderColor: colors.teal }, unsent && [styles.unsentBubble, { borderColor: colors.line }]]}>{unsent ? <UnsentMessageText message={message} colors={colors} /> : <Text style={[styles.messageText, { color: message.mine ? '#FFFFFF' : colors.ink }]}>{message.text ?? mediaLabel(message)}</Text>}<Text style={[styles.messageTime, { color: message.mine ? 'rgba(255,255,255,.7)' : colors.ink40 }]}>{message.time}</Text></View> : null}
+      {photo ? <MediaThumbnail message={message} /> : message ? <View style={[styles.messageBubble, { backgroundColor: colors.surface, borderColor: colors.line }, message.mine && { backgroundColor: colors.teal, borderColor: colors.teal }, unsent && [styles.unsentBubble, { borderColor: colors.line }]]}>{unsent ? <UnsentMessageText message={message} colors={colors} /> : <Text style={[styles.messageText, { color: message.mine ? '#FFFFFF' : colors.ink }]}>{message.text ?? mediaLabel(message)}</Text>}<Text style={[styles.messageTime, { color: message.mine ? 'rgba(255,255,255,.7)' : colors.ink40 }]}>{message.time}</Text></View> : null}
     </MessageFocusModal>
   );
 }
@@ -1195,7 +1201,8 @@ function PeerProfileCard({ peer, canBlock, onViewProfile, onBlock, onClose, colo
   );
 }
 
-function DirectChatMessage({ message, grouped, interactive, peer, seen, timeVisible, currentUserId, colors, onToggleTime, onOpenActions, onOpenProfile, onReact, onPreview }) {
+function DirectChatMessage({ message, grouped, interactive, peer, seen, timeVisible, currentUserId, colors, onToggleTime, onOpenActions, onOpenProfile, onReact, onPreview, onOpenGame }) {
+  const gameShareCode = message.deletedAt || message.mediaType ? null : shareCodeFromText(message.text);
   const visualMedia = !message.deletedAt && ['image', 'video'].includes(message.mediaType);
   const reactionGroups = DIRECT_REACTION_OPTIONS.map((emoji) => ({
     emoji,
@@ -1207,9 +1214,10 @@ function DirectChatMessage({ message, grouped, interactive, peer, seen, timeVisi
       <View style={[styles.directMessageBlock, message.mine && styles.directMessageBlockMine]}>
         <View style={[styles.directBubbleActionRow, message.mine && styles.directBubbleActionRowMine]}>
           {!message.mine && !grouped ? <Pressable accessibilityRole="button" accessibilityLabel={`View ${message.sender || peer?.name || 'player'}`} hitSlop={4} onPress={onOpenProfile}><ProfilePhoto photo={message.avatar || peer?.avatar} name={message.sender} size={30} /></Pressable> : !message.mine ? <View style={styles.avatarSpacer} /> : null}
-          <Pressable accessibilityHint={interactive ? 'Tap to show the time. Long press for reactions and message options.' : 'Tap to show the time.'} onPress={() => onToggleTime(message.id)} onLongPress={interactive && !message.uploading ? () => onOpenActions(message.id) : undefined} delayLongPress={240} style={[styles.messageBubble, unselectable, { backgroundColor: colors.surface, borderColor: colors.line }, message.mine && { backgroundColor: colors.teal, borderColor: colors.teal }, message.deletedAt && [styles.unsentBubble, { borderColor: colors.line }], visualMedia && styles.mediaBubble]}>{message.deletedAt ? <UnsentMessageText message={message} colors={colors} style={unselectable} /> : message.mediaType ? <DirectMediaContent message={message} colors={colors} onPreview={onPreview} /> : <Text selectable={false} style={[styles.messageText, unselectable, { color: message.mine ? '#FFFFFF' : colors.ink }]}>{message.text}</Text>}</Pressable>
+          <Pressable accessibilityHint={interactive ? 'Tap to show the time. Long press for reactions and message options.' : 'Tap to show the time.'} onPress={() => onToggleTime(message.id)} onLongPress={interactive && !message.uploading ? () => onOpenActions(message.id) : undefined} delayLongPress={240} {...webLongPress(interactive && !message.uploading ? () => onOpenActions(message.id) : null)} style={[styles.messageBubble, unselectable, { backgroundColor: colors.surface, borderColor: colors.line }, message.mine && { backgroundColor: colors.teal, borderColor: colors.teal }, message.deletedAt && [styles.unsentBubble, { borderColor: colors.line }], visualMedia && styles.mediaBubble]}>{message.deletedAt ? <UnsentMessageText message={message} colors={colors} style={unselectable} /> : message.mediaType ? <DirectMediaContent message={message} colors={colors} onPreview={onPreview} onLongPress={interactive && !message.uploading ? () => onOpenActions(message.id) : undefined} /> : <Text selectable={false} style={[styles.messageText, unselectable, { color: message.mine ? '#FFFFFF' : colors.ink }]}>{message.text}</Text>}</Pressable>
         </View>
         <View style={[styles.directMessageExtras, message.mine ? styles.directMessageExtrasMine : styles.directMessageExtrasPeer]}>
+          {gameShareCode ? <Pressable accessibilityRole="link" accessibilityLabel="Open shared activity" onPress={() => onOpenGame(gameShareCode)} style={({ pressed }) => [styles.gameShareLink, { borderColor: colors.teal, backgroundColor: colors.surface }, pressed && { opacity: .75 }]}><Icon name="calendar-outline" size={15} color={colors.teal} /><Text style={[styles.gameShareLinkText, { color: colors.teal }]}>View activity</Text><Icon name="chevron-forward" size={14} color={colors.teal} /></Pressable> : null}
           {timeVisible ? <Text accessibilityLiveRegion="polite" style={[styles.messageTime, message.mine ? styles.messageTimeMine : styles.messageTimePeer, { color: colors.ink40 }]}>{message.mine ? 'Sent' : 'Received'} {sentAt}</Text> : null}
           {reactionGroups.length ? <View style={[styles.directReactionSummary, message.mine && styles.directReactionSummaryMine]}>{reactionGroups.map((group) => { const mine = group.reactions.some((reaction) => reaction.user_id === currentUserId); return <Pressable key={group.emoji} accessibilityLabel={`${group.emoji}, ${group.reactions.length} reactions`} onPress={() => onReact(message.id, group.emoji)} style={[styles.directReactionChip, { backgroundColor: mine ? colors.tealWash : colors.surface, borderColor: mine ? colors.teal : colors.line }]}><Text style={styles.directReactionEmoji}>{group.emoji}</Text><Text style={[styles.directReactionCount, { color: colors.ink70 }]}>{group.reactions.length}</Text></Pressable>; })}</View> : null}
           {message.mine && seen ? <View accessibilityLabel={`Seen by ${peer?.name || 'player'}`} style={styles.directSeenReceipt}><ProfilePhoto photo={peer?.avatar} name={peer?.name} size={17} /><Icon name="checkmark-done" size={13} color={colors.teal} /><Text style={[styles.directSeenText, { color: colors.ink40 }]}>Seen</Text></View> : null}
@@ -1507,11 +1515,19 @@ function DirectChatConversation({ route, navigation }) {
     const localId = `local-${Date.now()}`;
     upsertMessage({
       id: localId, conversationId, senderId: user?.id, sender: 'You', mine: true, text: null, reactions: [],
-      mediaType: type, mediaUrl: asset.uri, mediaDurationMs: asset.duration ?? null, uploading: true, createdAt,
+      mediaType: type, mediaUrl: asset.uri, mediaDurationMs: asset.duration ?? null, uploading: true, uploadProgress: 0, createdAt,
       time: new Date(createdAt).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }),
     });
+    // Re-render only when the ring would visibly move.
+    let shownPercent = 0;
+    const onProgress = (value) => {
+      const percent = Math.round(value * 100);
+      if (percent <= shownPercent) return;
+      shownPercent = percent;
+      setMessages((current) => current.map((item) => (item.id === localId ? { ...item, uploadProgress: value } : item)));
+    };
     try {
-      const message = await sendDirectMediaMessage(conversationId, asset, type);
+      const message = await sendDirectMediaMessage(conversationId, asset, type, { onProgress });
       setMessages((current) => current.filter((item) => item.id !== localId));
       upsertMessage(message);
       refreshConversation().catch(() => {});
@@ -1520,18 +1536,32 @@ function DirectChatConversation({ route, navigation }) {
       Alert.alert(`${{ video: 'Video', audio: 'Voice message' }[type] || 'Photo'} not sent`, error.message);
     }
   };
-  const pickMedia = async (source) => {
+  // Android camera apps and mobile browsers can capture a photo or a video,
+  // not either at once: asking for both opens the file picker instead of the
+  // camera. iOS offers both in one camera screen.
+  const openCamera = () => {
+    setTrayMode('closed');
+    if (Platform.OS === 'ios') { pickMedia('camera', ['images', 'videos']); return; }
+    Alert.alert('Camera', 'What would you like to capture?', [
+      { text: 'Take photo', onPress: () => pickMedia('camera', ['images']) },
+      { text: 'Record video', onPress: () => pickMedia('camera', ['videos']) },
+      { text: 'Cancel', style: 'cancel' },
+    ]);
+  };
+  const pickMedia = async (source, mediaTypes = ['images', 'videos']) => {
     setTrayMode('closed');
     try {
-      if (source === 'camera') {
+      if (source === 'camera' && Platform.OS !== 'web') {
         const permission = await ImagePicker.requestCameraPermissionsAsync();
         if (!permission.granted) {
           Alert.alert('Camera unavailable', 'Allow camera access in Settings to take photos and videos.');
           return;
         }
       }
-      const options = { mediaTypes: ['images', 'videos'], quality: 0.85, videoMaxDuration: 60 };
-      const result = source === 'camera' ? await ImagePicker.launchCameraAsync(options) : await ImagePicker.launchImageLibraryAsync(options);
+      const options = { mediaTypes, quality: 0.85, videoMaxDuration: 60 };
+      const result = source === 'camera'
+        ? await ImagePicker.launchCameraAsync({ ...options, cameraType: ImagePicker.CameraType.back })
+        : await ImagePicker.launchImageLibraryAsync(options);
       if (result.canceled || !result.assets?.[0]) return;
       const asset = result.assets[0];
       const isVideo = asset.type === 'video' || asset.mimeType?.startsWith('video/');
@@ -1718,7 +1748,7 @@ function DirectChatConversation({ route, navigation }) {
             <View style={styles.messageTapArea}>
             {messages.map((message, index) => {
               const grouped = messages[index - 1]?.senderId === message.senderId;
-              return <DirectChatMessage key={message.id} message={message} grouped={grouped} interactive={conversation?.status === 'accepted' && !blocked} peer={peer} seen={message.id === latestMine?.id && Boolean(latestMineSeen)} timeVisible={timeMessageId === message.id} currentUserId={user?.id} colors={colors} onToggleTime={toggleMessageTime} onOpenActions={openMessageActions} onPreview={setPreviewMessage} onOpenProfile={() => setProfileCardOpen(true)} onReact={reactToMessage} />;
+              return <DirectChatMessage key={message.id} message={message} grouped={grouped} interactive={conversation?.status === 'accepted' && !blocked} peer={peer} seen={message.id === latestMine?.id && Boolean(latestMineSeen)} timeVisible={timeMessageId === message.id} currentUserId={user?.id} colors={colors} onToggleTime={toggleMessageTime} onOpenActions={openMessageActions} onPreview={setPreviewMessage} onOpenProfile={() => setProfileCardOpen(true)} onReact={reactToMessage} onOpenGame={(code) => navigation.navigate('Schedule', { shareCode: code, shareToken: Date.now() })} />;
             })}
             {remoteTyping ? <View accessibilityLiveRegion="polite" accessibilityLabel={`${peer?.name || 'Player'} is typing`} style={styles.remoteTypingRow}><ProfilePhoto photo={peer?.avatar} name={peer?.name} size={30} /><AnimatedTypingDots colors={colors} /></View> : null}
             </View>
@@ -1727,7 +1757,7 @@ function DirectChatConversation({ route, navigation }) {
           {outboundRequest && !blocked ? <View style={[styles.pendingBanner, { backgroundColor: isDark ? colors.surface : '#E5F0ED', borderColor: colors.line }]}><Icon name="time-outline" color={colors.teal} /><Text style={[styles.pendingText, { color: colors.ink70 }]}>Message request sent. You can continue after {peer?.name} accepts.</Text></View> : null}
           {declined && !blocked ? <View style={[styles.pendingBanner, { backgroundColor: colors.surface, borderColor: colors.line }]}><Icon name="lock-closed-outline" color={colors.ink40} /><Text style={[styles.pendingText, { color: colors.ink70 }]}>This conversation is closed.</Text></View> : null}
           {blocked ? <View style={[styles.pendingBanner, { backgroundColor: colors.surface, borderColor: colors.line }]}><Icon name="ban-outline" color={colors.brick} /><Text style={[styles.pendingText, { color: colors.ink70 }]}>Private messaging is unavailable for this player.</Text></View> : null}
-          {!incomingRequest && !outboundRequest && !declined && !blocked ? <View style={[styles.composer, { backgroundColor: colors.surface, borderColor: colors.line }]}>{recordingVoice ? <VoiceRecorderBar colors={colors} onCancel={() => setRecordingVoice(false)} onSend={sendVoice} /> : <View style={styles.composerRow}>{conversationId && conversation?.status === 'accepted' ? <ComposerAttachments mode={trayMode} colors={colors} onOpen={() => setTrayMode('open')} onCamera={() => pickMedia('camera')} onLibrary={() => pickMedia('library')} onVoice={startVoice} /> : null}<View style={[styles.composerInput, styles.composerInputFlex, { backgroundColor: colors.paper }]}><TextInput value={draft} onChangeText={changeDraft} onBlur={stopTyping} onFocus={minimizeTray} onPressIn={minimizeTray} onSubmitEditing={send} returnKeyType="send" multiline maxLength={4000} placeholder={trayMode === 'open' ? 'Message' : `Message ${peer?.name || 'player'}`} placeholderTextColor={colors.ink40} style={[styles.input, { color: colors.ink }]} /><Pressable disabled={!draft.trim() || composerDisabled} accessibilityLabel="Send message" onPress={send} style={[styles.sendButton, { backgroundColor: colors.optic }, (!draft.trim() || composerDisabled) && styles.sendDisabled]}>{sending ? <ActivityIndicator size="small" color="#0E2321" /> : <Icon name="arrow-up" size={18} color="#0E2321" />}</Pressable></View></View>}</View> : null}
+          {!incomingRequest && !outboundRequest && !declined && !blocked ? <View style={[styles.composer, { backgroundColor: colors.surface, borderColor: colors.line }]}>{recordingVoice ? <VoiceRecorderBar colors={colors} onCancel={() => setRecordingVoice(false)} onSend={sendVoice} /> : <View style={styles.composerRow}>{conversationId && conversation?.status === 'accepted' ? <ComposerAttachments mode={trayMode} colors={colors} onOpen={() => setTrayMode('open')} onCamera={openCamera} onLibrary={() => pickMedia('library')} onVoice={startVoice} /> : null}<View style={[styles.composerInput, styles.composerInputFlex, { backgroundColor: colors.paper }]}><TextInput value={draft} onChangeText={changeDraft} onBlur={stopTyping} onFocus={minimizeTray} onPressIn={minimizeTray} onSubmitEditing={send} returnKeyType="send" multiline maxLength={4000} placeholder={trayMode === 'open' ? 'Message' : `Message ${peer?.name || 'player'}`} placeholderTextColor={colors.ink40} style={[styles.input, { color: colors.ink }]} /><Pressable disabled={!draft.trim() || composerDisabled} accessibilityLabel="Send message" onPress={send} style={[styles.sendButton, { backgroundColor: colors.optic }, (!draft.trim() || composerDisabled) && styles.sendDisabled]}>{sending ? <ActivityIndicator size="small" color="#0E2321" /> : <Icon name="arrow-up" size={18} color="#0E2321" />}</Pressable></View></View>}</View> : null}
         </KeyboardAvoidingView>
       )}
       <DirectMessageInteractionModal
@@ -1928,6 +1958,8 @@ const styles = StyleSheet.create({
   directMessageExtrasPeer: { paddingLeft: 37 },
   messageBubble: { maxWidth: '100%', flexShrink: 1, paddingHorizontal: 14, paddingVertical: 10, borderRadius: 20, borderBottomLeftRadius: 5, borderWidth: 1 },
   messageText: { fontSize: 15, lineHeight: 21 },
+  gameShareLink: { minHeight: 34, marginTop: 4, paddingHorizontal: 12, flexDirection: 'row', alignItems: 'center', gap: 6, borderRadius: 17, borderWidth: 1 },
+  gameShareLinkText: { fontSize: 12, fontWeight: '900' },
   messageTime: { marginTop: 4, marginBottom: 2, fontSize: 9, fontWeight: '700' },
   unsentBubble: { backgroundColor: 'transparent', borderStyle: 'dashed' },
   mediaBubble: { padding: 0, borderWidth: 0, backgroundColor: 'transparent', overflow: 'hidden' },

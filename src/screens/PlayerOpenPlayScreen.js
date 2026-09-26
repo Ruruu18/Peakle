@@ -338,7 +338,7 @@ function SessionCard({ session, userLocation, onPress }) {
     <Text style={styles.venueName}>{session.venue?.name} · {session.venue?.area}</Text>
     <View style={styles.metaRow}><Icon name="calendar-outline" size={14} color={C.ink40} /><Text style={styles.metaText}>{schedule(session.scheduledStart, session.scheduledEnd)}</Text></View>
     <View style={styles.metaRow}><Icon name="podium-outline" size={14} color={C.ink40} /><Text style={styles.metaText}>{skillRange(session)}</Text></View>
-    <View style={styles.cardFoot}><Text style={styles.distance}>{formatDistance(distance)}</Text><View style={[styles.spotsPill, full && styles.fullPill]}><Text style={[styles.spotsText, full && styles.fullText]}>{full ? 'WAITLIST' : `${session.capacity - session.registeredCount} SPOTS`}</Text></View></View>
+    <View style={styles.cardFoot}><Text numberOfLines={1} style={styles.distance}>{distance == null ? session.venue?.area || 'Location not set' : formatDistance(distance)}</Text><View style={[styles.spotsPill, full && styles.fullPill]}><Text style={[styles.spotsText, full && styles.fullText]}>{full ? 'WAITLIST' : `${session.capacity - session.registeredCount} SPOTS`}</Text></View></View>
   </Pressable>;
 }
 

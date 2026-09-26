@@ -18,7 +18,6 @@ import {
   UIManager,
   useWindowDimensions
 } from 'react-native';
-import * as Location from 'expo-location';
 
 if (Platform.OS === 'android' && UIManager.setLayoutAnimationEnabledExperimental) {
   UIManager.setLayoutAnimationEnabledExperimental(true);
@@ -34,10 +33,9 @@ import { clearAppHandoff, isStandaloneWebApp, readAppHandoff } from '../lib/auth
 import ProfilePhotoPicker from '../components/ProfilePhotoPicker';
 import ResilientImage from '../components/ResilientImage';
 import { LEGAL_DOCUMENTS } from '../content/legalDocuments';
-import { PH_LOCATIONS, formatLocation, locationMatchesSearch, parseLocation } from '../data/phLocations';
 import { createMobileStyleSheet } from '../utils/mobileStyles';
 import { COURT_BOOKING_ENABLED } from '../config/features';
-import { reverseGeocode } from '../utils/geocode';
+import HomeAreaPicker from '../components/HomeAreaPicker';
 
 WebBrowser.maybeCompleteAuthSession();
 
@@ -821,162 +819,6 @@ function DeviceIntro({ onComplete, initialIndex = 0 }) {
   );
 }
 
-function LocationPicker({ value, onChange }) {
-  const [open, setOpen] = useState(false);
-  const [query, setQuery] = useState('');
-  const [gpsLoading, setGpsLoading] = useState(false);
-
-  const parsed = useMemo(() => parseLocation(value), [value]);
-
-  const suggestions = useMemo(() => {
-    const q = query.trim().toLowerCase();
-    if (!q) return PH_LOCATIONS.slice(0, 10);
-    return PH_LOCATIONS.filter((loc) => locationMatchesSearch(loc, q)).slice(0, 8);
-  }, [query]);
-
-  const openSheet = () => { setQuery(''); setOpen(true); };
-  const closeSheet = () => { setOpen(false); setQuery(''); };
-  const selectLoc = (loc) => { onChange(formatLocation(loc)); closeSheet(); };
-
-  const detectLocation = async () => {
-    setGpsLoading(true);
-    try {
-      const { status } = await Location.requestForegroundPermissionsAsync();
-      if (status !== 'granted') { setGpsLoading(false); return; }
-      const pos = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Balanced });
-      const geo = await reverseGeocode({ latitude: pos.coords.latitude, longitude: pos.coords.longitude });
-      if (geo) {
-        const detectedCity = geo.city || geo.subregion || '';
-        const match = PH_LOCATIONS.find((loc) => loc.city.toLowerCase() === detectedCity.toLowerCase());
-        if (match) { selectLoc(match); }
-        else { onChange(`${detectedCity} · ${geo.region || ''} · ${geo.country || 'Philippines'}`); closeSheet(); }
-      }
-    } catch (_) { /* ignore */ }
-    finally { setGpsLoading(false); }
-  };
-
-  return (
-    <>
-      <Pressable
-        accessibilityRole="button"
-        onPress={openSheet}
-        style={({ pressed }) => [styles.locTrigger, pressed && styles.locTriggerPressed]}
-      >
-        <View style={styles.locTriggerIcon}>
-          <Ionicons name="location" size={17} color={C.teal} />
-        </View>
-        <View style={{ flex: 1 }}>
-          <Text style={styles.locTriggerEyebrow}>HOME AREA</Text>
-          {parsed ? (
-            <>
-              <Text numberOfLines={1} style={styles.locTriggerCity}>{parsed.city}</Text>
-              <Text numberOfLines={1} style={styles.locTriggerMeta}>{parsed.region}{parsed.country ? ` · ${parsed.country}` : ''}</Text>
-            </>
-          ) : (
-            <Text style={styles.locTriggerPlaceholder}>Tap to set your location</Text>
-          )}
-        </View>
-        <Ionicons name="chevron-forward" size={16} color={C.teal} />
-      </Pressable>
-
-      <Modal visible={open} transparent animationType="slide" onRequestClose={closeSheet} statusBarTranslucent>
-        <View {...webDialog('backdrop')} style={styles.locModalBackdrop}>
-          <Pressable style={StyleSheet.absoluteFillObject} onPress={closeSheet} />
-          <View {...webDialog('surface')} style={styles.locSheet}>
-            <View {...webDialog('handle')} style={styles.locHandle} />
-            <View style={styles.locHeader}>
-              <View style={{ flex: 1 }}>
-                <Text style={styles.locHeaderEyebrow}>YOUR SEARCH AREA</Text>
-                <Text style={styles.locHeaderTitle}>Change location</Text>
-              </View>
-              <Pressable onPress={closeSheet} style={styles.locCloseBtn}>
-                <Ionicons name="close" size={20} color="#FFFFFF" />
-              </Pressable>
-            </View>
-
-            {Boolean(parsed) && (
-              <View style={styles.locCurrentCard}>
-                <View style={styles.locCurrentIcon}>
-                  <Ionicons name="location" size={20} color={C.teal} />
-                </View>
-                <View style={{ flex: 1 }}>
-                  <Text style={styles.locCurrentLabel}>CURRENTLY USING</Text>
-                  <Text style={styles.locCurrentCity}>{parsed.city}</Text>
-                  <Text style={styles.locCurrentMeta}>{parsed.region}{parsed.country ? ` · ${parsed.country}` : ''}</Text>
-                </View>
-              </View>
-            )}
-
-            <Pressable
-              onPress={detectLocation}
-              disabled={gpsLoading}
-              style={({ pressed }) => [styles.locGpsBtn, pressed && { opacity: 0.85 }]}
-            >
-              {gpsLoading ? <ActivityIndicator color={C.ink} size="small" /> : <Ionicons name="navigate" size={20} color={C.ink} />}
-              <View style={{ flex: 1 }}>
-                <Text style={styles.locGpsBtnTitle}>Use my exact location</Text>
-                <Text style={styles.locGpsBtnSub}>Uses your device GPS while the app is open.</Text>
-              </View>
-            </Pressable>
-
-            <Text style={styles.locOrLabel}>OR SEARCH ANYWHERE</Text>
-
-            <View style={styles.locSearchRow}>
-              <Ionicons name="search-outline" size={18} color="rgba(255,255,255,0.45)" style={{ marginLeft: 14 }} />
-              <TextInput
-                value={query}
-                onChangeText={setQuery}
-                placeholder="City or region…"
-                placeholderTextColor="rgba(255,255,255,0.3)"
-                style={styles.locSearchInput}
-                returnKeyType="search"
-              />
-              {query.length > 0 && (
-                <Pressable onPress={() => setQuery('')} style={styles.locSearchClear}>
-                  <Ionicons name="close-circle" size={18} color="rgba(255,255,255,0.4)" />
-                </Pressable>
-              )}
-            </View>
-
-            {suggestions.length > 0 && (
-              <View style={styles.locResults}>
-                {suggestions.map((loc, index) => {
-                  const isActive = parsed?.city === loc.city && parsed?.region === loc.region;
-                  return (
-                    <Pressable
-                      accessibilityRole="radio"
-                      accessibilityState={{ checked: isActive }}
-                      key={`${loc.city}-${loc.region}`}
-                      onPress={() => selectLoc(loc)}
-                      style={({ pressed, hovered }) => [
-                        styles.locResultRow,
-                        index > 0 && styles.locResultBorder,
-                        isActive && styles.locResultActive,
-                        (pressed || hovered) && styles.locResultHovered,
-                      ]}
-                    >
-                      <Ionicons name="location-outline" size={16} color="rgba(255,255,255,0.4)" />
-                      <View style={{ flex: 1 }}>
-                        <Text style={styles.locResultCity}>{loc.city}</Text>
-                        <Text style={styles.locResultMeta}>{loc.region} · {loc.country}</Text>
-                      </View>
-                      {isActive && <Ionicons name="checkmark-circle" size={18} color={C.teal} />}
-                    </Pressable>
-                  );
-                })}
-              </View>
-            )}
-
-            <Text style={styles.locPrivacyNote}>
-              Your coordinates stay on this device unless you separately turn on Nearby Player visibility.
-            </Text>
-          </View>
-        </View>
-      </Modal>
-    </>
-  );
-}
-
 function Personalize({ profile, onBack }) {
   const { completeOnboarding } = useAuth();
   const [stage, setStage] = useState('name');
@@ -1035,7 +877,7 @@ function Personalize({ profile, onBack }) {
         {stage === 'game' ? <>
           <View style={styles.personalHead}><Text style={styles.eyebrow}>LAST STEP</Text><Text style={styles.h1}>Find your kind of game.</Text><Text style={styles.subtitle}>Two quick details help Peakle recommend nearby games and players.</Text></View>
           <Text style={[styles.label, styles.sectionLabel]}>I PLAY MOSTLY</Text><View style={styles.choiceRow}>{['Doubles', 'Singles', 'Both'].map((value) => <Pressable key={value} onPress={() => setPreference(value)} style={[styles.choice, preference === value && styles.optionActive]}><Icon name={value === 'Doubles' ? 'people-outline' : value === 'Singles' ? 'person-outline' : 'swap-horizontal-outline'} color={preference === value ? C.ink : C.ink40} /><Text style={[styles.choiceText, preference === value && styles.optionActiveText]}>{value}</Text></Pressable>)}</View>
-          <LocationPicker value={location} onChange={setLocation} />
+          <HomeAreaPicker value={location} onChange={setLocation} forceLight />
           <View style={styles.permissionNote}><View style={styles.noteIcon}><Icon name="notifications-outline" size={18} color={C.teal} /></View><Text style={styles.noteText}><Text style={styles.noteStrong}>You’re in control.</Text> We’ll ask before using location or sending match reminders.</Text></View>
           {error ? <Text style={styles.error}>{error}</Text> : null}
           <Pressable disabled={busy} onPress={finish} style={({ pressed }) => [styles.accentButton, (pressed || busy) && styles.pressed]}><Text style={styles.accentText}>{busy ? 'Setting up…' : 'Enter Peakle'}</Text><Icon name="arrow-forward" /></Pressable>
@@ -1138,38 +980,4 @@ const styles = createMobileStyleSheet({
   legalModalDoneDisabled: { opacity: .45, backgroundColor: C.line },
   legalModalDoneText: { color: C.ink, fontSize: 13, fontWeight: '900' },
   // Location picker
-  locTrigger: { minHeight: 64, paddingHorizontal: 14, flexDirection: 'row', alignItems: 'center', gap: 12, borderRadius: 14, borderWidth: 1, borderColor: C.line, backgroundColor: C.surface },
-  locTriggerPressed: { opacity: 0.76, transform: [{ scale: 0.985 }] },
-  locTriggerIcon: { width: 38, height: 38, borderRadius: 12, alignItems: 'center', justifyContent: 'center', backgroundColor: C.tealWash },
-  locTriggerEyebrow: { color: C.ink40, fontSize: 7.5, fontWeight: '900', letterSpacing: .7 },
-  locTriggerCity: { marginTop: 1, color: C.ink, fontSize: 14, fontWeight: '800' },
-  locTriggerMeta: { marginTop: 1, color: C.ink40, fontSize: 9 },
-  locTriggerPlaceholder: { marginTop: 2, color: C.ink40, fontSize: 12 },
-  locModalBackdrop: { flex: 1, justifyContent: 'flex-end', backgroundColor: 'rgba(14,35,33,.55)' },
-  locSheet: { paddingHorizontal: 20, paddingTop: 10, paddingBottom: 28, borderTopLeftRadius: 26, borderTopRightRadius: 26, backgroundColor: '#0F2421' },
-  locHandle: { width: 38, height: 4, marginBottom: 18, alignSelf: 'center', borderRadius: 2, backgroundColor: 'rgba(255,255,255,.2)' },
-  locHeader: { flexDirection: 'row', alignItems: 'center', marginBottom: 18 },
-  locHeaderEyebrow: { color: 'rgba(255,255,255,.45)', fontSize: 9, fontWeight: '900', letterSpacing: 1 },
-  locHeaderTitle: { marginTop: 3, color: '#FFFFFF', fontSize: 26, fontWeight: '800', letterSpacing: -.5 },
-  locCloseBtn: { width: 44, height: 44, borderRadius: 22, alignItems: 'center', justifyContent: 'center', backgroundColor: 'rgba(255,255,255,.12)' },
-  locCurrentCard: { flexDirection: 'row', alignItems: 'center', gap: 12, minHeight: 72, paddingHorizontal: 14, marginBottom: 14, borderRadius: 15, backgroundColor: 'rgba(255,255,255,.09)' },
-  locCurrentIcon: { width: 40, height: 40, borderRadius: 12, alignItems: 'center', justifyContent: 'center', backgroundColor: 'rgba(28,107,102,.35)' },
-  locCurrentLabel: { color: 'rgba(255,255,255,.45)', fontSize: 8, fontWeight: '900', letterSpacing: .8 },
-  locCurrentCity: { marginTop: 2, color: '#FFFFFF', fontSize: 15, fontWeight: '800' },
-  locCurrentMeta: { marginTop: 1, color: 'rgba(255,255,255,.5)', fontSize: 9 },
-  locGpsBtn: { minHeight: 68, flexDirection: 'row', alignItems: 'center', gap: 13, paddingHorizontal: 16, borderRadius: 16, backgroundColor: C.optic, marginBottom: 18 },
-  locGpsBtnTitle: { color: C.ink, fontSize: 13, fontWeight: '900' },
-  locGpsBtnSub: { marginTop: 2, color: 'rgba(14,35,33,.55)', fontSize: 9 },
-  locOrLabel: { color: 'rgba(255,255,255,.4)', fontSize: 9, fontWeight: '900', letterSpacing: 1.1, marginBottom: 10 },
-  locSearchRow: { flexDirection: 'row', alignItems: 'center', borderRadius: 14, backgroundColor: 'rgba(255,255,255,.1)', marginBottom: 10 },
-  locSearchInput: { flex: 1, height: 52, paddingHorizontal: 10, color: '#FFFFFF', fontSize: 13, outlineStyle: 'none' },
-  locSearchClear: { width: 42, height: 42, alignItems: 'center', justifyContent: 'center' },
-  locResults: { borderRadius: 14, backgroundColor: 'rgba(255,255,255,.09)', marginBottom: 10, overflow: 'hidden' },
-  locResultRow: { minHeight: 56, flexDirection: 'row', alignItems: 'center', gap: 10, paddingHorizontal: 14 },
-  locResultBorder: { borderTopWidth: StyleSheet.hairlineWidth, borderColor: 'rgba(255,255,255,.12)' },
-  locResultActive: { backgroundColor: 'rgba(214,233,74,.14)' },
-  locResultHovered: { backgroundColor: 'rgba(114,199,190,.2)' },
-  locResultCity: { color: '#FFFFFF', fontSize: 13, fontWeight: '700' },
-  locResultMeta: { marginTop: 1, color: 'rgba(255,255,255,.45)', fontSize: 9 },
-  locPrivacyNote: { marginTop: 6, color: 'rgba(255,255,255,.35)', fontSize: 8.5, textAlign: 'center', lineHeight: 13 },
 });

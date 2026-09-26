@@ -1,7 +1,8 @@
 import { requireSupabase } from '../../lib/supabase';
 import {
-  createScheduledActivity, createScheduledGame, isOnMyCalendar, isPlayerScheduledEntry,
-  listScheduledGames, nextOnMyCalendar, playSetupFromGame, scheduleEntryFromActivity,
+  createScheduledActivity, createScheduledGame, getScheduledGameShareUrl, inviteToScheduledGame, isOnMyCalendar, isPlayerScheduledEntry,
+  listScheduledGames, nextOnMyCalendar, openScheduledGameLink, playSetupFromGame, scheduledGameShareMessage, scheduleEntryFromActivity,
+  setScheduledGameVisibility, shareCodeFromText,
 } from '../schedule';
 
 jest.mock('../../lib/supabase', () => ({ requireSupabase: jest.fn() }));
@@ -75,4 +76,40 @@ it('keeps organizer registrations separate and honors declined player invitation
   expect(isOnMyCalendar({ kind: 'program', isPlayerScheduled: true, myStatus: 'declined' })).toBe(false);
   expect(isOnMyCalendar({ kind: 'game', myStatus: 'going' })).toBe(true);
   expect(() => playSetupFromGame({ kind: 'competition', isPlayerScheduled: true })).toThrow('Only games');
+});
+
+describe('sharing scheduled activities', () => {
+  it('builds a share link from the host-issued code', async () => {
+    rpc.mockResolvedValueOnce({ data: 'abc123def4', error: null });
+    await expect(getScheduledGameShareUrl('game-1')).resolves.toBe('peakle://games/abc123def4');
+    expect(rpc).toHaveBeenCalledWith('get_scheduled_game_share_code', { p_game_id: 'game-1' });
+  });
+
+  it('reads a share code back out of a chat message', () => {
+    const message = scheduledGameShareMessage({ title: 'Open play', startsAt: '2026-10-01T09:00:00+08:00', place: 'Community Courts', area: 'Pasig' }, 'https://play.example.com/games/abc123def4');
+    expect(message).toContain('Join me for Open play on Peakle');
+    expect(message).toContain('Community Courts, Pasig');
+    expect(shareCodeFromText(message)).toBe('abc123def4');
+    expect(shareCodeFromText('peakle://games/ABC123DEF4')).toBe('abc123def4');
+    expect(shareCodeFromText('see /games/short')).toBeNull();
+  });
+
+  it('opens a link, invites players and changes visibility through RPCs', async () => {
+    rpc.mockResolvedValueOnce({ data: { gameId: 'game-1', startsAt: '2026-10-01T01:00:00Z' }, error: null });
+    await expect(openScheduledGameLink('abc123def4')).resolves.toEqual({ gameId: 'game-1', startsAt: '2026-10-01T01:00:00Z' });
+    expect(rpc).toHaveBeenLastCalledWith('open_scheduled_game_link', { p_code: 'abc123def4' });
+
+    rpc.mockResolvedValueOnce({ data: 2, error: null });
+    await expect(inviteToScheduledGame('game-1', [{ id: 'a' }, { id: 'b' }, {}])).resolves.toBe(2);
+    expect(rpc).toHaveBeenLastCalledWith('invite_scheduled_game_players', { p_game_id: 'game-1', p_player_ids: ['a', 'b'] });
+
+    rpc.mockResolvedValueOnce({ data: null, error: null });
+    await setScheduledGameVisibility('game-1', 'open');
+    expect(rpc).toHaveBeenLastCalledWith('set_scheduled_game_visibility', { p_game_id: 'game-1', p_visibility: 'open' });
+  });
+
+  it('explains when the sharing migration is not deployed yet', async () => {
+    rpc.mockResolvedValueOnce({ data: null, error: { code: 'PGRST202', message: 'missing' } });
+    await expect(getScheduledGameShareUrl('game-1')).rejects.toThrow('not available yet');
+  });
 });

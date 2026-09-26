@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { ActivityIndicator, Linking, Pressable, RefreshControl, StyleSheet, Text, TextInput, useWindowDimensions, View } from 'react-native';
+import { ActivityIndicator, Linking, Platform, Pressable, RefreshControl, Share, StyleSheet, Text, TextInput, useWindowDimensions, View } from 'react-native';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { StatusBar } from 'expo-status-bar';
 import { useFocusEffect } from '@react-navigation/native';
@@ -17,17 +17,25 @@ import { useAuth } from '../context/AuthContext';
 import { useUserLocation } from '../context/LocationContext';
 import { createDarkStyleSheet, DARK_CONTENT_COLORS, LIGHT_CONTENT_COLORS, useTheme } from '../context/ThemeContext';
 import { searchRegisteredPlayers } from '../services/nearbyPlayers';
-import { listFollowingPlayers } from '../services/directMessages';
+import { listFollowingPlayers, listPrivateConnections, sendTextToPlayers } from '../services/directMessages';
+import { copyText } from '../components/MessageFocusModal';
 import { areaFromLocationLabel, courtLabel, loadRecentCourts, rememberCourt } from '../services/playCourts';
 import {
   cancelScheduledGame, clockFromMinutes, createScheduledActivity, dateFromDayKey, dayKey, DURATION_STEP_MINUTES, earliestStartMinutes, entriesByDay, formatDayLabel, formatDuration, formatTime, GAME_DURATIONS,
   MAX_GAME_MINUTES, MIN_GAME_MINUTES, maskClockInput, parseClockInput, parseHoursInput,
-  googleCalendarUrl, isOnMyCalendar, isPlayerScheduledEntry, listScheduledGames, listScheduleEvents, monthGrid, playSetupFromGame, respondToScheduledGame, shiftDayKey, shiftMonthKey,
+  getScheduledGameShareUrl, googleCalendarUrl, inviteToScheduledGame, isOnMyCalendar, openScheduledGameLink, scheduledGameShareMessage, setScheduledGameVisibility, isPlayerScheduledEntry, listScheduledGames, listScheduleEvents, monthGrid, playSetupFromGame, respondToScheduledGame, shiftDayKey, shiftMonthKey,
 } from '../services/schedule';
 
 const kindColor = (kind, isDark) => (KINDS[kind] || KINDS.game)[isDark ? 'darkColor' : 'color'];
 const WEEKDAYS = ['S', 'M', 'T', 'W', 'T', 'F', 'S'];
 const START_WINDOW_MS = 60 * 60000;
+const VISIBILITY_OPTIONS = [{ value: 'open', label: 'Public' }, { value: 'invite', label: 'Private' }];
+const VISIBILITY_HELP = {
+  open: 'Public: anyone on Peakle can find it in Discover and take an open spot.',
+  invite: 'Private: only players you invite or send the link to can join.',
+};
+// The server allows 6 messages per 10 seconds per sender.
+const MAX_CHAT_SHARES = 6;
 
 function usePalette() {
   const { isDark } = useTheme();
@@ -163,7 +171,7 @@ function EntrySheet({ entry, onClose, onChanged, onStart, onOpenEvent }) {
             <View style={styles.factList}>
               <View style={styles.fact}><AppIcon name="calendar-outline" size={17} color={palette.teal} /><Text style={styles.factText}>{when}</Text></View>
               <View style={styles.fact}><AppIcon name="location-outline" size={17} color={palette.teal} /><Text style={styles.factText}>{[entry.place, entry.area].filter(Boolean).join(' · ')}</Text></View>
-              {game ? <View style={styles.fact}><AppIcon name={kind.icon} size={17} color={palette.teal} /><Text style={styles.factText}>{game.kind === 'game' ? `${game.matchType === 'singles' ? 'Singles' : 'Doubles'} · ${game.mode === 'ranked' ? 'Ranked' : 'Casual'}` : kind.name} · {game.visibility === 'open' ? 'Open to anyone' : 'Invite only'}</Text></View> : null}
+              {game ? <View style={styles.fact}><AppIcon name={kind.icon} size={17} color={palette.teal} /><Text style={styles.factText}>{game.kind === 'game' ? `${game.matchType === 'singles' ? 'Singles' : 'Doubles'} · ${game.mode === 'ranked' ? 'Ranked' : 'Casual'}` : kind.name} · {game.visibility === 'open' ? 'Public' : 'Private'}</Text></View> : null}
               {game?.notes ? <View style={styles.fact}><AppIcon name="document-text-outline" size={17} color={palette.teal} /><Text style={styles.factText}>{game.notes}</Text></View> : null}
             </View>
             {game ? <>
@@ -171,6 +179,7 @@ function EntrySheet({ entry, onClose, onChanged, onStart, onOpenEvent }) {
               {game.roster.filter((player) => player.status !== 'declined').map((player) => <View key={player.id} style={styles.rosterRow}><ProfilePhoto photo={player.avatar} name={player.name} size={32} /><Text numberOfLines={1} style={styles.rosterName}>{player.name}{player.id === game.hostId ? ' · Host' : ''}</Text><Text style={[styles.rosterStatus, player.status === 'going' && styles.rosterGoing]}>{player.status === 'going' ? 'Going' : 'Invited'}</Text></View>)}
               {Array.from({ length: game.spotsLeft }, (_, index) => <View key={`open-${index}`} style={styles.rosterRow}><View style={styles.openSeat}><AppIcon name="add" size={15} color={palette.ink40} /></View><Text style={styles.rosterOpen}>Open spot</Text></View>)}
             </> : null}
+            {game && !cancelled && !ended && (game.isHost || game.visibility === 'open') ? <ShareActivityPanel game={game} onChanged={onChanged} /> : null}
             {error ? <View style={styles.errorBox}><AppIcon name="alert-circle-outline" size={17} color={palette.brick} /><Text style={styles.errorText}>{error}</Text></View> : null}
             <View style={styles.sheetActions}>
               {game && !cancelled && !ended ? <>
@@ -195,7 +204,7 @@ function EntrySheet({ entry, onClose, onChanged, onStart, onOpenEvent }) {
   );
 }
 
-function PlayerInvitePicker({ selected, onChange, max, userId }) {
+function PlayerInvitePicker({ selected, onChange, max, userId, excludeIds = [] }) {
   const { styles, palette } = usePalette();
   const [query, setQuery] = useState('');
   const [following, setFollowing] = useState([]);
@@ -214,7 +223,7 @@ function PlayerInvitePicker({ selected, onChange, max, userId }) {
   }, [query]);
   const needle = query.trim().toLocaleLowerCase();
   const candidates = (needle.length >= 2 ? results : following.filter((player) => !needle || player.name.toLocaleLowerCase().includes(needle)))
-    .filter((player) => player.id && player.id !== userId)
+    .filter((player) => player.id && player.id !== userId && !excludeIds.includes(player.id))
     .slice(0, 8);
   const selectedIds = new Set(selected.map((player) => player.id));
   const full = selected.length >= max;
@@ -223,11 +232,124 @@ function PlayerInvitePicker({ selected, onChange, max, userId }) {
     <View>
       {selected.length ? <View style={styles.chipRow}>{selected.map((player) => <Pressable key={player.id} accessibilityRole="button" accessibilityLabel={`Remove ${player.name}`} onPress={() => toggle(player)} style={({ pressed }) => [styles.chip, pressed && styles.pressed]}><ProfilePhoto photo={player.avatar} name={player.name} size={20} /><Text numberOfLines={1} style={styles.chipText}>{player.name}</Text><AppIcon name="close" size={13} color={palette.ink40} /></Pressable>)}</View> : null}
       <View style={styles.search}><AppIcon name="search-outline" size={17} color={palette.ink40} /><TextInput value={query} onChangeText={setQuery} placeholder="Search players by name" placeholderTextColor={palette.ink40} style={styles.searchInput} />{searching ? <ActivityIndicator size="small" color={palette.teal} /> : null}</View>
-      <Text style={styles.helperText}>{full ? `This game is full at ${max + 1} players.` : needle.length >= 2 ? 'Search results' : following.length ? 'People you follow' : 'Search for any Peakle player'}</Text>
+      <Text style={styles.helperText}>{full ? (max ? `That fills the last ${max === 1 ? 'spot' : `${max} spots`}.` : 'No spots left to invite.') : needle.length >= 2 ? 'Search results' : following.length ? 'People you follow' : 'Search for any Peakle player'}</Text>
       {candidates.map((player) => {
         const active = selectedIds.has(player.id);
         return <Pressable key={player.id} accessibilityRole="button" accessibilityState={{ selected: active, disabled: full && !active }} disabled={full && !active} onPress={() => toggle(player)} style={({ pressed }) => [styles.rosterRow, styles.pickRow, active && styles.pickRowActive, full && !active && styles.disabled, pressed && styles.pressed]}><ProfilePhoto photo={player.avatar} name={player.name} size={32} /><View style={styles.flex}><Text numberOfLines={1} style={styles.rosterName}>{player.name}</Text>{player.area ? <Text numberOfLines={1} style={styles.helperInline}>{player.area}</Text> : null}</View><AppIcon name={active ? 'checkmark-circle' : 'add-circle-outline'} size={21} color={active ? palette.teal : palette.ink40} /></Pressable>;
       })}
+    </View>
+  );
+}
+
+// Mutual follows the player can message, with a quick filter.
+function ChatSharePicker({ selected, onChange }) {
+  const { styles, palette } = usePalette();
+  const [query, setQuery] = useState('');
+  const [connections, setConnections] = useState(null);
+  useEffect(() => { listPrivateConnections().then(setConnections).catch(() => setConnections([])); }, []);
+  const needle = query.trim().toLocaleLowerCase();
+  const candidates = (connections || []).filter((player) => !needle || player.name.toLocaleLowerCase().includes(needle)).slice(0, 12);
+  const selectedIds = new Set(selected.map((player) => player.id));
+  const full = selected.length >= MAX_CHAT_SHARES;
+  const toggle = (player) => onChange(selectedIds.has(player.id) ? selected.filter((item) => item.id !== player.id) : full ? selected : [...selected, player]);
+  if (connections === null) return <View style={styles.loadingBox}><ActivityIndicator color={palette.teal} /></View>;
+  if (!connections.length) return <Text style={styles.helperText}>Follow players who follow you back to send them activities in chat.</Text>;
+  return (
+    <View>
+      <View style={styles.search}><AppIcon name="search-outline" size={17} color={palette.ink40} /><TextInput value={query} onChangeText={setQuery} placeholder="Search your chats" placeholderTextColor={palette.ink40} style={styles.searchInput} /></View>
+      <Text style={styles.helperText}>{full ? `Send to up to ${MAX_CHAT_SHARES} players at a time.` : 'Friends you can message'}</Text>
+      {candidates.map((player) => {
+        const active = selectedIds.has(player.id);
+        return <Pressable key={player.id} accessibilityRole="checkbox" accessibilityState={{ checked: active, disabled: full && !active }} disabled={full && !active} onPress={() => toggle(player)} style={({ pressed }) => [styles.rosterRow, styles.pickRow, active && styles.pickRowActive, full && !active && styles.disabled, pressed && styles.pressed]}><ProfilePhoto photo={player.avatar} name={player.name} size={32} /><View style={styles.flex}><Text numberOfLines={1} style={styles.rosterName}>{player.name}</Text>{player.area ? <Text numberOfLines={1} style={styles.helperInline}>{player.area}</Text> : null}</View><AppIcon name={active ? 'checkmark-circle' : 'ellipse-outline'} size={21} color={active ? palette.teal : palette.ink40} /></Pressable>;
+      })}
+    </View>
+  );
+}
+
+// Host controls for an upcoming activity: public or private, invite more
+// players, share the link, or send it straight to chats. Players in a public
+// activity can share its link too.
+function ShareActivityPanel({ game, onChanged }) {
+  const { styles, palette } = usePalette();
+  const { user } = useAuth();
+  const [mode, setMode] = useState(null);
+  const [picked, setPicked] = useState([]);
+  const [busy, setBusy] = useState('');
+  const [notice, setNotice] = useState('');
+  const [error, setError] = useState('');
+  useEffect(() => { setMode(null); setPicked([]); setNotice(''); setError(''); }, [game.id]);
+  const rosterIds = game.roster.filter((player) => player.status !== 'declined').map((player) => player.id);
+  const openSpots = Math.max(0, game.capacity - rosterIds.length);
+  const run = async (name, action) => {
+    setBusy(name);
+    setError('');
+    setNotice('');
+    try {
+      await action();
+    } catch (actionError) {
+      setError(actionError.message || 'Something went wrong. Try again.');
+    } finally {
+      setBusy('');
+    }
+  };
+  const switchMode = (next) => { setMode((current) => (current === next ? null : next)); setPicked([]); setError(''); setNotice(''); };
+  const changeVisibility = (visibility) => {
+    if (visibility === game.visibility || busy) return;
+    run('visibility', async () => { await setScheduledGameVisibility(game.sourceId, visibility); onChanged(); });
+  };
+  const shareLink = () => run('link', async () => {
+    const url = await getScheduledGameShareUrl(game.sourceId);
+    const message = scheduledGameShareMessage(game, url);
+    if (Platform.OS === 'web') {
+      if (typeof navigator !== 'undefined' && navigator.share) {
+        await navigator.share({ title: game.title, text: message }).catch(() => {});
+      } else {
+        await copyText(url);
+        setNotice('Link copied. Anyone with it can ask to join.');
+      }
+      return;
+    }
+    await Share.share({ title: game.title, message });
+  });
+  const invite = () => run('invite', async () => {
+    const count = await inviteToScheduledGame(game.sourceId, picked);
+    setPicked([]);
+    setMode(null);
+    setNotice(count ? `Invited ${count} ${count === 1 ? 'player' : 'players'}.` : 'Those players are already invited.');
+    onChanged();
+  });
+  const sendToChats = () => run('chat', async () => {
+    const url = await getScheduledGameShareUrl(game.sourceId);
+    const { sent, failed } = await sendTextToPlayers(picked, scheduledGameShareMessage(game, url));
+    setPicked(failed.map((item) => item.player));
+    if (sent.length) setNotice(`Sent to ${sent.map((player) => player.name).join(', ')}.`);
+    if (failed.length) setError(`Not sent to ${failed.map((item) => `${item.player.name} (${item.message})`).join('; ')}`);
+    else setMode(null);
+  });
+
+  return (
+    <View style={styles.sharePanel}>
+      {game.isHost ? <>
+        <Text style={styles.groupLabel}>WHO CAN JOIN</Text>
+        <Segmented accessibilityLabel="Who can join" styles={styles} value={game.visibility} onChange={changeVisibility} options={VISIBILITY_OPTIONS} />
+        <Text style={styles.helperText}>{busy === 'visibility' ? 'Saving…' : VISIBILITY_HELP[game.visibility]}</Text>
+      </> : null}
+      <Text style={styles.groupLabel}>{game.isHost ? 'INVITE & SHARE' : 'SHARE'}</Text>
+      <View style={styles.shareRow}>
+        {game.isHost ? <Pressable accessibilityRole="button" accessibilityState={{ selected: mode === 'invite', disabled: !openSpots }} disabled={!openSpots} onPress={() => switchMode('invite')} style={({ pressed }) => [styles.shareButton, mode === 'invite' && styles.shareButtonActive, !openSpots && styles.disabled, pressed && styles.pressed]}><AppIcon name="person-add-outline" size={18} color={palette.teal} /><Text style={styles.shareButtonText}>Invite</Text></Pressable> : null}
+        <Pressable accessibilityRole="button" accessibilityState={{ selected: mode === 'chat' }} onPress={() => switchMode('chat')} style={({ pressed }) => [styles.shareButton, mode === 'chat' && styles.shareButtonActive, pressed && styles.pressed]}><AppIcon name="paper-plane-outline" size={18} color={palette.teal} /><Text style={styles.shareButtonText}>Send in chat</Text></Pressable>
+        <Pressable accessibilityRole="button" disabled={Boolean(busy)} onPress={shareLink} style={({ pressed }) => [styles.shareButton, pressed && styles.pressed]}>{busy === 'link' ? <ActivityIndicator size="small" color={palette.teal} /> : <AppIcon name={Platform.OS === 'web' ? 'link-outline' : 'share-outline'} size={18} color={palette.teal} />}<Text style={styles.shareButtonText}>{Platform.OS === 'web' ? 'Copy link' : 'Share link'}</Text></Pressable>
+      </View>
+      {mode === 'invite' ? <>
+        <PlayerInvitePicker selected={picked} onChange={setPicked} max={openSpots} userId={user?.id} excludeIds={rosterIds} />
+        <Pressable accessibilityRole="button" disabled={!picked.length || Boolean(busy)} onPress={invite} style={({ pressed }) => [styles.primary, !picked.length && styles.disabled, pressed && styles.pressed]}>{busy === 'invite' ? <ActivityIndicator color="#0E2321" /> : <Text style={styles.primaryText}>{picked.length ? `Invite ${picked.length} ${picked.length === 1 ? 'player' : 'players'}` : 'Pick players to invite'}</Text>}</Pressable>
+      </> : null}
+      {mode === 'chat' ? <>
+        <ChatSharePicker selected={picked} onChange={setPicked} />
+        <Pressable accessibilityRole="button" disabled={!picked.length || Boolean(busy)} onPress={sendToChats} style={({ pressed }) => [styles.primary, !picked.length && styles.disabled, pressed && styles.pressed]}>{busy === 'chat' ? <ActivityIndicator color="#0E2321" /> : <><AppIcon name="paper-plane" size={16} color="#0E2321" /><Text style={styles.primaryText}>{picked.length ? `Send to ${picked.length}` : 'Pick who to send to'}</Text></>}</Pressable>
+      </> : null}
+      {notice ? <Text accessibilityLiveRegion="polite" style={styles.shareNotice}>{notice}</Text> : null}
+      {error ? <View style={styles.errorBox}><AppIcon name="alert-circle-outline" size={17} color={palette.brick} /><Text style={styles.errorText}>{error}</Text></View> : null}
     </View>
   );
 }
@@ -413,9 +535,9 @@ function NewActivitySheet({ visible, initialDay, todayKey, onClose, onCreated })
     setSaving(true);
     setError('');
     try {
-      await createScheduledActivity({ kind, title: title.trim() || defaultTitle, startsAt: slot.startsAt, durationMinutes: duration, matchType, mode, visibility, capacity, court, notes, invitees });
+      const created = await createScheduledActivity({ kind, title: title.trim() || defaultTitle, startsAt: slot.startsAt, durationMinutes: duration, matchType, mode, visibility, capacity, court, notes, invitees });
       rememberCourt(user?.id, court);
-      onCreated(day, kind);
+      onCreated(day, kind, created?.id);
     } catch (createError) {
       setError(createError.message || 'The activity could not be scheduled. Try again.');
     } finally {
@@ -451,8 +573,8 @@ function NewActivitySheet({ visible, initialDay, todayKey, onClose, onCreated })
       <Segmented accessibilityLabel="Match mode" styles={styles} value={mode} onChange={setMode} options={[{ value: 'casual', label: 'Casual' }, { value: 'ranked', label: 'Ranked' }]} /></>
         : <><Text style={styles.groupLabel}>PLAYER LIMIT</Text><Segmented accessibilityLabel="Player limit" styles={styles} value={capacity} onChange={setCapacity} options={[4, 8, 12, 16].map((count) => ({ value: count, label: `${count} players` }))} /><Text style={styles.helperText}>Includes you and the players who join.</Text></>}
       <Text style={styles.groupLabel}>WHO CAN JOIN</Text>
-      <Segmented accessibilityLabel="Who can join" styles={styles} value={visibility} onChange={setVisibility} options={[{ value: 'invite', label: 'Invite only' }, { value: 'open', label: 'Open to anyone' }]} />
-      <Text style={styles.helperText}>{visibility === 'open' ? 'Anyone on Peakle can find this activity and take an open spot.' : 'Only the players you invite can see and join.'}</Text>
+      <Segmented accessibilityLabel="Who can join" styles={styles} value={visibility} onChange={setVisibility} options={VISIBILITY_OPTIONS} />
+      <Text style={styles.helperText}>{VISIBILITY_HELP[visibility]}</Text>
       <Text style={styles.groupLabel}>INVITE PLAYERS · {invitees.length}/{maxInvites}</Text>
       <PlayerInvitePicker selected={invitees} onChange={setInvitees} max={maxInvites} userId={user?.id} />
       <Text style={styles.groupLabel}>TITLE (OPTIONAL)</Text>
@@ -542,6 +664,23 @@ export default function ScheduleScreen({ navigation, route }) {
       setOpenEntryId(`game:${gameId}`);
     }
   }, [route?.params?.newGameToken, route?.params?.openGameToken, route?.params?.openViewToken]);
+
+  // A shared link (peakle://games/<code> or /games/<code>) puts the activity on
+  // this player's calendar as an invitation and opens it.
+  const shareCode = route?.params?.shareCode;
+  const shareKey = shareCode ? `${shareCode}:${route?.params?.shareToken || ''}` : null;
+  useEffect(() => {
+    if (!shareKey || handledTokens.current.share === shareKey) return;
+    handledTokens.current.share = shareKey;
+    openScheduledGameLink(shareCode)
+      .then(({ gameId, startsAt }) => {
+        setView('mine');
+        selectDay(dayKey(startsAt));
+        setOpenEntryId(`game:${gameId}`);
+        load();
+      })
+      .catch((linkError) => setError(linkError.message || 'This invitation could not be opened.'));
+  }, [shareKey]);
 
   const allEntries = useMemo(() => [...games, ...events], [games, events]);
   // My schedule is what you're in; Discover is only what you could still join.
@@ -666,7 +805,7 @@ export default function ScheduleScreen({ navigation, route }) {
         )}
       </ScrollView>
       {openEntry ? <EntrySheet entry={openEntry} onClose={() => setOpenEntryId(null)} onChanged={() => load()} onStart={startGame} onOpenEvent={openEvent} /> : null}
-      <NewActivitySheet visible={Boolean(newGameDay)} initialDay={newGameDay || todayKey} todayKey={todayKey} onClose={() => setNewGameDay(null)} onCreated={(key, kind) => { setNewGameDay(null); setView('mine'); setHiddenKinds((current) => current.filter((item) => item !== kind)); selectDay(key); if (key.startsWith(monthKey)) load(); }} />
+      <NewActivitySheet visible={Boolean(newGameDay)} initialDay={newGameDay || todayKey} todayKey={todayKey} onClose={() => setNewGameDay(null)} onCreated={(key, kind, id) => { setNewGameDay(null); setView('mine'); setHiddenKinds((current) => current.filter((item) => item !== kind)); selectDay(key); if (key.startsWith(monthKey)) load(); if (id) setOpenEntryId(`game:${id}`); }} />
     </SafeAreaView>
   );
 }
@@ -792,6 +931,12 @@ const lightStyles = StyleSheet.create({
   openSeat: { width: 32, height: 32, alignItems: 'center', justifyContent: 'center', borderRadius: 16, borderWidth: 1, borderStyle: 'dashed', borderColor: C.ink40 },
   pickRow: { marginTop: 6, paddingHorizontal: 10, borderRadius: 12, borderWidth: 1, borderColor: C.line, backgroundColor: C.surface },
   pickRowActive: { borderColor: C.teal, backgroundColor: C.tealWash },
+  sharePanel: { gap: 8 },
+  shareRow: { flexDirection: 'row', gap: 8 },
+  shareButton: { flex: 1, minHeight: 64, paddingHorizontal: 6, alignItems: 'center', justifyContent: 'center', gap: 5, borderRadius: 14, borderWidth: 1, borderColor: C.line, backgroundColor: C.surface },
+  shareButtonActive: { borderColor: C.teal, backgroundColor: C.tealWash },
+  shareButtonText: { color: C.teal, fontSize: 11, fontWeight: '900', textAlign: 'center' },
+  shareNotice: { color: C.teal, fontSize: 12, fontWeight: '800' },
   chipRow: { marginBottom: 8, flexDirection: 'row', flexWrap: 'wrap', gap: 6 },
   chip: { maxWidth: 200, minHeight: 32, paddingLeft: 5, paddingRight: 9, flexDirection: 'row', alignItems: 'center', gap: 6, borderRadius: 16, borderWidth: 1, borderColor: C.teal, backgroundColor: C.tealWash },
   chipText: { flexShrink: 1, color: C.ink, fontSize: 11, fontWeight: '800' },

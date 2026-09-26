@@ -377,7 +377,9 @@ function PublicActivityCard({ activity, userLocation, onPress, wide, single }) {
   const startsAt = new Date(activity.startsAt);
   const date = startsAt.toLocaleDateString('en-PH', { weekday: 'short', month: 'short', day: 'numeric', timeZone: 'Asia/Manila' });
   const time = startsAt.toLocaleTimeString('en-PH', { hour: 'numeric', minute: '2-digit', timeZone: 'Asia/Manila' });
-  const distance = formatDistance(distanceInKm(userLocation, activity.venue));
+  const distanceKm = distanceInKm(userLocation, activity.venue);
+  const hasDistance = distanceKm != null;
+  const distance = formatDistance(distanceKm);
   const fee = activity.feeAmount == null ? activity.typeLabel : Number(activity.feeAmount) > 0 ? `₱${Number(activity.feeAmount).toLocaleString('en-PH')}` : 'Free';
   const isWaitlist = activity.availability === 'WAITLIST';
   const typeIcon = activity.type === 'game' ? 'tennisball' : activity.type === 'open_play' ? 'people' : activity.type === 'competition' ? 'trophy' : 'school';
@@ -393,10 +395,10 @@ function PublicActivityCard({ activity, userLocation, onPress, wide, single }) {
         <Text style={[styles.homeOpenPlayFee, isDark && darkStyles.text]}>{fee}</Text>
       </View>
       <Text numberOfLines={1} style={[styles.homeOpenPlayName, isDark && darkStyles.text]}>{activity.title}</Text>
-      <Text numberOfLines={1} style={styles.homeOpenPlayVenue}>{activity.venue?.name || 'Peakle venue'} · {activity.venue?.area || distance}</Text>
+      <Text numberOfLines={1} style={styles.homeOpenPlayVenue}>{[activity.venue?.name || 'Peakle venue', activity.venue?.area || (hasDistance ? distance : null)].filter(Boolean).join(' · ')}</Text>
       <View style={styles.homeOpenPlayMeta}><Icon name="calendar-outline" size={14} color={isDark ? '#8FA39C' : C.ink40} /><Text numberOfLines={1} style={[styles.homeOpenPlayMetaText, isDark && darkStyles.mutedText]}>{date} · {time}</Text></View>
       <View style={styles.homeOpenPlayFoot}>
-        <Text style={[styles.homeOpenPlayDistance, isDark && darkStyles.mutedText]}>{distance}</Text>
+        <Text numberOfLines={1} style={[styles.homeOpenPlayDistance, isDark && darkStyles.mutedText]}>{hasDistance ? distance : activity.venue?.area || 'Location not set'}</Text>
         <View style={[styles.homeOpenPlaySpots, isWaitlist && styles.homeOpenPlayWaitlist]}><Text style={[styles.homeOpenPlaySpotsText, isWaitlist && styles.homeOpenPlayWaitlistText]}>{activity.availability}</Text></View>
       </View>
     </Pressable>
@@ -771,7 +773,7 @@ export default function HomeScreen() {
       typeLabel: game.kind === 'game' ? 'Open game' : game.typeLabel,
       isPlayerScheduled: true,
       title: game.title,
-      venue: { name: game.place, area: game.area },
+      venue: { name: game.place, area: game.area, latitude: game.latitude, longitude: game.longitude },
       startsAt: game.startsAt,
       endsAt: game.endsAt,
       feeAmount: 0,

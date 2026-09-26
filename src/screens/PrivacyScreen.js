@@ -14,8 +14,8 @@ const DARK = { ...DARK_CONTENT_COLORS, surface: '#17302D', tealWash: '#203B37', 
 const BALL_IMAGE = require('../../public/images/ball.png');
 
 const PROFILE_PRIVACY = [
-  { value: 'private', icon: 'lock-closed-outline', title: 'Only me', detail: 'Your ratings and competitive stats stay private.' },
-  { value: 'members', icon: 'people-outline', title: 'My teammates', detail: 'Only players who share a Peakle team with you can see them.', recommended: true },
+  { value: 'private', icon: 'lock-closed-outline', title: 'Only me', detail: 'Your ratings and competitive stats stay private, and you are hidden from leaderboards.' },
+  { value: 'members', icon: 'people-outline', title: 'My teammates', detail: 'Only teammates see your full stats. Your rating and record still appear on leaderboards.', recommended: true },
   { value: 'public', icon: 'globe-outline', title: 'All Peakle players', detail: 'Any signed-in player can see your ratings and competitive stats.' },
 ];
 

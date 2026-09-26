@@ -73,32 +73,24 @@ async function buildPreviewLeaderboard({ format, scope }) {
   };
 }
 
-function rankedRows(rows) {
-  let lastRating = null;
-  let lastRank = 0;
-  return (rows || []).map((row, index) => {
-    const rating = Number(row.rating);
-    if (rating !== lastRating) {
-      lastRating = rating;
-      lastRank = index + 1;
-    }
-    return {
-      id: row.user_id,
-      name: row.profile?.display_name || 'Peakle player',
-      avatar: row.profile?.avatar_url || null,
-      area: row.profile?.home_area || '',
-      rating,
-      verifiedMatches: Number(row.verified_matches || 0),
-      wins: Number(row.wins || 0),
-      losses: Number(row.losses || 0),
-      rank: lastRank,
-    };
-  });
+function standingRow(row) {
+  return {
+    id: row.user_id,
+    name: row.display_name || 'Peakle player',
+    avatar: row.avatar_url || null,
+    area: row.home_area || '',
+    rating: Number(row.rating),
+    verifiedMatches: Number(row.verified_matches || 0),
+    wins: Number(row.wins || 0),
+    losses: Number(row.losses || 0),
+    rank: Number(row.rank),
+  };
 }
 
 /**
- * Loads only genuine, verified competitive ratings. Visibility is enforced by
- * the player_ratings RLS policy, so private players never enter the standings.
+ * Loads only genuine, verified competitive ratings. Standings come from the
+ * get_player_leaderboard RPC, which lists everyone with verified matches
+ * except players whose profile is set to "Only me".
  */
 export async function loadLeaderboard({ format = 'doubles', scope = 'local' } = {}) {
   if (DEMO_MODE) return buildDemoLeaderboard({ format, scope });
@@ -109,68 +101,48 @@ export async function loadLeaderboard({ format = 'doubles', scope = 'local' } = 
   if (!auth.user) throw new Error('Sign in to view the leaderboard.');
 
   const userId = auth.user.id;
-  const [{ data: profile, error: profileError }, { data: ownRating, error: ownError }] = await Promise.all([
+  const [{ data: profile, error: profileError }, { data: board, error: boardError }] = await Promise.all([
     client.from('profiles').select('id,display_name,avatar_url,home_area').eq('id', userId).single(),
-    client.from('player_ratings').select('user_id,format,rating,verified_matches,wins,losses,updated_at').eq('user_id', userId).eq('format', format).maybeSingle(),
+    client.rpc('get_player_leaderboard', { p_format: format, p_scope: scope, p_limit: PAGE_SIZE }),
   ]);
   if (profileError) throw profileError;
-  if (ownError) throw ownError;
+  if (boardError) throw boardError;
 
-  const effectiveScope = scope === 'local' && profile?.home_area ? 'local' : 'global';
-  const ratingFields = effectiveScope === 'local'
-    ? 'user_id,format,rating,verified_matches,wins,losses,updated_at,profile:profiles!player_ratings_user_id_fkey!inner(id,display_name,avatar_url,home_area)'
-    : 'user_id,format,rating,verified_matches,wins,losses,updated_at,profile:profiles!player_ratings_user_id_fkey(id,display_name,avatar_url,home_area)';
-
-  let standingsQuery = client
-    .from('player_ratings')
-    .select(ratingFields)
-    .eq('format', format)
-    .gt('verified_matches', 0)
-    .order('rating', { ascending: false })
-    .order('verified_matches', { ascending: false })
-    .limit(PAGE_SIZE);
-  if (effectiveScope === 'local') standingsQuery = standingsQuery.eq('profile.home_area', profile.home_area);
-
-  const { data: rows, error: standingsError } = await standingsQuery;
-  if (standingsError) throw standingsError;
-  const standings = rankedRows(rows);
-
-  let userRank = null;
-  if (ownRating?.verified_matches > 0) {
-    let higherQuery = client
-      .from('player_ratings')
-      .select(
-        effectiveScope === 'local'
-          ? 'user_id,profile:profiles!player_ratings_user_id_fkey!inner(home_area)'
-          : 'user_id',
-        { count: 'exact', head: true },
-      )
-      .eq('format', format)
-      .gt('verified_matches', 0)
-      .gt('rating', ownRating.rating);
-    if (effectiveScope === 'local') higherQuery = higherQuery.eq('profile.home_area', profile.home_area);
-    const { count, error: rankError } = await higherQuery;
-    if (rankError) throw rankError;
-    userRank = Number(count || 0) + 1;
-  }
-
+  const own = board?.own || null;
   return {
     format,
-    scope: effectiveScope,
-    area: effectiveScope === 'local' ? profile.home_area : '',
+    scope: board?.scope === 'local' ? 'local' : 'global',
+    area: board?.area || '',
     homeArea: profile?.home_area || '',
-    standings,
+    standings: (board?.standings || []).map(standingRow),
     user: {
       id: userId,
       name: profile?.display_name || 'Player',
       avatar: profile?.avatar_url || null,
-      rating: ownRating ? Number(ownRating.rating) : null,
-      verifiedMatches: Number(ownRating?.verified_matches || 0),
-      wins: Number(ownRating?.wins || 0),
-      losses: Number(ownRating?.losses || 0),
-      rank: userRank,
+      rating: own?.rating == null ? null : Number(own.rating),
+      verifiedMatches: Number(own?.verified_matches || 0),
+      wins: Number(own?.wins || 0),
+      losses: Number(own?.losses || 0),
+      rank: own?.rank == null ? null : Number(own.rank),
+      recordedMatches: Number(own?.recorded_matches || 0),
+      pendingMatches: Number(own?.pending_matches || 0),
     },
   };
+}
+
+const plural = (count, word) => `${count} ${word}${count === 1 ? '' : 'es'}`;
+
+/**
+ * Explains why an unranked player is not on the board. Saved matches build the
+ * profile record, but only Ranked matches against a registered opponent that
+ * every registered player confirmed move the leaderboard rating.
+ */
+export function unrankedHint(player) {
+  const pending = Number(player?.pendingMatches || 0);
+  const recorded = Number(player?.recordedMatches || 0);
+  if (pending > 0) return `${plural(pending, 'ranked match')} waiting for the other players to confirm the score. You'll be ranked once they do.`;
+  if (recorded > 0) return `${plural(recorded, 'recorded match')} · 0 verified. Only Ranked matches against a registered player count, once they confirm the score.`;
+  return 'Play a Ranked match against a registered player. It counts once they confirm the score.';
 }
 
 const PREVIEW_TEAMS = [

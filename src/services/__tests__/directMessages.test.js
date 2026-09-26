@@ -1062,14 +1062,22 @@ describe('sendDirectMediaMessage', () => {
   const uploaded = { path: 'c1/me/v.m4a', type: 'audio', mime: 'audio/mp4', size: 2048, name: 'voice-message.m4a' };
 
   it('uploads into the conversation folder, then sends with the recorded duration', async () => {
-    uploadChatMedia.mockResolvedValueOnce(uploaded);
+    const onProgress = jest.fn();
+    uploadChatMedia.mockImplementationOnce(async (...args) => {
+      args[5].onProgress(1);
+      return uploaded;
+    });
     const client = makeClient({ authUser: { id: 'me' } });
-    client.rpc = jest.fn(async () => ({ data: 'm9', error: null }));
+    client.rpc = jest.fn(async () => {
+      expect(onProgress).toHaveBeenLastCalledWith(0.95);
+      return { data: 'm9', error: null };
+    });
     client.storage = { from: jest.fn(() => ({ createSignedUrls: jest.fn(async () => ({ data: [{ signedUrl: 'https://signed/v' }], error: null })) })) };
     client.from.mockReturnValueOnce(makeQueryBuilder({ data: { id: 'm9', sender_id: 'me', body: null, media_path: uploaded.path, media_type: 'audio', media_duration_ms: 4200, created_at: '2026-09-26T10:00:00Z' }, error: null }));
     requireSupabase.mockReturnValue(client);
 
-    const message = await sendDirectMediaMessage('c1', { uri: 'file:///v.m4a', duration: 4200.4 }, 'audio');
+    const message = await sendDirectMediaMessage('c1', { uri: 'file:///v.m4a', duration: 4200.4 }, 'audio', { onProgress });
+    expect(onProgress).toHaveBeenLastCalledWith(1);
     const [bucket, folderFor, , type] = uploadChatMedia.mock.calls[0];
     expect(bucket).toBe('direct-message-media');
     expect(folderFor('me')).toBe('c1/me');

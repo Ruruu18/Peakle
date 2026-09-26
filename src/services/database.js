@@ -2,7 +2,7 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Platform } from 'react-native';
 import * as Crypto from 'expo-crypto';
 import * as ImageManipulator from 'expo-image-manipulator';
-import { requireSupabase } from '../lib/supabase';
+import { requireSupabase, SUPABASE_ANON_KEY, SUPABASE_URL } from '../lib/supabase';
 import { cleanCourtText, courtLabel } from './playCourts';
 import { announcePlayerStatusChange } from './playerStatus';
 import { DEMO_MODE } from '../config/demoMode';
@@ -1132,7 +1132,38 @@ export async function uploadTeamChatMedia(teamId, asset, requestedType) {
 // (2 MB max), videos keep their format (15 MB max), and voice recordings are
 // uploaded as recorded (10 MB max; private chats only). folderFor(userId) is the
 // storage folder the bucket's policies expect.
-export async function uploadChatMedia(bucket, folderFor, asset, requestedType, namePrefix = 'Chat') {
+// supabase-js storage uploads report no progress, so uploads that show a
+// progress ring go through the Storage REST endpoint with XMLHttpRequest.
+function uploadStorageObjectWithProgress({ bucket, path, file, contentType, accessToken, onProgress }) {
+  return new Promise((resolve, reject) => {
+    const request = new XMLHttpRequest();
+    const encodedPath = path.split('/').map(encodeURIComponent).join('/');
+    request.open('POST', `${SUPABASE_URL}/storage/v1/object/${bucket}/${encodedPath}`);
+    request.timeout = 5 * 60 * 1000;
+    request.setRequestHeader('Authorization', `Bearer ${accessToken}`);
+    request.setRequestHeader('apikey', SUPABASE_ANON_KEY);
+    request.setRequestHeader('Content-Type', contentType);
+    request.setRequestHeader('x-upsert', 'false');
+    request.upload.onprogress = (event) => {
+      if (event.lengthComputable && event.total > 0) onProgress(event.loaded / event.total);
+    };
+    request.onload = () => {
+      if (request.status >= 200 && request.status < 300) { resolve(); return; }
+      let message = 'The upload failed. Check your connection and try again.';
+      try { message = JSON.parse(request.responseText)?.message || message; } catch (_) { /* keep default */ }
+      reject(new Error(message));
+    };
+    request.onerror = () => reject(new Error('The upload failed. Check your connection and try again.'));
+    request.ontimeout = () => reject(new Error('The upload took too long. Check your connection and try again.'));
+    request.onabort = () => reject(new Error('The upload was interrupted. Please try again.'));
+    request.send(file);
+  });
+}
+
+// onProgress receives 0–1: preparing the file, uploading it, then signing it.
+export async function uploadChatMedia(bucket, folderFor, asset, requestedType, namePrefix = 'Chat', { onProgress } = {}) {
+  const report = (value) => onProgress?.(Math.max(0, Math.min(1, value)));
+  report(0);
   const client = requireSupabase();
   const { data: auth } = await client.auth.getUser();
   if (!auth.user) throw new Error('Sign in before uploading media.');
@@ -1168,6 +1199,7 @@ export async function uploadChatMedia(bucket, folderFor, asset, requestedType, n
     else mime = 'audio/mp4';
   }
 
+  report(0.05);
   const response = await fetch(uploadUri);
   const file = await response.arrayBuffer();
   const maxBytes = { video: 15, audio: 10 }[type] * 1024 * 1024 || 2 * 1024 * 1024;
@@ -1175,13 +1207,21 @@ export async function uploadChatMedia(bucket, folderFor, asset, requestedType, n
 
   const extension = mediaExtension(mime, asset.fileName);
   const path = `${folderFor(auth.user.id)}/${Crypto.randomUUID()}.${extension}`;
-  const { error } = await client.storage.from(bucket).upload(path, file, { contentType: mime, upsert: false });
-  if (error) throw error;
+  report(0.1);
+  const accessToken = onProgress ? (await client.auth.getSession()).data.session?.access_token : null;
+  if (accessToken) {
+    await uploadStorageObjectWithProgress({ bucket, path, file, contentType: mime, accessToken, onProgress: (sent) => report(0.1 + sent * 0.85) });
+  } else {
+    const { error } = await client.storage.from(bucket).upload(path, file, { contentType: mime, upsert: false });
+    if (error) throw error;
+  }
+  report(0.95);
   const { data: signed, error: signedError } = await client.storage.from(bucket).createSignedUrl(path, 3600);
   if (signedError) {
     await client.storage.from(bucket).remove([path]).catch(() => {});
     throw signedError;
   }
+  report(1);
   return { path, url: signed.signedUrl, type, mime, size: file.byteLength, name: asset.fileName || `${namePrefix} ${type}.${extension}` };
 }
 

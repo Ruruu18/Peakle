@@ -1,8 +1,10 @@
+import { Platform } from 'react-native';
 import { requireSupabase } from '../lib/supabase';
 import { DEMO_MODE } from '../config/demoMode';
 import { SCHEDULE_ACTIVITY_TYPES } from '../config/scheduleTypes';
 import { listDiscoverablePlayerActivities } from './playerActivities';
 import { cleanCourtText, courtLabel } from './playCourts';
+import { geocode } from '../utils/geocode';
 
 // Everything the Schedule tab shows is normalized to one calendar entry shape:
 //   { id, kind, sourceId, title, startsAt, endsAt, place, area, status, ... }
@@ -15,6 +17,12 @@ export const MIN_GAME_MINUTES = 30;
 export const MAX_GAME_MINUTES = 6 * 60;
 export const START_STEP_MINUTES = 5;
 const GAME_FIELDS = 'id,host_id,activity_kind,title,notes,starts_at,ends_at,match_type,mode,visibility,capacity,court_label,court_area,venue_id,court_id,status';
+// Added by 202609260013; read separately so older databases keep working.
+const COORDINATE_FIELDS = ',latitude,longitude';
+const GEOCODE_TIMEOUT_MS = 5000;
+
+const coordinateOrNull = (value) => (value == null || value === '' || !Number.isFinite(Number(value)) ? null : Number(value));
+const schemaMissing = (error) => ['42703', 'PGRST204', 'PGRST202'].includes(error?.code);
 const ROSTER_FIELDS = 'user_id,status,profile:profiles!scheduled_game_players_user_id_fkey(id,display_name,avatar_url)';
 
 function mapGame(row, userId) {
@@ -38,6 +46,8 @@ function mapGame(row, userId) {
     endsAt: row.ends_at,
     place: row.court_label,
     area: row.court_area || '',
+    latitude: coordinateOrNull(row.latitude),
+    longitude: coordinateOrNull(row.longitude),
     matchType: row.match_type,
     mode: row.mode,
     visibility: row.visibility,
@@ -84,13 +94,15 @@ export async function listScheduledGames({ from, to }) {
   if (DEMO_MODE) return [];
   const client = requireSupabase();
   const userId = await currentUserId(client);
-  const { data, error } = await client
+  const query = (fields) => client
     .from('scheduled_games')
-    .select(`${GAME_FIELDS},scheduled_game_players(${ROSTER_FIELDS})`)
+    .select(`${fields},scheduled_game_players(${ROSTER_FIELDS})`)
     .gte('ends_at', from)
     .lt('starts_at', to)
     .order('starts_at')
     .limit(200);
+  let { data, error } = await query(GAME_FIELDS + COORDINATE_FIELDS);
+  if (schemaMissing(error)) ({ data, error } = await query(GAME_FIELDS));
   if (error) throw error;
   return (data || [])
     .map((row) => mapGame(row, userId))
@@ -127,7 +139,8 @@ export async function createScheduledActivity({ kind = 'game', title, startsAt, 
   const end = new Date(start.getTime() + durationMinutes * 60000);
   const capacity = kind === 'game' ? (matchType === 'singles' ? 2 : 4) : requestedCapacity;
   if (!Number.isInteger(capacity) || capacity < 2 || capacity > 16) throw new Error('Choose a player limit from 2 to 16.');
-  const { data, error } = await requireSupabase().rpc('create_scheduled_activity', {
+  const client = requireSupabase();
+  const params = {
     p_activity_kind: kind,
     p_title: cleanCourtText(title) || (kind === 'game' ? `${matchType === 'singles' ? 'Singles' : 'Doubles'} game` : SCHEDULE_ACTIVITY_TYPES[kind].name),
     p_starts_at: start.toISOString(),
@@ -142,9 +155,34 @@ export async function createScheduledActivity({ kind = 'game', title, startsAt, 
     p_court_id: court?.venueId ? court.courtId || null : null,
     p_notes: notes.trim() || null,
     p_invitee_ids: invitees.map((player) => player.id).filter(Boolean),
-  });
+  };
+  // Listed courts get their venue's pin on the server; a typed-in court is
+  // looked up on the map so others can see how far away it is.
+  const position = court?.venueId ? null : await courtCoordinates(court);
+  let { data, error } = await client.rpc('create_scheduled_activity', position ? { ...params, p_latitude: position.latitude, p_longitude: position.longitude } : params);
+  if (position && schemaMissing(error)) ({ data, error } = await client.rpc('create_scheduled_activity', params));
   if (error) throw error;
   return Array.isArray(data) ? data[0] : data;
+}
+
+// Best effort: a court that cannot be found is still scheduled, just without
+// a distance. Courts picked with coordinates (e.g. "use my location") keep them.
+async function courtCoordinates(court) {
+  const latitude = coordinateOrNull(court?.latitude);
+  const longitude = coordinateOrNull(court?.longitude);
+  if (latitude != null && longitude != null) return { latitude, longitude };
+  const query = [court?.name, court?.area].map(cleanCourtText).filter(Boolean).join(', ');
+  if (!query) return null;
+  try {
+    const results = await Promise.race([
+      geocode(query),
+      new Promise((resolve) => { setTimeout(() => resolve([]), GEOCODE_TIMEOUT_MS); }),
+    ]);
+    const [first] = results || [];
+    return first && Number.isFinite(first.latitude) && Number.isFinite(first.longitude) ? { latitude: first.latitude, longitude: first.longitude } : null;
+  } catch (_) {
+    return null;
+  }
 }
 
 export function createScheduledGame(options) {
@@ -161,6 +199,60 @@ export async function respondToScheduledGame(gameId, going) {
 export async function cancelScheduledGame(gameId) {
   if (DEMO_MODE) throw new Error(DEMO_WRITE_ERROR);
   const { error } = await requireSupabase().rpc('cancel_scheduled_game', { p_game_id: gameId });
+  if (error) throw error;
+}
+
+// ---------- Sharing: links, extra invites and sending to chats ----------
+
+const SHARE_UNAVAILABLE = 'Sharing activities is not available yet. Please try again after the next update.';
+const SHARE_CODE_PATTERN = /\/games\/([a-z0-9]{10})\b/i;
+// Web links open the web app; the native app handles peakle:// and, once set,
+// EXPO_PUBLIC_APP_URL so links shared from a phone also work in a browser.
+const APP_URL = (process.env.EXPO_PUBLIC_APP_URL || '').replace(/\/+$/, '');
+
+export function scheduledGameShareUrl(code) {
+  const origin = Platform.OS === 'web' && typeof window !== 'undefined' ? window.location.origin : APP_URL;
+  return origin ? `${origin}/games/${code}` : `peakle://games/${code}`;
+}
+
+export function shareCodeFromText(text) {
+  return String(text || '').match(SHARE_CODE_PATTERN)?.[1]?.toLowerCase() || null;
+}
+
+export function scheduledGameShareMessage(game, url) {
+  const when = `${formatDayLabel(dayKey(game.startsAt), { weekday: 'short', month: 'short', day: 'numeric' })}, ${formatTime(game.startsAt)}`;
+  return `Join me for ${game.title} on Peakle\n${when} · ${[game.place, game.area].filter(Boolean).join(', ')}\n${url}`;
+}
+
+export async function getScheduledGameShareUrl(gameId) {
+  if (DEMO_MODE) throw new Error(DEMO_WRITE_ERROR);
+  const { data, error } = await requireSupabase().rpc('get_scheduled_game_share_code', { p_game_id: gameId });
+  if (schemaMissing(error)) throw new Error(SHARE_UNAVAILABLE);
+  if (error) throw error;
+  return scheduledGameShareUrl(data);
+}
+
+// Adds the player to the activity as invited; returns { gameId, startsAt }.
+export async function openScheduledGameLink(code) {
+  if (DEMO_MODE) throw new Error(DEMO_WRITE_ERROR);
+  const { data, error } = await requireSupabase().rpc('open_scheduled_game_link', { p_code: code });
+  if (schemaMissing(error)) throw new Error(SHARE_UNAVAILABLE);
+  if (error) throw error;
+  return data;
+}
+
+export async function inviteToScheduledGame(gameId, players) {
+  if (DEMO_MODE) throw new Error(DEMO_WRITE_ERROR);
+  const { data, error } = await requireSupabase().rpc('invite_scheduled_game_players', { p_game_id: gameId, p_player_ids: players.map((player) => player.id).filter(Boolean) });
+  if (schemaMissing(error)) throw new Error(SHARE_UNAVAILABLE);
+  if (error) throw error;
+  return data || 0;
+}
+
+export async function setScheduledGameVisibility(gameId, visibility) {
+  if (DEMO_MODE) throw new Error(DEMO_WRITE_ERROR);
+  const { error } = await requireSupabase().rpc('set_scheduled_game_visibility', { p_game_id: gameId, p_visibility: visibility });
+  if (schemaMissing(error)) throw new Error(SHARE_UNAVAILABLE);
   if (error) throw error;
 }
 

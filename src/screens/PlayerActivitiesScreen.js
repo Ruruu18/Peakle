@@ -25,7 +25,8 @@ function ActivityRow({ activity, userLocation, colors, onPress }) {
   const startsAt = new Date(activity.startsAt);
   const date = startsAt.toLocaleDateString('en-PH', { weekday: 'short', month: 'short', day: 'numeric', timeZone: 'Asia/Manila' });
   const time = startsAt.toLocaleTimeString('en-PH', { hour: 'numeric', minute: '2-digit', timeZone: 'Asia/Manila' });
-  const distance = formatDistance(distanceInKm(userLocation, activity.venue));
+  const distanceKm = distanceInKm(userLocation, activity.venue);
+  const distance = distanceKm == null ? activity.venue?.area || 'Location not set' : formatDistance(distanceKm);
   const icon = activity.type === 'open_play' ? 'people' : activity.type === 'competition' ? 'trophy' : 'school';
   const fee = activity.feeAmount == null ? null : Number(activity.feeAmount) > 0 ? `₱${Number(activity.feeAmount).toLocaleString('en-PH')}` : 'Free';
   return (

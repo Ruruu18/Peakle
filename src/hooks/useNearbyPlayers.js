@@ -6,6 +6,7 @@ import { locationErrorMessage, useUserLocation } from '../context/LocationContex
 import { supabase } from '../lib/supabase';
 import {
   cancelMatchInvite,
+  getActiveNearbyLiveMatchId,
   getNearbyLiveMatch,
   handoffNearbyLiveScorer,
   leaveMatchInvite,
@@ -46,6 +47,7 @@ export default function useNearbyPlayers(radiusKm = 25) {
   const [joinedInvite, setJoinedInvite] = useState(null);
   const [removedInvite, setRemovedInvite] = useState(null);
   const [sharedLiveMatch, setSharedLiveMatch] = useState(null);
+  const [trackedLiveMatchId, setTrackedLiveMatchId] = useState(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
   const visibleRef = useRef(false);
@@ -96,9 +98,29 @@ export default function useNearbyPlayers(radiusKm = 25) {
     }
   }, [radiusKm]);
 
-  const liveMatchId = joinedInvite?.live_match_id
+  const inviteLiveMatchId = joinedInvite?.live_match_id
     || outgoingInvites.find((invite) => invite.status === 'accepted' && invite.live_match_id)?.live_match_id
     || null;
+  // Invites drop out of the history window long before a match ends. Keep
+  // following a session once it is known so a player who backgrounded the
+  // app still receives the other player's "match ended" update.
+  const liveMatchId = inviteLiveMatchId || trackedLiveMatchId;
+
+  useEffect(() => {
+    if (inviteLiveMatchId) setTrackedLiveMatchId(inviteLiveMatchId);
+  }, [inviteLiveMatchId]);
+
+  const recoverActiveLiveMatch = useCallback(async () => {
+    if (!user?.id || DEMO_MODE) return;
+    try {
+      const activeId = await getActiveNearbyLiveMatchId();
+      if (activeId) setTrackedLiveMatchId(activeId);
+    } catch {
+      // Recovery is best effort; invite-linked sessions still resolve normally.
+    }
+  }, [user?.id]);
+
+  useEffect(() => { recoverActiveLiveMatch(); }, [recoverActiveLiveMatch]);
 
   const refreshLiveMatch = useCallback(async (matchId = liveMatchId) => {
     if (!matchId) {
@@ -216,11 +238,12 @@ export default function useNearbyPlayers(radiusKm = 25) {
       if (nextState === 'active') {
         refreshInvites();
         if (liveMatchId) refreshLiveMatch(liveMatchId);
+        else recoverActiveLiveMatch();
         publishFreshPresence().catch(() => {});
       }
     });
     return () => listener.remove();
-  }, [liveMatchId, publishFreshPresence, refreshInvites, refreshLiveMatch]);
+  }, [liveMatchId, publishFreshPresence, recoverActiveLiveMatch, refreshInvites, refreshLiveMatch]);
 
   useEffect(() => {
     if (!supabase || !user?.id) return undefined;
@@ -340,6 +363,7 @@ export default function useNearbyPlayers(radiusKm = 25) {
       const created = await startNearbyLiveMatch({ setupId, configuration, initialState, scorerId });
       await refreshInvites();
       const session = await getNearbyLiveMatch(created.id);
+      setTrackedLiveMatchId(created.id);
       setSharedLiveMatch(session || created);
       return session || created;
     } catch (nextError) {

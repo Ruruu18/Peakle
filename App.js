@@ -47,10 +47,10 @@ const linking = {
       CompetitionDivision: 'competitions/:competitionId/divisions/:divisionId',
       // While booking is paused, old /explore links land on Schedule instead.
       ...(COURT_BOOKING_ENABLED
-        ? { Book: { path: 'explore', alias: ['booking/:paymentBookingId/payment-result'] }, Schedule: 'schedule' }
-        : { Schedule: { path: 'schedule', alias: ['explore'] } }),
+        ? { Book: { path: 'explore', alias: ['booking/:paymentBookingId/payment-result'] }, Schedule: { path: 'schedule', alias: ['games/:shareCode'] } }
+        : { Schedule: { path: 'schedule', alias: ['explore', 'games/:shareCode'] } }),
       Play: { path: 'play', alias: ['open-play/:openPlayCode'] },
-    } : { Book: 'booking/:paymentBookingId/payment-result', Play: 'open-play/:openPlayCode' }),
+    } : { Book: 'booking/:paymentBookingId/payment-result', Play: 'open-play/:openPlayCode', Schedule: 'games/:shareCode' }),
     ...(Platform.OS !== 'web' ? { Inbox: 'messages', DirectChat: 'messages/:conversationId' } : {}),
   } },
 };

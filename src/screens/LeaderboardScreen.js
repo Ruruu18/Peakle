@@ -15,9 +15,11 @@ import ScrollView from '../components/FocusResetScrollView';
 import ProfilePhoto from '../components/ProfilePhoto';
 import LeaderboardPodium from '../components/LeaderboardPodium';
 import useResponsiveWidth from '../hooks/useResponsiveWidth';
+import useMatchVerificationSync from '../hooks/useMatchVerificationSync';
 import { webLayout } from '../utils/webLayout';
 import { useTheme } from '../context/ThemeContext';
-import { loadLeaderboard, loadTeamLeaderboard } from '../services/leaderboard';
+import { useAuth } from '../context/AuthContext';
+import { loadLeaderboard, loadTeamLeaderboard, unrankedHint } from '../services/leaderboard';
 
 const LIGHT = {
   ink: '#0E2321', paper: '#F3F5EF', surface: '#FFFFFF', optic: '#D6E94A',
@@ -107,7 +109,7 @@ function RankHero({ data, format, areaLabel, palette }) {
           <Text style={[styles.heroStatLabel, { color: palette.ink40 }]}>Verified</Text>
         </View>
       </View>
-      {!ranked ? <Text style={[styles.heroHint, { color: palette.ink40 }]}>Complete a verified match to earn your place.</Text> : null}
+      {!ranked ? <Text style={[styles.heroHint, { color: palette.ink40 }]}>{unrankedHint(player)}</Text> : null}
     </View>
   );
 }
@@ -237,6 +239,7 @@ export default function LeaderboardScreen({ navigation, route }) {
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState('');
   const [request, setRequest] = useState(0);
+  const { user } = useAuth();
 
   useEffect(() => {
     let active = true;
@@ -257,6 +260,8 @@ export default function LeaderboardScreen({ navigation, route }) {
   }, [board, format, request, scope]);
 
   const refresh = useCallback(() => setRequest((value) => value + 1), []);
+  // Confirmed and verified results update the standings without a manual refresh.
+  useMatchVerificationSync(user?.id, refresh);
   const changeScope = useCallback((nextScope) => {
     if (nextScope === scope) return;
     setLoading(true);

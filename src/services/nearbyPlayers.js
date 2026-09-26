@@ -4,6 +4,7 @@ import { DEMO_NEARBY_PLAYERS } from '../config/demoData';
 
 export const INVITE_WINDOW_MS = 60 * 1000;
 const JOINED_INVITE_WINDOW_MS = 15 * 60 * 1000;
+const ACTIVE_LIVE_MATCH_WINDOW_MS = 90 * 60 * 1000;
 
 function initials(name) {
   return (name || 'P').split(/\s+/).map((part) => part[0]).join('').slice(0, 2).toUpperCase();
@@ -217,6 +218,23 @@ export async function getNearbyLiveMatch(matchId) {
     .maybeSingle();
   if (error) throw error;
   return data;
+}
+
+// Matches often outlast the invite history window, so recover the caller's
+// in-progress session directly from the live match table (RLS limits rows to
+// sessions the caller hosts or belongs to).
+export async function getActiveNearbyLiveMatchId() {
+  if (DEMO_MODE) return null;
+  const since = new Date(Date.now() - ACTIVE_LIVE_MATCH_WINDOW_MS).toISOString();
+  const { data, error } = await requireSupabase().from('nearby_live_matches')
+    .select('id')
+    .in('status', ['live', 'paused'])
+    .gte('updated_at', since)
+    .order('updated_at', { ascending: false })
+    .limit(1)
+    .maybeSingle();
+  if (error) throw error;
+  return data?.id || null;
 }
 
 export async function updateNearbyLiveMatch(matchId, expectedRevision, state, status = null) {

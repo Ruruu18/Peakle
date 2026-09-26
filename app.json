@@ -99,7 +99,7 @@
         "expo-media-library",
         {
           "photosPermission": "Allow Peakle to access your photos.",
-          "savePhotosPermission": "Allow Peakle to save your completed match cards to Photos.",
+          "savePhotosPermission": "Allow Peakle to save chat photos, videos, and completed match cards to Photos.",
           "granularPermissions": []
         }
       ],

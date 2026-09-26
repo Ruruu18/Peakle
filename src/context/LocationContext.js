@@ -1,9 +1,9 @@
 import React, { createContext, useCallback, useContext, useEffect, useMemo, useState } from 'react';
 import { Platform } from 'react-native';
-import * as Location from 'expo-location';
 import { useAuth } from './AuthContext';
 import { knownLocationCoordinates } from '../data/phLocations';
 import { geocode, reverseGeocode } from '../utils/geocode';
+import { getDevicePosition } from '../utils/devicePosition';
 
 const DEFAULT_LOCATION = {
   latitude: null,
@@ -13,12 +13,6 @@ const DEFAULT_LOCATION = {
 };
 
 const LocationContext = createContext(null);
-
-function locationAccessError(code, message) {
-  const error = new Error(message);
-  error.code = code;
-  return error;
-}
 
 export function locationErrorMessage(error) {
   if (Platform.OS === 'web') {
@@ -122,23 +116,7 @@ export function LocationProvider({ children }) {
   }, []);
 
   const getCurrentCoordinates = useCallback(async ({ requestPermission = false } = {}) => {
-    const servicesEnabled = await Location.hasServicesEnabledAsync();
-    if (!servicesEnabled) {
-      throw locationAccessError('LOCATION_SERVICES_DISABLED', 'Device location services are disabled.');
-    }
-
-    let permission = await Location.getForegroundPermissionsAsync();
-    if (permission.status !== 'granted' && requestPermission) {
-      permission = await Location.requestForegroundPermissionsAsync();
-    }
-    if (permission.status !== 'granted') {
-      throw locationAccessError('LOCATION_PERMISSION_DENIED', 'Foreground location permission was not granted.');
-    }
-
-    const result = await Location.getCurrentPositionAsync({
-      accuracy: Location.Accuracy.Highest,
-      mayShowUserSettingsDialog: true,
-    });
+    const result = await getDevicePosition({ requestPermission });
     return {
       latitude: result.coords.latitude,
       longitude: result.coords.longitude,

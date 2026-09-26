@@ -12,6 +12,7 @@ import {
   removeMatchInvitee,
   startNearbyLiveMatch,
   getNearbyLiveMatch,
+  getActiveNearbyLiveMatchId,
   updateNearbyLiveMatch,
   handoffNearbyLiveScorer,
   cancelMatchInvite,
@@ -461,6 +462,32 @@ describe('startNearbyLiveMatch', () => {
   it('propagates an error', async () => {
     requireSupabase.mockReturnValue({ rpc: jest.fn(async () => ({ data: null, error: new Error('failed') })) });
     await expect(startNearbyLiveMatch({})).rejects.toThrow('failed');
+  });
+});
+
+describe('getActiveNearbyLiveMatchId', () => {
+  function mockQuery(result) {
+    const chain = {};
+    ['select', 'in', 'gte', 'order', 'limit'].forEach((name) => { chain[name] = jest.fn(() => chain); });
+    chain.maybeSingle = jest.fn(async () => result);
+    const from = jest.fn(() => chain);
+    requireSupabase.mockReturnValue({ from });
+    return { from, chain };
+  }
+
+  it('returns the most recently updated live or paused session regardless of invite age', async () => {
+    const { from, chain } = mockQuery({ data: { id: 'm9' }, error: null });
+    expect(await getActiveNearbyLiveMatchId()).toBe('m9');
+    expect(from).toHaveBeenCalledWith('nearby_live_matches');
+    expect(chain.in).toHaveBeenCalledWith('status', ['live', 'paused']);
+    expect(chain.order).toHaveBeenCalledWith('updated_at', { ascending: false });
+  });
+
+  it('returns null when there is no active session and propagates errors', async () => {
+    mockQuery({ data: null, error: null });
+    expect(await getActiveNearbyLiveMatchId()).toBeNull();
+    mockQuery({ data: null, error: new Error('boom') });
+    await expect(getActiveNearbyLiveMatchId()).rejects.toThrow('boom');
   });
 });
 

@@ -1,6 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Animated, Easing, Modal, PanResponder, Platform, Pressable, StyleSheet, Text, View, useWindowDimensions } from 'react-native';
+import { Animated, Easing, Modal, PanResponder, Platform, Pressable, ScrollView, StyleSheet, Text, View, useWindowDimensions } from 'react-native';
 import Icon from './AppIcon';
+import { isTouchHeld } from '../utils/webLongPress';
 
 const REACTION_SIZE = 48;
 
@@ -25,6 +26,7 @@ export default function MessageFocusModal({ visible, mine, dark, reactions, sele
   const appear = useRef(new Animated.Value(0)).current;
   const [hovered, setHovered] = useState(-1);
   const hoveredRef = useRef(-1);
+  const pillRef = useRef(null);
 
   useEffect(() => {
     if (!visible) {
@@ -59,6 +61,50 @@ export default function MessageFocusModal({ visible, mine, dark, reactions, sele
     },
   }), [chooseAt, onClose, onReact, reactions]);
 
+  // Web: the finger that long-pressed is still down when the menu opens, but the
+  // pill's PanResponder only sees new touches. Follow that finger on the window
+  // (blocking the page scroll) so sliding across the pill still picks a reaction.
+  useEffect(() => {
+    if (Platform.OS !== 'web' || !visible || !isTouchHeld()) return undefined;
+    const hoverAt = (touch) => {
+      const rect = pillRef.current?.getBoundingClientRect?.();
+      let next = -1;
+      if (rect && touch && touch.clientY >= rect.top - 24 && touch.clientY <= rect.bottom + 24) {
+        const index = Math.floor((touch.clientX - rect.left - PILL_PADDING) / ((rect.width - PILL_PADDING * 2) / reactions.length));
+        if (index >= 0 && index < reactions.length) next = index;
+      }
+      hoveredRef.current = next;
+      setHovered(next);
+    };
+    const move = (event) => {
+      event.preventDefault();
+      hoverAt(event.touches[0]);
+    };
+    const end = (event) => {
+      if (event.touches.length) return;
+      const picked = event.type === 'touchend' ? hoveredRef.current : -1;
+      hoveredRef.current = -1;
+      setHovered(-1);
+      detach();
+      // Swallow the lift's synthetic click so it can't land on the backdrop and
+      // close the menu; releasing off the pill leaves the menu open for taps.
+      if (event.type === 'touchend') event.preventDefault();
+      if (picked >= 0) {
+        onReact(reactions[picked]);
+        onClose();
+      }
+    };
+    const detach = () => {
+      window.removeEventListener('touchmove', move);
+      window.removeEventListener('touchend', end);
+      window.removeEventListener('touchcancel', end);
+    };
+    window.addEventListener('touchmove', move, { passive: false });
+    window.addEventListener('touchend', end, { passive: false });
+    window.addEventListener('touchcancel', end);
+    return detach;
+  }, [visible, onClose, onReact, reactions]);
+
   if (!visible) return null;
   const palette = dark ? DARK : LIGHT;
   const rise = (from) => ({ opacity: appear, transform: [{ translateY: appear.interpolate({ inputRange: [0, 1], outputRange: [from, 0] }) }, { scale: appear.interpolate({ inputRange: [0, 1], outputRange: [0.94, 1] }) }] });
@@ -68,8 +114,9 @@ export default function MessageFocusModal({ visible, mine, dark, reactions, sele
     <Modal visible transparent animationType="none" statusBarTranslucent onRequestClose={onClose}>
       <Animated.View style={[styles.backdrop, { opacity: appear, backgroundColor: palette.tint }]}>
         <Pressable accessibilityLabel="Close message actions" onPress={onClose} style={StyleSheet.absoluteFillObject} />
-        <View pointerEvents="box-none" style={[styles.stage, desktop && styles.stageDesktop]}>
-          <Animated.View {...pan.panHandlers} style={[styles.pill, side, { backgroundColor: palette.pill }, rise(10)]}>
+        <ScrollView pointerEvents="box-none" style={styles.stage} contentContainerStyle={[styles.stageContent, desktop && styles.stageDesktop]} showsVerticalScrollIndicator={false}>
+          <Pressable accessible={false} focusable={false} onPress={onClose} style={StyleSheet.absoluteFillObject} />
+          <Animated.View ref={pillRef} {...pan.panHandlers} style={[styles.pill, side, { backgroundColor: palette.pill }, rise(10)]}>
             {reactions.map((emoji, index) => {
               const chosen = selectedReactions.includes(emoji);
               return (
@@ -91,7 +138,7 @@ export default function MessageFocusModal({ visible, mine, dark, reactions, sele
               </View>
             ))}
           </Animated.View>
-        </View>
+        </ScrollView>
       </Animated.View>
     </Modal>
   );
@@ -111,7 +158,8 @@ const styles = StyleSheet.create({
     flex: 1,
     ...Platform.select({ web: { backdropFilter: 'blur(26px) saturate(140%)', WebkitBackdropFilter: 'blur(26px) saturate(140%)' } }),
   },
-  stage: { flex: 1, width: '100%', maxWidth: 560, alignSelf: 'center', paddingHorizontal: 16, paddingBottom: 34, justifyContent: 'flex-end' },
+  stage: { flex: 1, width: '100%', maxWidth: 560, alignSelf: 'center' },
+  stageContent: { flexGrow: 1, paddingHorizontal: 16, paddingTop: 16, paddingBottom: 34, justifyContent: 'flex-end' },
   stageDesktop: { justifyContent: 'center', paddingBottom: 0 },
   alignStart: { alignSelf: 'flex-start' },
   alignEnd: { alignSelf: 'flex-end' },
