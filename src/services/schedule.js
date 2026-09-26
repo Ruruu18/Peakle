@@ -1,18 +1,20 @@
 import { requireSupabase } from '../lib/supabase';
 import { DEMO_MODE } from '../config/demoMode';
+import { SCHEDULE_ACTIVITY_TYPES } from '../config/scheduleTypes';
 import { listDiscoverablePlayerActivities } from './playerActivities';
 import { cleanCourtText, courtLabel } from './playCourts';
 
 // Everything the Schedule tab shows is normalized to one calendar entry shape:
 //   { id, kind, sourceId, title, startsAt, endsAt, place, area, status, ... }
-// kind: 'game' (player-scheduled), 'open_play', 'competition', 'program'.
+// kind describes the activity; isPlayerScheduled distinguishes a player's
+// calendar activity from an organizer's registration and live event tools.
 
 export const GAME_DURATIONS = [60, 90, 120, 180];
 export const DURATION_STEP_MINUTES = 30;
 export const MIN_GAME_MINUTES = 30;
 export const MAX_GAME_MINUTES = 6 * 60;
 export const START_STEP_MINUTES = 5;
-const GAME_FIELDS = 'id,host_id,title,notes,starts_at,ends_at,match_type,mode,visibility,capacity,court_label,court_area,venue_id,court_id,status';
+const GAME_FIELDS = 'id,host_id,activity_kind,title,notes,starts_at,ends_at,match_type,mode,visibility,capacity,court_label,court_area,venue_id,court_id,status';
 const ROSTER_FIELDS = 'user_id,status,profile:profiles!scheduled_game_players_user_id_fkey(id,display_name,avatar_url)';
 
 function mapGame(row, userId) {
@@ -26,7 +28,9 @@ function mapGame(row, userId) {
   const going = roster.filter((player) => player.status === 'going');
   return {
     id: `game:${row.id}`,
-    kind: 'game',
+    kind: row.activity_kind || 'game',
+    typeLabel: SCHEDULE_ACTIVITY_TYPES[row.activity_kind || 'game']?.name || 'Game',
+    isPlayerScheduled: true,
     sourceId: row.id,
     title: row.title,
     notes: row.notes || '',
@@ -54,6 +58,7 @@ export function scheduleEntryFromActivity(activity) {
   return {
     id: activity.id,
     kind: activity.type,
+    isPlayerScheduled: false,
     sourceId: activity.sourceId,
     title: activity.title,
     startsAt: activity.startsAt,
@@ -105,23 +110,30 @@ export function nextOnMyCalendar(entries, now = Date.now()) {
 }
 
 export function isOnMyCalendar(entry) {
-  if (entry.kind === 'game') return Boolean(entry.myStatus && entry.myStatus !== 'declined');
+  if (isPlayerScheduledEntry(entry)) return Boolean(entry.isHost || (entry.myStatus && entry.myStatus !== 'declined'));
   return Boolean(entry.joined);
+}
+
+export function isPlayerScheduledEntry(entry) {
+  return Boolean(entry && (entry.isPlayerScheduled || entry.kind === 'game'));
 }
 
 const DEMO_WRITE_ERROR = 'Scheduling is turned off in the demo.';
 
-export async function createScheduledGame({ title, startsAt, durationMinutes, matchType, mode, visibility, court, notes = '', invitees = [] }) {
+export async function createScheduledActivity({ kind = 'game', title, startsAt, durationMinutes, matchType = 'doubles', mode = 'casual', visibility = 'invite', capacity: requestedCapacity = 16, court, notes = '', invitees = [] }) {
   if (DEMO_MODE) throw new Error(DEMO_WRITE_ERROR);
+  if (!Object.hasOwn(SCHEDULE_ACTIVITY_TYPES, kind)) throw new Error('Choose an activity type.');
   const start = new Date(startsAt);
   const end = new Date(start.getTime() + durationMinutes * 60000);
-  const capacity = matchType === 'singles' ? 2 : 4;
-  const { data, error } = await requireSupabase().rpc('create_scheduled_game', {
-    p_title: cleanCourtText(title) || `${matchType === 'singles' ? 'Singles' : 'Doubles'} game`,
+  const capacity = kind === 'game' ? (matchType === 'singles' ? 2 : 4) : requestedCapacity;
+  if (!Number.isInteger(capacity) || capacity < 2 || capacity > 16) throw new Error('Choose a player limit from 2 to 16.');
+  const { data, error } = await requireSupabase().rpc('create_scheduled_activity', {
+    p_activity_kind: kind,
+    p_title: cleanCourtText(title) || (kind === 'game' ? `${matchType === 'singles' ? 'Singles' : 'Doubles'} game` : SCHEDULE_ACTIVITY_TYPES[kind].name),
     p_starts_at: start.toISOString(),
     p_ends_at: end.toISOString(),
     p_match_type: matchType,
-    p_mode: mode,
+    p_mode: kind === 'game' ? mode : 'casual',
     p_visibility: visibility,
     p_capacity: capacity,
     p_court_label: courtLabel(court),
@@ -133,6 +145,10 @@ export async function createScheduledGame({ title, startsAt, durationMinutes, ma
   });
   if (error) throw error;
   return Array.isArray(data) ? data[0] : data;
+}
+
+export function createScheduledGame(options) {
+  return createScheduledActivity({ ...options, kind: 'game' });
 }
 
 export async function respondToScheduledGame(gameId, going) {
@@ -150,6 +166,7 @@ export async function cancelScheduledGame(gameId) {
 
 // Prefills Play setup from a scheduled game: registered players fill the lineup.
 export function playSetupFromGame(game) {
+  if (game.kind && game.kind !== 'game') throw new Error('Only games can be started as a match.');
   const going = game.going.map((player) => ({ id: player.id, name: player.name, avatar: player.avatar }));
   return {
     matchType: game.matchType,

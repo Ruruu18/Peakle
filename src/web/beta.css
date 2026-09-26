@@ -54,6 +54,7 @@ input:not([type="checkbox"]):not([type="radio"]):focus, textarea:focus { outline
 /* Match useDesktopLayout's 1024px breakpoint and 224px sidebar. */
 @media (min-width: 1024px) {
   [data-desktop-layout="home-header"] { gap: 24px; }
+  [data-desktop-layout="home-header-actions"] { gap: 8px; }
   [data-desktop-layout="home-header-shortcut"] { width: auto; padding-inline: 12px; }
   [data-desktop-layout="home-header-action-label"] { display: flex; }
   .beta-shell { max-width: none; box-shadow: none; }

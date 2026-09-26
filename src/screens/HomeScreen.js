@@ -33,7 +33,7 @@ import { requireSupabase } from '../lib/supabase';
 import { HOME_VENUES_CACHE_KEY, homeDashboardCacheKey, playerActivitiesCacheKey } from '../lib/cacheKeys';
 import { skillCategoryForRating } from '../utils/skillCategories';
 import { listDiscoverablePlayerActivities } from '../services/playerActivities';
-import { formatTime, listScheduledGames, nextOnMyCalendar, scheduleEntryFromActivity } from '../services/schedule';
+import { formatTime, isPlayerScheduledEntry, listScheduledGames, nextOnMyCalendar, scheduleEntryFromActivity } from '../services/schedule';
 import { COURT_BOOKING_ENABLED, ORGANIZER_EVENTS_ENABLED } from '../config/features';
 import { followPlayer, listPlayerSuggestions } from '../services/directMessages';
 import { ACCOUNT_MENU_NAV, useAccountMenu } from '../components/AccountMenu';
@@ -231,7 +231,7 @@ function NextScheduled({ entry, now, onOpen, onSchedule }) {
       ? `${Math.floor(remainingMinutes / 60)}h ${remainingMinutes % 60}m`
       : remainingMinutes > 0 ? `${remainingMinutes}m` : 'Now';
   const date = startsAt.toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric', timeZone: 'Asia/Manila' });
-  const status = entry.kind === 'game' ? (entry.isHost ? 'HOSTING' : entry.myStatus === 'invited' ? 'INVITED' : 'GOING') : 'REGISTERED';
+  const status = isPlayerScheduledEntry(entry) ? (entry.isHost ? 'HOSTING' : entry.myStatus === 'invited' ? 'INVITED' : 'GOING') : 'REGISTERED';
   return (
     <Pressable accessibilityRole="button" accessibilityLabel={`Next up: ${entry.title}, ${date} at ${formatTime(entry.startsAt)}`} onPress={onOpen} style={({ pressed }) => [styles.nextCard, pressed && styles.pressed]}>
       <CourtGraphic color={C.teal} courtNumber={null} environment={null} />
@@ -242,7 +242,7 @@ function NextScheduled({ entry, now, onOpen, onSchedule }) {
         <View style={styles.metaRow}><Icon name="location-outline" size={16} color="rgba(243,245,239,0.72)" /><Text style={styles.metaText}>{[entry.place, entry.area].filter(Boolean).join(' · ')}</Text></View>
         <KitchenLine dark style={styles.nextDivider} />
         <View style={styles.opponentRow}>
-          <View style={styles.opponentName}><Text style={styles.tinyLight}>{entry.kind === 'game' ? 'PLAYERS' : 'TYPE'}</Text><Text numberOfLines={1} style={styles.opponentText}>{entry.kind === 'game' ? `${entry.going.length}/${entry.capacity} going` : entry.typeLabel}</Text></View>
+          <View style={styles.opponentName}><Text style={styles.tinyLight}>{isPlayerScheduledEntry(entry) ? 'PLAYERS' : 'TYPE'}</Text><Text numberOfLines={1} style={styles.opponentText}>{isPlayerScheduledEntry(entry) ? `${entry.going.length}/${entry.capacity} going` : entry.typeLabel}</Text></View>
           <View style={styles.countdown}><Text style={styles.tinyLight}>{active ? 'ON NOW' : 'STARTS IN'}</Text><Text style={styles.countdownText}>{active ? 'Now' : countdown}</Text></View>
         </View>
       </View>
@@ -767,8 +767,9 @@ export default function HomeScreen() {
     .map((game) => ({
       id: game.id,
       sourceId: game.sourceId,
-      type: 'game',
-      typeLabel: 'Open game',
+      type: game.kind,
+      typeLabel: game.kind === 'game' ? 'Open game' : game.typeLabel,
+      isPlayerScheduled: true,
       title: game.title,
       venue: { name: game.place, area: game.area },
       startsAt: game.startsAt,
@@ -791,7 +792,7 @@ export default function HomeScreen() {
   const performanceRating = useMemo(() => calculatePerformanceRating(matches), [matches]);
   const nextEntry = useMemo(() => (COURT_BOOKING_ENABLED ? null : nextOnMyCalendar([...scheduledGames, ...publicActivities.map(scheduleEntryFromActivity)], now.getTime())), [now, publicActivities, scheduledGames]);
   const openNextEntry = () => {
-    if (nextEntry?.kind === 'game') navigation.navigate('Schedule', { openGameId: nextEntry.sourceId, openGameToken: Date.now() });
+    if (isPlayerScheduledEntry(nextEntry)) navigation.navigate('Schedule', { openGameId: nextEntry.sourceId, openGameToken: Date.now() });
     else navigation.navigate('Schedule');
   };
   const nextBookingIsToday = upcomingBooking ? new Date(upcomingBooking.starts_at).toDateString() === now.toDateString() : false;
@@ -815,7 +816,7 @@ export default function HomeScreen() {
   );
 
   const openActivity = (activity) => {
-    if (activity.type === 'game') {
+    if (activity.isPlayerScheduled || activity.type === 'game') {
       navigation.navigate('Schedule', { openGameId: activity.sourceId, openGameToken: Date.now(), openView: 'discover' });
       return;
     }
@@ -909,10 +910,11 @@ export default function HomeScreen() {
                 : <Text {...webLayout('home-header-title')} accessibilityRole="header" numberOfLines={1} style={[styles.h1, compactHeader && styles.h1Compact, isDark && darkStyles.text]}>{firstName}</Text>}
             </View>
           </View>
-          <View {...webLayout('home-header-actions')} style={[styles.headerDock, isDark && darkStyles.headerDock]}>
-            <HeaderAction docked compact={compactHeader} active={isDark} icon={isDark ? 'sunny-outline' : 'moon-outline'} label={isDark ? 'Use light dashboard' : 'Use dark dashboard'} onPress={toggleColorMode} />
-            <HeaderAction docked compact={compactHeader} icon="podium-outline" label="Open leaderboard" textLabel="Leaderboard" onPress={() => navigation.navigate('Leaderboard', { defaultFormat: user?.preference?.toLowerCase() === 'singles' ? 'singles' : 'doubles' })} />
-            <HeaderAction docked compact={compactHeader} icon="notifications-outline" label={`Open notifications${unreadCount ? `, ${unreadCount} unread` : ''}`} onPress={() => setNotifications(true)} showBadge={unreadCount > 0} />
+          {/* Desktop already lists Leaderboard in the sidebar, so it keeps just two standalone buttons. */}
+          <View {...webLayout('home-header-actions')} style={desktop ? styles.headerActionsDesktop : [styles.headerDock, isDark && darkStyles.headerDock]}>
+            <HeaderAction docked={!desktop} compact={compactHeader} active={isDark && !desktop} icon={isDark ? 'sunny-outline' : 'moon-outline'} label={isDark ? 'Use light dashboard' : 'Use dark dashboard'} onPress={toggleColorMode} />
+            {desktop ? null : <HeaderAction docked compact={compactHeader} icon="podium-outline" label="Open leaderboard" textLabel="Leaderboard" onPress={() => navigation.navigate('Leaderboard', { defaultFormat: user?.preference?.toLowerCase() === 'singles' ? 'singles' : 'doubles' })} />}
+            <HeaderAction docked={!desktop} compact={compactHeader} icon="notifications-outline" label={`Open notifications${unreadCount ? `, ${unreadCount} unread` : ''}`} onPress={() => setNotifications(true)} showBadge={unreadCount > 0} />
           </View>
         </View>
         <KitchenLine style={[styles.headerLine, compactHeader && styles.headerLineCompact]} />
@@ -935,7 +937,7 @@ const styles = createMobileStyleSheet({
   header: { minHeight: 44, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 12 }, headerCompact: { minHeight: 48, gap: 9 }, headerProfileGroup: { flex: 1, minWidth: 0, flexDirection: 'row', alignItems: 'center', gap: 10 }, headerIdentityCopy: { flex: 1, minWidth: 0 }, eyebrow: { color: C.ink40, fontSize: 10, lineHeight: 15, fontWeight: '700', letterSpacing: 1.05 }, eyebrowLight: { color: 'rgba(243,245,239,0.52)' },
   greetingRow: { flexDirection: 'row', alignItems: 'center', gap: 6 }, greeting: { flexShrink: 1, color: C.teal, fontSize: 13, lineHeight: 17, fontWeight: '600', letterSpacing: -0.1 }, greetingDark: { color: C.optic },
   h1: { marginTop: 1, color: C.ink, fontSize: 24, lineHeight: 29, fontWeight: '600', letterSpacing: -0.9 }, h1Compact: { fontSize: 22, lineHeight: 27, letterSpacing: -0.6 }, h1Desktop: { marginTop: 6, fontSize: 36, lineHeight: 42, letterSpacing: -1.4 }, h1Muted: { color: C.ink40 },
-  headerDesktop: { alignItems: 'flex-end', paddingTop: 8 }, headerDock: { flexShrink: 0, flexDirection: 'row', alignItems: 'center', gap: 2, padding: 3, borderWidth: 1, borderColor: C.line, borderRadius: 14, backgroundColor: C.surface, ...shadow }, headerActionDocked: { borderWidth: 0, backgroundColor: 'transparent', borderRadius: 12, shadowOpacity: 0, elevation: 0 }, h2: { marginTop: 3, color: C.ink, fontSize: 23, lineHeight: 29, fontWeight: '700', letterSpacing: -0.5 },
+  headerDesktop: { alignItems: 'flex-end', paddingTop: 8 }, headerDock: { flexShrink: 0, flexDirection: 'row', alignItems: 'center', gap: 2, padding: 3, borderWidth: 1, borderColor: C.line, borderRadius: 14, backgroundColor: C.surface, ...shadow }, headerActionsDesktop: { flexShrink: 0, flexDirection: 'row', alignItems: 'center', gap: 8 }, headerActionDocked: { borderWidth: 0, backgroundColor: 'transparent', borderRadius: 12, shadowOpacity: 0, elevation: 0 }, h2: { marginTop: 3, color: C.ink, fontSize: 23, lineHeight: 29, fontWeight: '700', letterSpacing: -0.5 },
   headerAction: { width: 36, height: 36, borderWidth: 1, borderColor: C.line, borderRadius: 11, backgroundColor: C.surface, alignItems: 'center', justifyContent: 'center', ...shadow }, headerActionCompact: { width: 34, height: 34, borderRadius: 10 }, headerActionActive: { backgroundColor: C.optic }, headerActionActiveDark: { backgroundColor: C.optic }, unreadDot: { position: 'absolute', top: 5, right: 5, width: 8, height: 8, borderRadius: 4, borderWidth: 2, borderColor: C.surface, backgroundColor: C.brick },
   kitchen: { height: 7, marginVertical: 18 }, solid: { height: 2, backgroundColor: C.ink }, dashed: { marginTop: 4, borderTopWidth: 1, borderStyle: 'dashed', borderColor: C.ink40 }, headerLine: { marginTop: 10, marginBottom: 16 }, headerLineCompact: { marginTop: 18, marginBottom: 14 },
   openPlayMore: { minHeight: 40, paddingHorizontal: 12, flexDirection: 'row', alignItems: 'center', gap: 6, borderRadius: 13, backgroundColor: C.optic }, openPlayMoreText: { color: C.ink, fontSize: 9, fontWeight: '900' },

@@ -274,6 +274,17 @@ npx expo start --clear
 
 Google sign-in uses an OAuth ID token from the platform-specific Google client and exchanges it for a Supabase session. Do not add a Google client secret to `.env`.
 
+## Player calendar activity types
+
+Apply `migrations/202609260011_scheduled_activity_types.sql` before releasing the
+activity type selector. It adds Game, Open play, Tournament, and Program to
+player-scheduled activities, retaining existing games, invitations, visibility,
+capacity enforcement, and cancellation. These entries appear in Schedule and
+Home; organizer registrations and tournament brackets use their existing flows.
+
+Verify locally with `npm run test:play-anywhere` and
+`npm test -- --runInBand src/services/__tests__/scheduleActivities.test.js`.
+
 ## Private player messages
 
 Apply `migrations/202607300001_private_player_messages.sql` before testing the Messages inbox. It adds consent-based player conversations, one-message requests, read receipts, realtime delivery, push notifications, and private-message reports. Existing chat age eligibility, suspensions, and user blocks also apply to private conversations.

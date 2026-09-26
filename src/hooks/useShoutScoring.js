@@ -16,7 +16,11 @@ const MIN_AUDIBLE_VOLUME = 0;
 // more likely a mis-hearing of background noise than an actual shouted word.
 const MIN_CONFIDENCE = 0.35;
 const MAX_ERROR_BACKOFF_MS = 4000;
-const speechRecognitionModule = requireOptionalNativeModule('ExpoSpeechRecognition');
+// Browsers get the library's Web Speech API module; native builds load the
+// optional native module so Expo Go still opens without it.
+const speechRecognitionModule = Platform.OS === 'web'
+  ? require('expo-speech-recognition').ExpoSpeechRecognitionModule
+  : requireOptionalNativeModule('ExpoSpeechRecognition');
 
 const RECOVERABLE_ERRORS = new Set(['audio-capture', 'network', 'busy', 'client', 'unknown', 'bad-grammar', 'interrupted']);
 const SILENCE_ERRORS = new Set(['no-speech', 'speech-timeout']);
@@ -25,6 +29,15 @@ const FATAL_ERRORS = new Set(['not-allowed', 'service-not-allowed', 'language-no
 function unavailableMessage(code, nativeMessage = '') {
   if (code === 'native-module-missing') {
     return 'Expo Go does not include Peakle\'s speech-recognition module. Open a Peakle development build made with npm run ios or npm run android, then connect it to the Expo server.';
+  }
+  if (Platform.OS === 'web' && code === 'not-allowed') {
+    return 'Microphone access is blocked for this site. Allow the microphone in your browser’s address bar, then select Mic again.';
+  }
+  if (Platform.OS === 'web' && code === 'service-not-allowed') {
+    return 'This browser cannot recognize speech. Use Chrome, Edge or Safari, or score with taps.';
+  }
+  if (Platform.OS === 'web' && code === 'network') {
+    return 'Browser speech recognition needs an internet connection. Check your connection, then select Mic again.';
   }
   if (code === 'not-allowed') {
     return 'Microphone or speech recognition access is off. Enable both for Peakle in your device Settings, then select Shout again.';

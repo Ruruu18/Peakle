@@ -23,11 +23,24 @@ export function announceScoreForVoiceOver(announcement) {
   if (message) AccessibilityInfo.announceForAccessibilityWithOptions(message, { queue: false });
 }
 
+// Roughly how long the spoken announcement lasts at rate 0.92. Devices that
+// only watch the score use it to stay in step with the scorer's voice.
+export function estimateScoreAnnouncementMs(announcement) {
+  const words = scoreAnnouncementMessage(announcement).split(/\s+/).filter(Boolean).length;
+  return words ? Math.min(8000, 600 + words * 420) : 0;
+}
+
+// Resolves when the voice finishes, is stopped, or fails. The cap keeps a
+// missing speech callback from freezing the court.
 export function speakScoreAnnouncement(announcement) {
   const message = scoreAnnouncementMessage(announcement);
-  if (!message) return;
+  if (!message) return Promise.resolve();
   Speech.stop();
-  Speech.speak(message, { language: 'en-PH', rate: 0.92, pitch: 1 });
+  return new Promise((resolve) => {
+    const cap = setTimeout(resolve, estimateScoreAnnouncementMs(announcement) + 2000);
+    const done = () => { clearTimeout(cap); resolve(); };
+    Speech.speak(message, { language: 'en-PH', rate: 0.92, pitch: 1, onDone: done, onStopped: done, onError: done });
+  });
 }
 
 export function stopScoreAnnouncement() {

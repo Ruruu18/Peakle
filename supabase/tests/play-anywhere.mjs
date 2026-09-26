@@ -56,6 +56,7 @@ try {
   `);
   await db.exec(await migration('202609250001_play_anywhere_courts.sql'));
   await db.exec(await migration('202609250002_scheduled_games.sql'));
+  await db.exec(await migration('202609260011_scheduled_activity_types.sql'));
   console.log('PASS migrations apply on top of the existing schema');
 
   // Court labels are stored and bounded.
@@ -120,6 +121,51 @@ try {
   await as('authenticated', friend);
   await assert.rejects(db.query('select public.respond_scheduled_game($1, true)', [privateGame]), /cancelled/);
   console.log('PASS hosts cancel games and attendees are notified');
+
+  // Typed activities share the existing roster and RLS, but retain their type.
+  const createActivity = (kind, visibility = 'invite', capacity = 8, mode = 'casual') => db.query(
+    `select * from public.create_scheduled_activity($1, 'Community activity', $2, $3, 'doubles', $4, $5, $6, 'Kapitolyo Court', 'Pasig', null, null, 'Bring balls', $7::uuid[])`,
+    [kind, future(24), future(26), mode, visibility, capacity, [friend]],
+  ).then((result) => result.rows[0]);
+  await as('authenticated', host);
+  assert.equal(await scalar('select activity_kind as value from public.scheduled_games where id=$1', [privateGame]), 'game');
+  for (const kind of ['game', 'open_play', 'competition', 'program']) {
+    await as('authenticated', host);
+    const activity = await createActivity(kind, 'invite', kind === 'game' ? 4 : 8);
+    assert.equal(activity.activity_kind, kind);
+    assert.equal(activity.host_id, host);
+    assert.equal(activity.notes, 'Bring balls');
+    await as('authenticated', stranger);
+    assert.equal((await db.query('select id from public.scheduled_games where id=$1', [activity.id])).rows.length, 0);
+    await assert.rejects(db.query('select public.respond_scheduled_game($1, true)', [activity.id]), /no longer available/);
+    await as('authenticated', friend);
+    assert.equal(await scalar('select activity_kind as value from public.scheduled_games where id=$1', [activity.id]), kind);
+    assert.equal((await db.query('select public.respond_scheduled_game($1, true) as value', [activity.id])).rows[0].value.going, 2);
+    await assert.rejects(db.query('select public.cancel_scheduled_game($1)', [activity.id]), /Only the host/);
+    await as('authenticated', host);
+    await db.query('select public.cancel_scheduled_game($1)', [activity.id]);
+    await as('postgres');
+    assert.equal(await scalar("select data->>'activityKind' as value from public.user_notifications where user_id=$1 and kind='game_invite' and data->>'gameId'=$2", [friend, activity.id]), kind);
+    assert.equal(await scalar("select data->>'activityKind' as value from public.user_notifications where user_id=$1 and kind='game_update' and data->>'gameId'=$2", [friend, activity.id]), kind);
+  }
+  console.log('PASS every activity type persists with private invites, responses and host-only cancellation');
+
+  await as('authenticated', host);
+  await assert.rejects(createActivity('note'), /valid activity type/);
+  await assert.rejects(createActivity(null), /valid activity type/);
+  await assert.rejects(createActivity('program', 'open', 17), /player limit/);
+  await assert.rejects(createActivity('program', 'open', 8, 'ranked'), /only available for games/);
+  await assert.rejects(createActivity('game', 'open', 8), /4 for doubles/);
+  const program = await createActivity('program', 'open', 2);
+  await as('authenticated', stranger);
+  assert.equal((await db.query('select public.respond_scheduled_game($1, true) as value', [program.id])).rows[0].value.going, 2);
+  await as('authenticated', friend);
+  await assert.rejects(db.query('select public.respond_scheduled_game($1, true)', [program.id]), /full/);
+  await as('authenticated');
+  await assert.rejects(createActivity('program'), /Sign in/);
+  await as('anon');
+  await assert.rejects(createActivity('program'), /permission denied/);
+  console.log('PASS category validation, activity capacity and unauthenticated write protection');
 } finally {
   await db.close();
 }

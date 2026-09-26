@@ -44,10 +44,10 @@ import { useUserLocation } from '../context/LocationContext';
 import { listFollowingPlayers } from '../services/directMessages';
 import { useNearbyPlayersContext } from '../context/NearbyPlayersContext';
 import { createMobileStyleSheet } from '../utils/mobileStyles';
-import { announceScoreForVoiceOver, speakScoreAnnouncement, stopScoreAnnouncement } from '../utils/scoreAccessibility';
+import { announceScoreForVoiceOver, estimateScoreAnnouncementMs, speakScoreAnnouncement, stopScoreAnnouncement } from '../utils/scoreAccessibility';
 import useShoutScoring from '../hooks/useShoutScoring';
 import useMatchDraft from '../hooks/useMatchDraft';
-import { COURT_BOOKING_ENABLED, PRIVATE_MESSAGES_ENABLED, NATIVE_VOICE_SCORING_ENABLED } from '../config/features';
+import { COURT_BOOKING_ENABLED, PRIVATE_MESSAGES_ENABLED, VOICE_COMMAND_SCORING_ENABLED } from '../config/features';
 import { parseVoiceMatchCommand } from '../utils/voiceMatchCommands';
 import { evenSidePlayerFromCurrentServer, playerForSideOut, resolveRallyState } from '../utils/liveMatchScoring';
 import { DEMO_MODE } from '../config/demoMode';
@@ -64,6 +64,7 @@ let C = LIGHT_C;
 
 const emptyLineup = (currentUserName) => [[currentUserName || 'You', ''], ['', '']];
 const normalizedPlayerName = (name) => name?.trim().toLocaleLowerCase() || '';
+const isScorerInvite = (invite) => invite?.match_payload?.role === 'scorer';
 
 function isConfirmedBooking(booking) {
   return booking?.status === 'confirmed' && new Date(booking.ends_at).getTime() > Date.now();
@@ -287,8 +288,9 @@ function IncomingInvites({ invites, onRespond }) {
       {invites.map((invite) => {
         const senderName = invite.sender?.display_name || 'A player';
         const payload = invite.match_payload || {};
-        const detail = `${payload.matchType === 'singles' ? 'Singles' : 'Doubles'} · ${payload.mode === 'ranked' ? 'Ranked' : 'Casual'}${payload.court?.name ? ` · ${payload.court.name}` : ''}`;
-        return <View key={invite.id} style={styles.inviteRequest}><View style={styles.inviteRequestCopy}><Text style={styles.inviteSender}>{senderName}</Text><Text numberOfLines={2} style={styles.inviteDetail}>{detail}</Text></View><Pressable accessibilityLabel={`Decline invitation from ${senderName}`} onPress={() => onRespond(invite.id, false)} style={styles.declineInvite}><Icon name="close" size={17} color={C.brick} /></Pressable><Pressable accessibilityLabel={`Accept invitation from ${senderName}`} onPress={() => onRespond(invite.id, true)} style={styles.acceptInvite}><Icon name="checkmark" size={17} color="#0E2321" /><Text style={styles.acceptInviteText}>Join</Text></Pressable></View>;
+        const scorerInvite = isScorerInvite(invite);
+        const detail = `${scorerInvite ? 'Keep score · ' : ''}${payload.matchType === 'singles' ? 'Singles' : 'Doubles'} · ${payload.mode === 'ranked' ? 'Ranked' : 'Casual'}${payload.court?.name ? ` · ${payload.court.name}` : ''}`;
+        return <View key={invite.id} style={styles.inviteRequest}><View style={styles.inviteRequestCopy}><Text style={styles.inviteSender}>{senderName}</Text><Text numberOfLines={2} style={styles.inviteDetail}>{detail}</Text></View><Pressable accessibilityLabel={`Decline invitation from ${senderName}`} onPress={() => onRespond(invite.id, false)} style={styles.declineInvite}><Icon name="close" size={17} color={C.brick} /></Pressable><Pressable accessibilityLabel={`Accept ${scorerInvite ? 'scoring ' : ''}invitation from ${senderName}`} onPress={() => onRespond(invite.id, true)} style={styles.acceptInvite}><Icon name="checkmark" size={17} color="#0E2321" /><Text style={styles.acceptInviteText}>{scorerInvite ? 'Score' : 'Join'}</Text></Pressable></View>;
       })}
     </View>
   );
@@ -445,6 +447,59 @@ function PlayChoiceScreen({ onFindPlay, onSetupMatch, unfinishedMatch, onResume 
   );
 }
 
+// Invite a signed-in person who is not playing (a referee or a friend on the
+// sideline) to keep score from their own phone.
+function SidelineScorerInvite({ candidates, excludedIds, invites, onInvite, onWithdraw }) {
+  const [query, setQuery] = useState('');
+  const [results, setResults] = useState([]);
+  const [searching, setSearching] = useState(false);
+  const normalizedQuery = query.trim().toLocaleLowerCase();
+  useEffect(() => {
+    if (normalizedQuery.length < 2) { setResults([]); setSearching(false); return undefined; }
+    let active = true;
+    setSearching(true);
+    const timer = setTimeout(() => {
+      searchRegisteredPlayers(normalizedQuery)
+        .then((rows) => { if (active) setResults(rows); })
+        .catch(() => { if (active) setResults([]); })
+        .finally(() => { if (active) setSearching(false); });
+    }, 300);
+    return () => { active = false; clearTimeout(timer); };
+  }, [normalizedQuery]);
+  const activeInvites = invites.filter((invite) => ['pending', 'accepted'].includes(invite.status));
+  const invitedIds = new Set(activeInvites.map((invite) => invite.recipient_id));
+  const pool = normalizedQuery
+    ? [...candidates.filter((player) => player.name?.toLocaleLowerCase().includes(normalizedQuery)), ...results]
+    : candidates.slice(0, 5);
+  const people = pool.filter((player, index, rows) => player?.id && rows.findIndex((row) => row.id === player.id) === index && !excludedIds.includes(player.id) && !invitedIds.has(player.id));
+  const row = (key, name, avatar, meta, action) => (
+    <View key={key} style={styles.sidelineRow}>
+      <ResilientImage uri={normalizeProfilePhoto(avatar)} accessibilityLabel={`${name} profile photo`} fallback={<Text style={styles.scorerOptionInitials}>{initials(name)}</Text>} fallbackColor="#3C5A8A" showLoadingIndicator={false} style={styles.scorerOptionAvatar} />
+      <View style={styles.scorerOptionCopy}><Text numberOfLines={1} style={styles.scorerOptionName}>{name}</Text><Text style={styles.scorerOptionMeta}>{meta}</Text></View>
+      {action}
+    </View>
+  );
+  return (
+    <View style={styles.sidelineCard}>
+      <Text style={styles.sectionLabel}>SIDELINE SCORER</Text>
+      <Text style={styles.sidelineLead}>Invite someone who isn’t playing. They keep score from their phone and are not added to the lineup or match history.</Text>
+      {activeInvites.map((invite) => row(invite.id, invite.recipient?.display_name || 'Invited scorer', invite.recipient?.avatar_url, invite.status === 'accepted' ? 'Accepted · ready to score' : 'Invitation sent · waiting', (
+        <Pressable accessibilityRole="button" accessibilityLabel={`${invite.status === 'accepted' ? 'Remove' : 'Cancel invitation for'} ${invite.recipient?.display_name || 'scorer'}`} onPress={() => onWithdraw(invite)} style={({ pressed }) => [styles.inviteButton, invite.status === 'accepted' ? styles.inviteButtonRemove : styles.inviteButtonAdded, pressed && styles.pressed]}>
+          <Icon name={invite.status === 'accepted' ? 'person-remove-outline' : 'time-outline'} size={16} color={invite.status === 'accepted' ? C.brick : C.teal} />
+        </Pressable>
+      )))}
+      <View style={styles.playerSearch}><Icon name="search" size={17} color={C.ink40} /><TextInput accessibilityLabel="Search for a sideline scorer" value={query} onChangeText={setQuery} placeholder="Search players by name" placeholderTextColor={C.ink40} autoCapitalize="none" autoCorrect={false} returnKeyType="search" style={styles.playerSearchInput} /></View>
+      {searching && !people.length ? <ActivityIndicator color={C.teal} style={styles.sidelineStatus} /> : null}
+      {!searching && normalizedQuery.length >= 2 && !people.length ? <Text style={styles.sidelineEmpty}>No matching player.</Text> : null}
+      {people.map((player) => row(player.id, player.name, player.avatar || player.avatar_url, player.isTeammate ? 'Teammate' : 'Registered player', (
+        <Pressable accessibilityRole="button" accessibilityLabel={`Invite ${player.name} to keep score`} onPress={() => onInvite(player)} style={({ pressed }) => [styles.inviteButton, pressed && styles.pressed]}>
+          <Icon name="add" size={15} color="#0E2321" />
+        </Pressable>
+      )))}
+    </View>
+  );
+}
+
 function SetupScreen({ courts, courtsLoading, courtsError, onRefreshCourts, onBookCourt, recentCourts = [], defaultCourtArea = '', nearbyPlayers, nearbyPresence, currentUserName, currentUserId, currentUserAvatar, onStart, focusChallenge, onBackToChoices, showBackToChoices = true, onFindPlay, onMessagePlayer, onLeaveJoined, unfinishedMatch, onResume, openNearbyPlayersToken, scheduledGame = null }) {
   const [followingPlayers, setFollowingPlayers] = useState([]);
   const [teammates, setTeammates] = useState([]);
@@ -557,12 +612,21 @@ function SetupScreen({ courts, courtsLoading, courtsError, onRefreshCourts, onBo
   const missingPlayerCount = (requiredPlayers * 2) - onCourtScorers.length;
   const joinedInvite = nearbyPresence.joinedInvite;
   const joinedSender = joinedInvite?.sender;
-  const acceptedProfiles = nearbyPresence.outgoingInvites.filter((invite) => invite.status === 'accepted' && invite.match_payload?.setupId === setupId).map((invite) => invite.recipient).filter(Boolean);
+  const joinedAsScorer = isScorerInvite(joinedInvite);
+  const setupInvites = nearbyPresence.outgoingInvites.filter((invite) => invite.match_payload?.setupId === setupId);
+  // A sideline scorer joins the connected match to keep score only; they never
+  // take a lineup slot and are never recorded as a participant.
+  const playerInvites = setupInvites.filter((invite) => !isScorerInvite(invite));
+  const scorerInvites = setupInvites.filter(isScorerInvite);
+  const acceptedProfiles = playerInvites.filter((invite) => invite.status === 'accepted').map((invite) => invite.recipient).filter(Boolean);
+  const sidelineScorers = scorerInvites.filter((invite) => invite.status === 'accepted' && invite.recipient?.id)
+    .map((invite) => ({ id: invite.recipient.id, name: invite.recipient.display_name, avatar: invite.recipient.avatar_url, sideline: true }));
   // Players who RSVP'd to a scheduled game count as registered; ranked results
   // still need each of them to confirm the score before ratings move.
   const registeredPlayers = [{ id: currentUserId, name: currentUserName, avatar: currentUserAvatar }, ...acceptedProfiles.map((profile) => ({ id: profile.id, name: profile.display_name, avatar: profile.avatar_url })), ...scheduledProfiles]
     .filter((profile, index, rows) => !profile.id || rows.findIndex((candidate) => candidate.id === profile.id) === index);
-  const registeredScorerCandidates = registeredPlayers.filter((profile) => profile.id && profile.id !== currentUserId && onCourtScorers.some((name) => normalizedPlayerName(name) === normalizedPlayerName(profile.name)));
+  const lineupScorerCandidates = registeredPlayers.filter((profile) => profile.id && profile.id !== currentUserId && onCourtScorers.some((name) => normalizedPlayerName(name) === normalizedPlayerName(profile.name)));
+  const registeredScorerCandidates = [...lineupScorerCandidates, ...sidelineScorers.filter((profile) => !lineupScorerCandidates.some((candidate) => candidate.id === profile.id))];
   const scorerIsValid = scorerSource === 'host'
     ? Boolean(currentUserId && scorerId === currentUserId)
     : registeredScorerCandidates.some((profile) => profile.id === scorerId);
@@ -592,7 +656,8 @@ function SetupScreen({ courts, courtsLoading, courtsError, onRefreshCourts, onBo
   }, []);
   const lineupProfiles = [...followingPlayers, ...teammates, ...nearbyPlayers, ...(joinedSender ? [{ id: joinedSender.id, name: joinedSender.display_name, avatar: joinedSender.avatar_url }] : [])]
     .filter((profile, index, rows) => profile?.id && rows.findIndex((candidate) => candidate?.id === profile.id) === index);
-  const matchConfiguration = { setupId, matchType, mode, access, target, bestOf, winByTwo, players: trimmedPlayers, registeredPlayers, court, scorer, scorerId, scorerSource, scoringMethod, focusChallenge };
+  const sidelineScorerId = registeredScorerCandidates.find((profile) => profile.id === scorerId)?.sideline ? scorerId : null;
+  const matchConfiguration = { setupId, matchType, mode, access, target, bestOf, winByTwo, players: trimmedPlayers, registeredPlayers, court, scorer, scorerId, scorerSource, sidelineScorerId, scoringMethod, focusChallenge };
   const setupMessage = hasDuplicatePlayers
     ? 'Each player needs a unique name.'
     : missingPlayerCount > 0
@@ -654,24 +719,34 @@ function SetupScreen({ courts, courtsLoading, courtsError, onRefreshCourts, onBo
     setBestOf(Number(payload.bestOf) || 3);
     setWinByTwo(payload.winByTwo !== false);
     setSetupStage(3);
+    const me = isScorerInvite(joinedInvite) ? '' : currentUserName || 'You';
     setPlayers(joinedMatchType === 'singles'
-      ? [[senderName], [currentUserName || 'You']]
-      : [[senderName, currentUserName || 'You'], ['', '']]);
+      ? [[senderName], [me]]
+      : [[senderName, me], ['', '']]);
     setScorerSource('host');
     setScorer(senderName);
     setScorerId(joinedSender.id);
     if (payload.court) setCourt(payload.court);
   }, [currentUserName, joinedInvite?.id, joinedSender?.display_name]);
 
+  // A chosen scorer who leaves hands scoring back to the host. With no scorer
+  // chosen yet, the first sideline scorer to accept is selected.
+  const scorerCandidateKey = registeredScorerCandidates.map((profile) => profile.id).join(',');
   useEffect(() => {
-    if (scorerSource !== 'player' || registeredScorerCandidates.some((profile) => profile.id === scorerId)) return;
+    if (scorerSource !== 'player') return;
+    if (!scorerId) {
+      const sideline = registeredScorerCandidates.find((profile) => profile.sideline);
+      if (sideline) { setScorer(sideline.name); setScorerId(sideline.id); }
+      return;
+    }
+    if (registeredScorerCandidates.some((profile) => profile.id === scorerId)) return;
     setScorerSource('host');
     setScorer(currentUserName || 'You');
     setScorerId(currentUserId || null);
-  }, [currentUserId, currentUserName, registeredScorerCandidates, scorerId, scorerSource]);
+  }, [currentUserId, currentUserName, scorerCandidateKey, scorerId, scorerSource]);
 
   useEffect(() => {
-    const invite = nearbyPresence.outgoingInvites.find((item) => item.status === 'accepted' && item.match_payload?.setupId === setupId && !appliedInviteIds.current.has(item.id) && item.recipient?.display_name);
+    const invite = nearbyPresence.outgoingInvites.find((item) => item.status === 'accepted' && item.match_payload?.setupId === setupId && !isScorerInvite(item) && !appliedInviteIds.current.has(item.id) && item.recipient?.display_name);
     if (!invite) return;
     const slots = matchType === 'doubles' ? [[0, 0], [0, 1], [1, 0], [1, 1]] : [[0, 0], [1, 0]];
     const openSlot = slots.find(([team, index]) => !players[team][index].trim());
@@ -725,6 +800,20 @@ function SetupScreen({ courts, courtsLoading, courtsError, onRefreshCourts, onBo
     setScorerId(currentUserId || null);
   };
 
+  const inviteSidelineScorer = (player) => nearbyPresence.invite(player.id, {
+    setupId,
+    role: 'scorer',
+    senderName: currentUserName,
+    matchType,
+    mode,
+    target,
+    bestOf,
+    winByTwo,
+    court: court ? { id: court.id, source: court.source, name: court.name, courtName: court.courtName, area: court.area, detail: court.detail, color: court.color } : null,
+  }).catch(() => {});
+
+  const withdrawSidelineScorer = (invite) => (invite.status === 'pending' ? nearbyPresence.cancel(invite.id) : nearbyPresence.remove(invite.id));
+
   const toggleNearbyPlayer = async (player, existingInvite) => {
     if (existingInvite?.status === 'pending') {
       await nearbyPresence.cancel(existingInvite.id);
@@ -765,12 +854,12 @@ function SetupScreen({ courts, courtsLoading, courtsError, onRefreshCourts, onBo
     <ScrollView ref={scrollRef} contentContainerStyle={styles.content} showsVerticalScrollIndicator={false} keyboardShouldPersistTaps="handled">
       <Header
         eyebrow={joinedInvite ? 'MATCH JOINED' : 'MATCH DAY'}
-        title={joinedInvite ? 'You’re in the match' : 'Set up a match'}
+        title={joinedInvite ? (joinedAsScorer ? 'You’re keeping score' : 'You’re in the match') : 'Set up a match'}
         onBack={showBackToChoices && !joinedInvite ? onBackToChoices : null}
         action={joinedInvite ? <View style={styles.joinedChip}><Icon name="checkmark-circle" size={13} color="#0E2321" /><Text style={styles.joinedChipText}>JOINED</Text></View> : <View style={styles.liveChip}><View style={styles.liveDot} /><Text style={styles.liveChipText}>COURT-SIDE</Text></View>}
       />
 
-      {joinedInvite ? <View accessible accessibilityLabel={`Joined ${matchType} ${mode} match hosted by ${joinedSender?.display_name || 'the host'}, at ${court?.name || 'a court the host will confirm'}. Your place is confirmed.`} style={styles.joinedMatchCard}>
+      {joinedInvite ? <View accessible accessibilityLabel={`Joined ${matchType} ${mode} match hosted by ${joinedSender?.display_name || 'the host'}, at ${court?.name || 'a court the host will confirm'}. ${joinedAsScorer ? 'You are the sideline scorer.' : 'Your place is confirmed.'}`} style={styles.joinedMatchCard}>
         <View style={styles.joinedMatchHead}>
           <ResilientImage
             uri={normalizeProfilePhoto(joinedSender?.avatar_url)}
@@ -783,7 +872,7 @@ function SetupScreen({ courts, courtsLoading, courtsError, onRefreshCourts, onBo
           <View style={styles.flex}>
             <Text style={styles.joinedMatchEyebrow}>HOSTED BY</Text>
             <Text numberOfLines={1} style={styles.joinedMatchHost}>{joinedSender?.display_name || 'Match host'}</Text>
-            <Text style={styles.joinedMatchLead}>Your place is confirmed. The host is preparing the match.</Text>
+            <Text style={styles.joinedMatchLead}>{joinedAsScorer ? 'You’re the sideline scorer. The host is preparing the match; the scoring controls open on this phone.' : 'Your place is confirmed. The host is preparing the match.'}</Text>
           </View>
           <View style={styles.joinedConfirmedBadge}><Icon name="checkmark" size={16} color="#0E2321" /></View>
         </View>
@@ -870,7 +959,7 @@ function SetupScreen({ courts, courtsLoading, courtsError, onRefreshCourts, onBo
         <Pressable accessibilityRole="button" accessibilityLabel="Swap both sides" onPress={() => setPlayers(([first, second]) => [second, first])} style={({ pressed }) => [styles.swapSidesButton, pressed && styles.pressed]}><Icon name="swap-vertical" size={16} color={C.teal} /><Text style={styles.swapSidesText}>Swap sides</Text></Pressable>
       </View>
 
-      {access === 'public' && <View onLayout={(event) => { nearbySectionY.current = event.nativeEvent.layout.y; if (pendingNearbyScroll.current) requestAnimationFrame(scrollToNearbyPlayers); }}><NearbyLobby players={invitePlayers} invited={invited} outgoingInvites={nearbyPresence.outgoingInvites.filter((invite) => invite.match_payload?.setupId === setupId)} onToggle={toggleNearbyPlayer} onMessage={onMessagePlayer} full={trimmedPlayers.flat().every(Boolean)} visible={nearbyPresence.visible} loading={nearbyPresence.loading} error={nearbyPresence.error || rosterError} onVisibility={nearbyPresence.setDiscoveryVisible} /></View>}
+      {access === 'public' && <View onLayout={(event) => { nearbySectionY.current = event.nativeEvent.layout.y; if (pendingNearbyScroll.current) requestAnimationFrame(scrollToNearbyPlayers); }}><NearbyLobby players={invitePlayers.filter((player) => !scorerInvites.some((invite) => invite.recipient_id === player.id && ['pending', 'accepted'].includes(invite.status)))} invited={invited} outgoingInvites={playerInvites} onToggle={toggleNearbyPlayer} onMessage={onMessagePlayer} full={trimmedPlayers.flat().every(Boolean)} visible={nearbyPresence.visible} loading={nearbyPresence.loading} error={nearbyPresence.error || rosterError} onVisibility={nearbyPresence.setDiscoveryVisible} /></View>}
       </View>}
 
       {setupStage === 2 && !joinedInvite && <View style={styles.formPart}>
@@ -905,9 +994,9 @@ function SetupScreen({ courts, courtsLoading, courtsError, onRefreshCourts, onBo
       <View style={styles.scoringMethodSection}>
         <View style={styles.sectionHeadingRow}><View><Text style={styles.sectionLabel}>SCORING METHOD</Text><Text style={styles.sectionHelper}>Choose how score updates are delivered courtside</Text></View><View style={styles.scoringMethodSelected}><Icon name={scoringMethod === 'voice' ? 'volume-high' : scoringMethod === 'shout' ? 'mic' : 'hand-left'} size={13} color={C.teal} /><Text style={styles.scoringMethodSelectedText}>{scoringMethod === 'shout' ? 'VOICE SCORE' : scoringMethod.toUpperCase()}</Text></View></View>
         <View accessibilityRole="radiogroup" style={styles.scoringMethodChoices}>
-          <Pressable accessibilityRole="radio" accessibilityState={{ checked: scoringMethod === 'voice' }} onPress={() => setScoringMethod('voice')} style={({ pressed }) => [styles.scoringMethodChoice, scoringMethod === 'voice' && styles.scoringMethodChoiceActive, pressed && styles.pressed]}><View style={[styles.scoringMethodChoiceIcon, scoringMethod === 'voice' && styles.scoringMethodChoiceIconActive]}><Icon name="volume-high-outline" size={21} color={scoringMethod === 'voice' ? '#0E2321' : C.teal} /></View><Text style={styles.scoringMethodChoiceTitle}>Voice assisted</Text><Text style={styles.scoringMethodChoiceMeta}>Tap the rally winner and Peakle announces the score and next server aloud.</Text><View style={[styles.scoringMethodRadio, scoringMethod === 'voice' && styles.scoringMethodRadioActive]}>{scoringMethod === 'voice' ? <View style={styles.scoringMethodRadioDot} /> : null}</View></Pressable>
+          <Pressable accessibilityRole="radio" accessibilityState={{ checked: scoringMethod === 'voice' }} onPress={() => setScoringMethod('voice')} style={({ pressed }) => [styles.scoringMethodChoice, scoringMethod === 'voice' && styles.scoringMethodChoiceActive, pressed && styles.pressed]}><View style={[styles.scoringMethodChoiceIcon, scoringMethod === 'voice' && styles.scoringMethodChoiceIconActive]}><Icon name="volume-high-outline" size={21} color={scoringMethod === 'voice' ? '#0E2321' : C.teal} /></View><Text style={styles.scoringMethodChoiceTitle}>Announce score</Text><Text style={styles.scoringMethodChoiceMeta}>You tap the rally winner; Peakle reads the score and next server aloud on every phone.</Text><View style={[styles.scoringMethodRadio, scoringMethod === 'voice' && styles.scoringMethodRadioActive]}>{scoringMethod === 'voice' ? <View style={styles.scoringMethodRadioDot} /> : null}</View></Pressable>
           <Pressable accessibilityRole="radio" accessibilityState={{ checked: scoringMethod === 'manual' }} onPress={() => setScoringMethod('manual')} style={({ pressed }) => [styles.scoringMethodChoice, scoringMethod === 'manual' && styles.scoringMethodChoiceActive, pressed && styles.pressed]}><View style={[styles.scoringMethodChoiceIcon, scoringMethod === 'manual' && styles.scoringMethodChoiceIconActive]}><Icon name="hand-left-outline" size={21} color={scoringMethod === 'manual' ? '#0E2321' : C.teal} /></View><Text style={styles.scoringMethodChoiceTitle}>Manual</Text><Text style={styles.scoringMethodChoiceMeta}>Use quiet one-tap controls for every rally, side-out, and correction.</Text><View style={[styles.scoringMethodRadio, scoringMethod === 'manual' && styles.scoringMethodRadioActive]}>{scoringMethod === 'manual' ? <View style={styles.scoringMethodRadioDot} /> : null}</View></Pressable>
-          {NATIVE_VOICE_SCORING_ENABLED ? <Pressable accessibilityRole="radio" accessibilityState={{ checked: scoringMethod === 'shout' }} onPress={() => setScoringMethod('shout')} style={({ pressed }) => [styles.scoringMethodChoice, scoringMethod === 'shout' && styles.scoringMethodChoiceActive, pressed && styles.pressed]}><View style={[styles.scoringMethodChoiceIcon, scoringMethod === 'shout' && styles.scoringMethodChoiceIconActive]}><Icon name="mic-outline" size={21} color={scoringMethod === 'shout' ? '#0E2321' : C.teal} /></View><Text style={styles.scoringMethodChoiceTitle}>Voice scoring</Text><Text style={styles.scoringMethodChoiceMeta}>Say an explicit command such as “Point team one,” “[player name] serving,” or “Score two one two.”</Text><View style={[styles.scoringMethodRadio, scoringMethod === 'shout' && styles.scoringMethodRadioActive]}>{scoringMethod === 'shout' ? <View style={styles.scoringMethodRadioDot} /> : null}</View></Pressable> : null}
+          {VOICE_COMMAND_SCORING_ENABLED ? <Pressable accessibilityRole="radio" accessibilityState={{ checked: scoringMethod === 'shout' }} onPress={() => setScoringMethod('shout')} style={({ pressed }) => [styles.scoringMethodChoice, scoringMethod === 'shout' && styles.scoringMethodChoiceActive, pressed && styles.pressed]}><View style={[styles.scoringMethodChoiceIcon, scoringMethod === 'shout' && styles.scoringMethodChoiceIconActive]}><Icon name="mic-outline" size={21} color={scoringMethod === 'shout' ? '#0E2321' : C.teal} /></View><Text style={styles.scoringMethodChoiceTitle}>Call the score</Text><Text style={styles.scoringMethodChoiceMeta}>Peakle listens. Say “Point team one,” “Point [player],” “[player] serving,” or “Score two one two.”</Text><View style={[styles.scoringMethodRadio, scoringMethod === 'shout' && styles.scoringMethodRadioActive]}>{scoringMethod === 'shout' ? <View style={styles.scoringMethodRadioDot} /> : null}</View></Pressable> : null}
         </View>
       </View>
       <Pressable accessibilityRole="button" accessibilityState={{ expanded: showAdvanced }} onPress={() => setShowAdvanced((value) => !value)} style={({ pressed }) => [styles.advancedToggle, pressed && styles.pressed]}>
@@ -929,7 +1018,7 @@ function SetupScreen({ courts, courtsLoading, courtsError, onRefreshCourts, onBo
         <View style={styles.scorerPicker}>
           {(scorerSource === 'host'
             ? [{ id: currentUserId, name: currentUserName || 'You', meta: 'Recommended · this device controls scoring', color: C.teal }]
-            : registeredScorerCandidates.map((person) => ({ ...person, meta: 'Signed-in player · scores from their device', color: C.teal }))).map((person) => {
+            : registeredScorerCandidates.map((person) => ({ ...person, meta: person.sideline ? 'Sideline scorer · not playing · scores from their device' : 'Signed-in player · scores from their device', color: person.sideline ? '#3C5A8A' : C.teal }))).map((person) => {
             const selected = scorerId === person.id;
             return (
               <Pressable key={person.id} accessibilityRole="radio" accessibilityState={{ checked: selected }} accessibilityLabel={`Choose ${person.name} as scorer`} onPress={() => { setScorer(person.name); setScorerId(person.id); }} style={({ pressed }) => [styles.scorerOption, selected && styles.scorerOptionSelected, pressed && styles.pressed]}>
@@ -940,8 +1029,18 @@ function SetupScreen({ courts, courtsLoading, courtsError, onRefreshCourts, onBo
             );
           })}
         </View>
-        {scorerSource === 'player' && !registeredScorerCandidates.length && <Text style={styles.emptyScorerText}>No signed-in player is available yet. Keep “Host scores,” or invite a registered player and wait for them to join.</Text>}
-        {mode === 'ranked' && <View style={styles.scorerHint}><Icon name="shield-checkmark-outline" size={15} color={C.teal} /><Text style={styles.scorerHintText}>Ranked scoring can only be assigned to the signed-in host or an accepted signed-in player.</Text></View>}
+        {scorerSource === 'player' && !registeredScorerCandidates.length && <Text style={styles.emptyScorerText}>No signed-in scorer yet. Invite a sideline scorer below, or keep “Host scores.”</Text>}
+        {scorerSource === 'player' && <SidelineScorerInvite
+          candidates={[...followingPlayers, ...teammates, ...nearbyPlayers].filter((profile, index, rows) => profile?.id && rows.findIndex((row) => row?.id === profile.id) === index
+            && profile.id !== currentUserId
+            && !registeredPlayers.some((player) => player.id === profile.id)
+            && !playerInvites.some((invite) => invite.recipient_id === profile.id && ['pending', 'accepted'].includes(invite.status)))}
+          excludedIds={[currentUserId, ...registeredPlayers.map((player) => player.id), ...playerInvites.filter((invite) => ['pending', 'accepted'].includes(invite.status)).map((invite) => invite.recipient_id)]}
+          invites={scorerInvites}
+          onInvite={inviteSidelineScorer}
+          onWithdraw={withdrawSidelineScorer}
+        />}
+        {mode === 'ranked' && <View style={styles.scorerHint}><Icon name="shield-checkmark-outline" size={15} color={C.teal} /><Text style={styles.scorerHintText}>Ranked scoring can only be assigned to the signed-in host, an accepted signed-in player, or an accepted sideline scorer. Registered players still confirm the result.</Text></View>}
         <SegmentedControl label="POINTS TO WIN" value={target} onChange={setTarget} options={[11, 15, 21].map((value) => ({ value, label: String(value) }))} />
         <SegmentedControl label="MATCH LENGTH" value={bestOf} onChange={setBestOf} options={[
           { value: 1, label: '1 game' },
@@ -1222,6 +1321,8 @@ const breakCardLightStyles = StyleSheet.create({
   meta: { marginTop: 4, color: '#667570', fontSize: 10, lineHeight: 14 },
   continueButton: { minWidth: 76, minHeight: 48, paddingHorizontal: 9, flexShrink: 0, alignItems: 'center', justifyContent: 'center', gap: 2, borderRadius: 13, backgroundColor: '#D6E94A' },
   continueText: { color: '#0E2321', fontSize: 10, fontWeight: '900' },
+  actions: { flexShrink: 0, alignItems: 'center', gap: 6 },
+  undo: { minHeight: 28, paddingHorizontal: 6, flexDirection: 'row', alignItems: 'center', gap: 3 },
   waiting: { width: 68, minHeight: 48, flexShrink: 0, alignItems: 'center', justifyContent: 'center', gap: 3, borderRadius: 13, borderWidth: 1, borderColor: '#C9DCD7', backgroundColor: '#FFFFFF' },
   waitingText: { color: '#1C6B66', fontSize: 9, fontWeight: '900', letterSpacing: .4 },
 });
@@ -1253,7 +1354,7 @@ function MatchBoxScore({ match, games, scores, gameScores, elapsed, gameElapsed,
   );
 }
 
-function GameBreakCard({ gameBreak, canScore, onContinue }) {
+function GameBreakCard({ gameBreak, canScore, onContinue, onUndo }) {
   const { isDark } = useTheme();
   const breakStyles = isDark ? breakCardDarkStyles : breakCardLightStyles;
   const [remaining, setRemaining] = useState(gameBreak.durationSeconds);
@@ -1267,7 +1368,7 @@ function GameBreakCard({ gameBreak, canScore, onContinue }) {
     <View style={breakStyles.card}>
       <View style={breakStyles.timer}><Text maxFontSizeMultiplier={1.2} style={breakStyles.timerValue}>{remaining}</Text><Text maxFontSizeMultiplier={1.2} style={breakStyles.timerUnit}>SEC</Text></View>
       <View style={breakStyles.copy}><Text maxFontSizeMultiplier={1.2} numberOfLines={2} style={breakStyles.eyebrow}>GAME {gameBreak.completedGame} COMPLETE · WATER BREAK</Text><Text maxFontSizeMultiplier={1.2} style={breakStyles.title}>{remaining > 0 ? 'Recover when you need it.' : 'Break complete. Ready for the next game?'}</Text><Text maxFontSizeMultiplier={1.2} numberOfLines={3} style={breakStyles.meta}>{gameBreak.score[0]}–{gameBreak.score[1]} · Game {gameBreak.nextGame} starts with {gameBreak.nextPlayer} serving.</Text></View>
-      {canScore ? <Pressable accessibilityRole="button" onPress={onContinue} style={({ pressed }) => [breakStyles.continueButton, pressed && styles.pressed]}><Icon name="play" size={16} color="#0E2321" /><Text maxFontSizeMultiplier={1.2} style={breakStyles.continueText}>{remaining > 0 ? 'Continue' : `Start G${gameBreak.nextGame}`}</Text></Pressable> : <View style={breakStyles.waiting}><Icon name="hourglass-outline" size={15} color={isDark ? '#72C7BE' : '#1C6B66'} /><Text maxFontSizeMultiplier={1.2} style={breakStyles.waitingText}>SCORER</Text></View>}
+      {canScore ? <View style={breakStyles.actions}><Pressable accessibilityRole="button" onPress={onContinue} style={({ pressed }) => [breakStyles.continueButton, pressed && styles.pressed]}><Icon name="play" size={16} color="#0E2321" /><Text maxFontSizeMultiplier={1.2} style={breakStyles.continueText}>{remaining > 0 ? 'Continue' : `Start G${gameBreak.nextGame}`}</Text></Pressable>{onUndo ? <Pressable accessibilityRole="button" accessibilityLabel="Undo game point" hitSlop={6} onPress={onUndo} style={({ pressed }) => [breakStyles.undo, pressed && styles.pressed]}><Icon name="arrow-undo-outline" size={12} color={isDark ? '#72C7BE' : '#1C6B66'} /><Text maxFontSizeMultiplier={1.2} style={breakStyles.waitingText}>UNDO</Text></Pressable> : null}</View> : <View style={breakStyles.waiting}><Icon name="hourglass-outline" size={15} color={isDark ? '#72C7BE' : '#1C6B66'} /><Text maxFontSizeMultiplier={1.2} style={breakStyles.waitingText}>SCORER</Text></View>}
     </View>
   );
 }
@@ -1313,6 +1414,10 @@ function LiveMatch({ match, sharedSession = null, currentUserId, onSyncSharedSta
   const [paused, setPaused] = useState(initialSharedState.paused ?? false);
   const [pointPause, setPointPause] = useState(false);
   const [pointAnnouncement, setPointAnnouncement] = useState(null);
+  const announcementRun = useRef(0);
+  // Browsers only allow speech after a tap on the page, so watchers on the web
+  // turn voice on themselves; phones start with it on.
+  const [watcherVoice, setWatcherVoice] = useState(Platform.OS !== 'web');
   const [pointEvent, setPointEvent] = useState(initialSharedState.pointEvent || null);
   const [rallyLog, setRallyLog] = useState(() => (initialSharedState.rallyLog || match.rallyLog || []).map((item) => ({ ...item, score: Array.isArray(item.score) ? [...item.score] : [0, 0] })));
   const initialElapsed = initialSharedState.elapsed ?? match.elapsed ?? 0;
@@ -1328,7 +1433,7 @@ function LiveMatch({ match, sharedSession = null, currentUserId, onSyncSharedSta
   const [manualServeTeam, setManualServeTeam] = useState(null);
   const [showEnd, setShowEnd] = useState(false);
   const [focusReturns, setFocusReturns] = useState(match.focusReturns || []);
-  const [scoringMethod, setScoringMethod] = useState(match.scoringMethod === 'voice' ? 'voice' : NATIVE_VOICE_SCORING_ENABLED && match.scoringMethod === 'shout' ? 'shout' : 'manual');
+  const [scoringMethod, setScoringMethod] = useState(match.scoringMethod === 'voice' ? 'voice' : VOICE_COMMAND_SCORING_ENABLED && match.scoringMethod === 'shout' ? 'shout' : 'manual');
   const [shoutFeedback, setShoutFeedback] = useState(null);
   const [scorerMessage, setScorerMessage] = useState(initialSharedState.scorerMessage || (match.reason === 'unfinished' ? 'Match resumed from the saved score.' : `Match started — ${match.firstServerPlayer || teamName(match.players[match.firstServer ?? 0])} serves first.`));
   const finishedRef = useRef(false);
@@ -1366,23 +1471,54 @@ function LiveMatch({ match, sharedSession = null, currentUserId, onSyncSharedSta
   }));
 
 
+  // The court stays still and the announcement stays up until the spoken score
+  // ends. When the scorer uses voice, every other phone speaks it too unless
+  // that player muted it; a muted phone holds for the estimated length.
   const playPointAnnouncement = useCallback((announcement, onComplete) => {
+    const run = ++announcementRun.current;
+    const speaking = canScore ? scoringMethod === 'voice' : Boolean(announcement.spoken) && watcherVoice;
     setPointAnnouncement(announcement);
-    if (scoringMethod === 'voice' && canScore) speakScoreAnnouncement(announcement);
-    else announceScoreForVoiceOver(announcement);
+    const voice = speaking
+      ? speakScoreAnnouncement(announcement)
+      : new Promise((resolve) => setTimeout(resolve, announcement.spoken ? estimateScoreAnnouncementMs(announcement) : 0));
+    if (!speaking) announceScoreForVoiceOver(announcement);
     setPointPause(true);
     celebration.stopAnimation();
     celebration.setValue(0);
-    Animated.timing(celebration, { toValue: 1, duration: 1900, easing: Easing.inOut(Easing.quad), useNativeDriver: Platform.OS !== 'web' }).start(() => {
-      setPointAnnouncement(null);
-      setPointPause(false);
-      celebration.setValue(0);
-      onComplete?.();
+    const shown = new Promise((resolve) => {
+      Animated.timing(celebration, { toValue: .88, duration: 1670, easing: Easing.out(Easing.quad), useNativeDriver: Platform.OS !== 'web' }).start(resolve);
     });
-  }, [canScore, celebration, scoringMethod]);
+    Promise.all([shown, voice]).then(() => {
+      if (run !== announcementRun.current) return;
+      Animated.timing(celebration, { toValue: 1, duration: 230, easing: Easing.in(Easing.quad), useNativeDriver: Platform.OS !== 'web' }).start(() => {
+        if (run !== announcementRun.current) return;
+        setPointAnnouncement(null);
+        setPointPause(false);
+        celebration.setValue(0);
+        onComplete?.();
+      });
+    });
+  }, [canScore, celebration, scoringMethod, watcherVoice]);
+
+  // Turning voice on is a tap, which also unlocks speech in the browser.
+  const toggleWatcherVoice = () => {
+    const next = !watcherVoice;
+    setWatcherVoice(next);
+    if (next) speakScoreAnnouncement({ player: 'Voice on' });
+    else stopScoreAnnouncement();
+  };
+
+  const cancelPointAnnouncement = () => {
+    announcementRun.current += 1;
+    stopScoreAnnouncement();
+    celebration.stopAnimation();
+    celebration.setValue(0);
+    setPointAnnouncement(null);
+    setPointPause(false);
+  };
 
   useEffect(() => {
-    return () => { celebration.stopAnimation(); stopScoreAnnouncement(); };
+    return () => { announcementRun.current += 1; celebration.stopAnimation(); stopScoreAnnouncement(); };
   }, [celebration]);
 
   const changeScoringMethod = (method) => {
@@ -1470,6 +1606,7 @@ function LiveMatch({ match, sharedSession = null, currentUserId, onSyncSharedSta
 
   const gamesNeeded = Math.ceil(match.bestOf / 2);
   const scoringLocked = paused || pointPause || Boolean(gameBreak) || !canScore;
+  const undoLocked = paused || !canScore;
 
   const openScorerHandoff = () => {
     if (!isHost || !onHandoffScorer) return;
@@ -1498,7 +1635,7 @@ function LiveMatch({ match, sharedSession = null, currentUserId, onSyncSharedSta
   };
 
   const runPointCelebration = (announcement, onComplete) => {
-    const event = { ...announcement, id: `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 7)}` };
+    const event = { ...announcement, spoken: scoringMethod === 'voice', id: `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 7)}` };
     appliedPointEventId.current = event.id;
     setPointEvent(event);
     playPointAnnouncement(event, onComplete);
@@ -1748,8 +1885,12 @@ function LiveMatch({ match, sharedSession = null, currentUserId, onSyncSharedSta
     }
   }, [scoringMethod, shoutUnavailable, shoutErrorMessage]);
 
+  // A mistaken tap can be undone at once, even while its announcement is still
+  // playing or during the water break it started; the pending game or match
+  // completion is cancelled with it.
   const undo = () => {
-    if (!history.length || paused || pointPause || finishedRef.current) return;
+    if (!history.length || paused || !canScore || finishedRef.current) return;
+    if (pointPause) cancelPointAnnouncement();
     const previous = history[history.length - 1];
     setScores(previous.scores);
     setGames(previous.games);
@@ -1765,7 +1906,13 @@ function LiveMatch({ match, sharedSession = null, currentUserId, onSyncSharedSta
     setEvenSidePlayerIndexes(previous.evenSidePlayerIndexes || configuredEvenSidePlayerIndexes);
     setHistory((items) => items.slice(0, -1));
     setScorerMessage(`Last rally removed · ${previous.scores[0]}–${previous.scores[1]}`);
-    bounceBall();
+    runPointCelebration({
+      player: 'Score corrected',
+      team: 'Last rally removed',
+      action: 'POINT UNDONE',
+      score: `${previous.scores[0]} – ${previous.scores[1]}`,
+      nextServe: `${match.players[previous.server][previous.servingPlayerIndex]} serving · Server ${previous.serviceNumber}`,
+    });
   };
 
   const endEarly = () => {
@@ -1808,14 +1955,14 @@ function LiveMatch({ match, sharedSession = null, currentUserId, onSyncSharedSta
         </View>
       </View>
 
-      {!canScore && <View style={styles.scorerWatchBanner}><Icon name="eye-outline" color={C.teal} /><View style={styles.flex}><Text style={styles.scorerWatchTitle}>Watching live score</Text><Text style={styles.scorerWatchText}>{liveMatch.scorer} has the scoring controls. Score changes and rally announcements appear here automatically.</Text></View></View>}
+      {!canScore && <View style={styles.scorerWatchBanner}><Icon name="eye-outline" color={C.teal} /><View style={styles.flex}><Text style={styles.scorerWatchTitle}>Watching live score</Text><Text style={styles.scorerWatchText}>{liveMatch.scorer} has the scoring controls. Score changes and rally announcements appear here automatically.</Text></View><Pressable accessibilityRole="switch" accessibilityState={{ checked: watcherVoice }} accessibilityLabel="Speak the score on this phone" onPress={toggleWatcherVoice} style={({ pressed }) => [styles.watchVoiceButton, watcherVoice && styles.watchVoiceButtonOn, pressed && styles.pressed]}><Icon name={watcherVoice ? 'volume-high-outline' : 'volume-mute-outline'} size={15} color={watcherVoice ? '#0E2321' : C.teal} /><Text style={[styles.watchVoiceText, watcherVoice && styles.watchVoiceTextOn]}>{watcherVoice ? 'VOICE ON' : 'VOICE OFF'}</Text></Pressable></View>}
       {paused && <View style={styles.pausedBanner}><Icon name="pause-circle" color={C.teal} /><Text style={styles.pausedText}>Match paused — scoring is locked.</Text></View>}
 
       <View {...webLayout('live-grid')}>
       <View>
       <LiveCourt match={liveMatch} ballBounce={ballBounce} rallyTravel={rallyTravel} scorerMessage={scorerMessage} paused={paused} breakActive={Boolean(gameBreak)} scores={scores} server={server} servingPlayerIndex={servingPlayerIndex} serviceNumber={serviceNumber} celebration={celebration} pointAnnouncement={pointAnnouncement} canScore={canScore} isHost={isHost} onChangeScorer={openScorerHandoff} />
 
-      {gameBreak ? <GameBreakCard gameBreak={gameBreak} canScore={canScore} onContinue={continueAfterBreak} /> : null}
+      {gameBreak ? <GameBreakCard gameBreak={gameBreak} canScore={canScore} onContinue={continueAfterBreak} onUndo={history.length ? undo : null} /> : null}
 
       <FocusTracker challenge={match.focusChallenge} returns={focusReturns} paused={scoringLocked} onRecord={(deep) => setFocusReturns((items) => items.length < match.focusChallenge.attempts ? [...items, deep] : items)} onUndo={() => setFocusReturns((items) => items.slice(0, -1))} />
 
@@ -1834,7 +1981,7 @@ function LiveMatch({ match, sharedSession = null, currentUserId, onSyncSharedSta
             </Text>
           </View>
           <View accessibilityRole="radiogroup" style={styles.liveScoringMethodSwitch}>
-            {[{ value: 'manual', label: 'Manual', icon: 'hand-left-outline' }, { value: 'voice', label: 'Voice', icon: 'volume-high-outline' }, { value: 'shout', label: 'Mic', icon: 'mic-outline' }].filter((option) => NATIVE_VOICE_SCORING_ENABLED || option.value !== 'shout').map((option) => {
+            {[{ value: 'manual', label: 'Manual', icon: 'hand-left-outline' }, { value: 'voice', label: 'Announce', icon: 'volume-high-outline' }, { value: 'shout', label: 'Listen', icon: 'mic-outline' }].filter((option) => VOICE_COMMAND_SCORING_ENABLED || option.value !== 'shout').map((option) => {
               const active = scoringMethod === option.value;
               return <Pressable key={option.value} accessibilityRole="radio" accessibilityState={{ checked: active }} onPress={() => changeScoringMethod(option.value)} style={[styles.liveScoringMethodOption, active && styles.liveScoringMethodOptionActive]}><Icon name={active && option.value === 'shout' && shoutListening ? 'mic' : option.icon} size={13} color={active ? '#0E2321' : C.ink40} /><Text style={[styles.liveScoringMethodText, active && styles.liveScoringMethodTextActive]}>{option.label}</Text></Pressable>;
             })}
@@ -1860,11 +2007,11 @@ function LiveMatch({ match, sharedSession = null, currentUserId, onSyncSharedSta
             {[0, 1].map((team) => <Pressable key={team} accessibilityLabel={teamName(match.players[team]) + ' won the rally'} disabled={scoringLocked} onPress={() => recordRally(team)} style={({ pressed }) => [styles.rallyWinnerButton, team === 1 && styles.rallyWinnerButtonAway, scoringLocked && styles.pointDisabled, pressed && !scoringLocked && styles.pressed]}><Text style={styles.rallyWinnerTag}>TEAM {team + 1}</Text><Text numberOfLines={2} style={styles.rallyWinnerName}>{teamName(match.players[team])}</Text><Text style={styles.rallyWinnerAction}>WON RALLY</Text></Pressable>)}
           </View>
           <Pressable accessibilityRole="button" accessibilityLabel="Correct serving player and server number" onPress={openManualServeCorrection} style={({ pressed }) => [styles.correctServerButton, pressed && styles.pressed]}><Icon name="swap-horizontal-outline" size={14} color={C.teal} /><Text style={styles.correctServerText}>Correct serving player or server number</Text></Pressable>
-          <Text style={styles.autoServeHint}><Icon name={scoringMethod === 'voice' ? 'volume-high-outline' : scoringMethod === 'shout' ? 'mic-outline' : 'flash-outline'} size={11} color={C.teal} /> {scoringMethod === 'voice' ? 'Voice announcements are on' : scoringMethod === 'shout' ? 'Say “Point team one,” “[player] serving,” or “Score two one two”' : 'Serving rotation updates automatically'}</Text>
+          <Text style={styles.autoServeHint}><Icon name={scoringMethod === 'voice' ? 'volume-high-outline' : scoringMethod === 'shout' ? 'mic-outline' : 'flash-outline'} size={11} color={C.teal} /> {scoringMethod === 'voice' ? 'Voice announcements are on' : scoringMethod === 'shout' ? 'Say “Point team one,” “Point [player],” or “[player] serving”' : 'Serving rotation updates automatically'}</Text>
         </View>
 
       <View style={styles.controls}>
-        <Pressable accessibilityLabel="Undo last point" disabled={!history.length || scoringLocked} onPress={undo} style={({ pressed }) => [styles.controlButton, (!history.length || scoringLocked) && styles.controlDisabled, pressed && styles.pressed]}><Icon name="arrow-undo-outline" color={!history.length || scoringLocked ? C.ink40 : C.teal} /><Text style={[styles.controlText, (!history.length || scoringLocked) && styles.controlTextDisabled]}>Undo</Text></Pressable>
+        <Pressable accessibilityLabel="Undo last point" disabled={!history.length || undoLocked} onPress={undo} style={({ pressed }) => [styles.controlButton, (!history.length || undoLocked) && styles.controlDisabled, pressed && styles.pressed]}><Icon name="arrow-undo-outline" color={!history.length || undoLocked ? C.ink40 : C.teal} /><Text style={[styles.controlText, (!history.length || undoLocked) && styles.controlTextDisabled]}>Undo</Text></Pressable>
         <Pressable accessibilityLabel={paused ? 'Resume match' : 'Pause match'} disabled={pointPause || !canScore} onPress={() => setPaused((value) => !value)} style={({ pressed }) => [styles.controlButton, styles.pauseButton, (pointPause || !canScore) && styles.controlDisabled, pressed && !pointPause && canScore && styles.pressed]}><Icon name={paused ? 'play' : 'pause'} color="#0E2321" /><Text style={styles.pauseText}>{paused ? 'Resume' : 'Pause'}</Text></Pressable>
       </View>
       </>}
@@ -2184,7 +2331,9 @@ export default function PlayScreen({ route, navigation }) {
     }
     handledSharedCompletion.current = null;
     const nextMatch = { ...match, firstServer: serveDraw.team, firstServerPlayer: serveDraw.player };
-    const hasConnectedPlayers = (nextMatch.registeredPlayers || []).some((player) => player.id && player.id !== user?.id);
+    // A remote scorer (another player or a sideline scorer) needs the shared session too.
+    const hasConnectedPlayers = (nextMatch.registeredPlayers || []).some((player) => player.id && player.id !== user?.id)
+      || Boolean(nextMatch.scorerId && nextMatch.scorerId !== user?.id);
     if (hasConnectedPlayers) {
       try {
         const startedAt = Date.now();
@@ -2253,7 +2402,8 @@ export default function PlayScreen({ route, navigation }) {
     setResultSaveState('saving');
     setResultSaveError('');
     try {
-      const savedMatch = await saveCompletedMatch(user.id, completedResult, user.name);
+      // A sideline scorer records the result but is never matched into the lineup by name.
+      const savedMatch = await saveCompletedMatch(user.id, completedResult, completedResult.sidelineScorerId === user.id ? null : user.name);
       const recordedResult = { ...completedResult, savedMatchId: savedMatch.id };
       setResult(recordedResult);
       setUnfinishedMatch(null);
@@ -2482,6 +2632,7 @@ export default function PlayScreen({ route, navigation }) {
 const shadow = Platform.select({ ios: { shadowColor: C.ink, shadowOpacity: .09, shadowRadius: 14, shadowOffset: { width: 0, height: 5 } }, android: { elevation: 4 } });
 
 const lightStyles = createMobileStyleSheet({
+  sidelineCard: { marginTop: 10, padding: 11, gap: 8, borderRadius: 17, borderWidth: 1, borderColor: C.line, backgroundColor: C.surface }, sidelineLead: { color: C.ink40, fontSize: 9, lineHeight: 13 }, sidelineRow: { minHeight: 54, flexDirection: 'row', alignItems: 'center', gap: 10 }, sidelineStatus: { marginVertical: 6 }, sidelineEmpty: { marginVertical: 4, color: C.ink40, fontSize: 9, textAlign: 'center' },
   safe: { flex: 1, backgroundColor: C.paper },
   flex: { flex: 1 },
   content: { paddingHorizontal: 20, paddingTop: 18, paddingBottom: 126 },
@@ -2542,6 +2693,7 @@ const lightStyles = createMobileStyleSheet({
   rankedNote: { marginTop: 12, padding: 12, flexDirection: 'row', alignItems: 'center', gap: 8, borderRadius: 12, backgroundColor: '#E5F0ED' }, rankedNoteText: { flex: 1, color: C.teal, fontSize: 9, lineHeight: 14, fontWeight: '700' },
   primaryButton: { minHeight: 54, marginTop: 24, paddingHorizontal: 17, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8, borderRadius: 15, backgroundColor: C.optic }, primaryText: { flex: 1, color: '#0E2321', fontSize: 13, fontWeight: '900', textAlign: 'center' }, wizardActions: { marginTop: 2, flexDirection: 'row', alignItems: 'flex-end', gap: 8 }, wizardPrimary: { flex: 1 }, wizardBack: { minWidth: 88, minHeight: 54, marginTop: 24, paddingHorizontal: 13, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 5, borderRadius: 15, borderWidth: 1, borderColor: C.line, backgroundColor: C.surface }, wizardBackText: { color: C.teal, fontSize: 10, fontWeight: '900' }, joinedMatchCard: { marginTop: 2, overflow: 'hidden', padding: 16, borderWidth: 1, borderColor: C.line, borderRadius: 20, borderBottomLeftRadius: 9, borderBottomRightRadius: 9, backgroundColor: C.surface, ...shadow }, joinedMatchHead: { flexDirection: 'row', alignItems: 'center', gap: 11 }, joinedHostAvatar: { width: 50, height: 50, alignItems: 'center', justifyContent: 'center', borderRadius: 16 }, joinedHostInitials: { color: C.surface, fontSize: 11, fontWeight: '900' }, joinedMatchEyebrow: { color: C.teal, fontSize: 7, fontWeight: '900', letterSpacing: .8 }, joinedMatchHost: { marginTop: 2, color: C.ink, fontSize: 15, fontWeight: '900' }, joinedMatchLead: { marginTop: 3, color: C.ink40, fontSize: 8, lineHeight: 12 }, joinedConfirmedBadge: { width: 34, height: 34, alignItems: 'center', justifyContent: 'center', borderRadius: 17, backgroundColor: C.optic }, joinedMatchDetails: { minHeight: 67, marginTop: 15, paddingVertical: 11, flexDirection: 'row', alignItems: 'center', borderTopWidth: 1, borderBottomWidth: 1, borderColor: C.line }, joinedMatchDetail: { minWidth: 0, flex: 1, paddingHorizontal: 4, flexDirection: 'row', alignItems: 'center', gap: 8 }, joinedDetailIcon: { width: 34, height: 34, alignItems: 'center', justifyContent: 'center', borderRadius: 11, backgroundColor: '#E5F0ED' }, joinedDetailLabel: { color: C.ink40, fontSize: 6, fontWeight: '900', letterSpacing: .65 }, joinedDetailValue: { marginTop: 2, color: C.ink, fontSize: 9, fontWeight: '900' }, joinedDetailDivider: { width: 1, height: 38, marginHorizontal: 7, backgroundColor: C.line }, joinedRulesRow: { minHeight: 34, paddingTop: 11, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6 }, joinedRulesText: { color: C.ink40, fontSize: 8, fontWeight: '700' }, joinedWaitingCard: { marginTop: 12, padding: 16, flexDirection: 'row', alignItems: 'center', gap: 12, borderWidth: 1, borderColor: C.teal, borderRadius: 18, backgroundColor: '#E5F0ED' }, joinedWaitingIcon: { width: 45, height: 45, alignItems: 'center', justifyContent: 'center', borderRadius: 23, backgroundColor: C.optic }, joinedWaitingEyebrow: { color: C.teal, fontSize: 7, fontWeight: '900', letterSpacing: .8 }, joinedWaitingTitle: { marginTop: 3, color: C.ink, fontSize: 13, fontWeight: '900' }, joinedWaitingText: { marginTop: 4, color: C.ink40, fontSize: 9, lineHeight: 14 }, leaveJoinedButton: { minWidth: 72, minHeight: 44, paddingHorizontal: 11, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 5, borderWidth: 1, borderColor: C.line, borderRadius: 13, backgroundColor: C.surface }, leaveJoinedText: { color: C.brick, fontSize: 10, fontWeight: '900' }, disabled: { opacity: .45 }, validation: { marginTop: 8, color: C.brick, fontSize: 9, textAlign: 'center' }, pressed: { opacity: .78, transform: [{ scale: .985 }] },
   liveContent: { paddingBottom: 42 }, liveHero: { paddingHorizontal: 20, paddingTop: 20, paddingBottom: 14, backgroundColor: C.ink }, liveHeader: { minHeight: 48, flexDirection: 'row', alignItems: 'center', gap: 10 }, heroIconButton: { width: 42, height: 42, alignItems: 'center', justifyContent: 'center', borderRadius: 21, borderWidth: 1, borderColor: 'rgba(255,255,255,.2)' }, liveHeaderCopy: { flex: 1 }, liveEyebrow: { color: 'rgba(255,255,255,.55)', fontSize: 8, fontWeight: '800', letterSpacing: .9 }, liveTitle: { marginTop: 2, color: C.surface, fontSize: 23, fontWeight: '800' }, timerChip: { minHeight: 34, paddingHorizontal: 10, flexDirection: 'row', alignItems: 'center', gap: 5, borderRadius: 17, backgroundColor: 'rgba(255,255,255,.12)' }, timerText: { color: C.surface, fontSize: 11, fontWeight: '800', fontVariant: ['tabular-nums'] }, matchMeta: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 7 }, matchMetaText: { color: 'rgba(255,255,255,.62)', fontSize: 7, fontWeight: '800', letterSpacing: .5 }, metaDot: { width: 3, height: 3, borderRadius: 2, backgroundColor: C.optic },
+  watchVoiceButton: { minHeight: 36, paddingHorizontal: 9, flexShrink: 0, flexDirection: 'row', alignItems: 'center', gap: 4, borderRadius: 11, borderWidth: 1, borderColor: C.line, backgroundColor: C.surface }, watchVoiceButtonOn: { borderColor: '#D6E94A', backgroundColor: '#D6E94A' }, watchVoiceText: { color: C.teal, fontSize: 8, fontWeight: '900', letterSpacing: .4 }, watchVoiceTextOn: { color: '#0E2321' },
   scorerWatchBanner: { marginHorizontal: 20, marginTop: 14, padding: 12, flexDirection: 'row', alignItems: 'center', gap: 9, borderWidth: 1, borderColor: C.line, borderRadius: 13, backgroundColor: '#E5F0ED' }, scorerWatchTitle: { color: C.teal, fontSize: 10, fontWeight: '900' }, scorerWatchText: { marginTop: 2, color: C.ink40, fontSize: 8, lineHeight: 12 }, pausedBanner: { marginHorizontal: 20, marginTop: 14, padding: 11, flexDirection: 'row', justifyContent: 'center', alignItems: 'center', gap: 7, borderRadius: 11, backgroundColor: '#E5F0ED' }, pausedText: { color: C.teal, fontSize: 10, fontWeight: '800' },
   focusTracker: { marginHorizontal: 20, marginTop: 14, padding: 14, borderRadius: 18, borderWidth: 1, borderColor: C.line, backgroundColor: C.surface, ...shadow }, focusTrackerAchieved: { borderColor: '#B9D22C', backgroundColor: '#FAFCEB' }, focusTrackerMissed: { borderColor: '#E2B5A9', backgroundColor: '#FFF9F7' }, focusTrackerHead: { flexDirection: 'row', alignItems: 'center', gap: 9 }, focusTrackerIcon: { width: 38, height: 38, borderRadius: 12, alignItems: 'center', justifyContent: 'center', backgroundColor: C.optic }, focusTrackerCopy: { flex: 1 }, focusTrackerEyebrow: { color: C.teal, fontSize: 7, fontWeight: '900', letterSpacing: .7 }, focusTrackerTitle: { marginTop: 3, color: C.ink, fontSize: 10, lineHeight: 14, fontWeight: '800' }, focusTrackerScore: { color: C.ink, fontSize: 21, fontWeight: '900' }, returnDots: { marginTop: 13, flexDirection: 'row', justifyContent: 'space-between', gap: 3 }, returnDot: { flex: 1, aspectRatio: 1, maxWidth: 28, alignItems: 'center', justifyContent: 'center', borderRadius: 14, borderWidth: 1, borderColor: C.line, backgroundColor: C.paper }, returnDotDeep: { borderColor: C.teal, backgroundColor: C.teal }, returnDotShort: { borderColor: '#E2B5A9', backgroundColor: '#F7EAE6' }, returnDotText: { color: C.ink40, fontSize: 7, fontWeight: '900' }, returnDotTextRecorded: { color: C.surface }, returnActions: { marginTop: 13, flexDirection: 'row', gap: 8 }, returnButton: { flex: 1, minHeight: 45, paddingHorizontal: 9, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 5, borderRadius: 12 }, returnButtonDeep: { backgroundColor: C.teal }, returnButtonShort: { borderWidth: 1, borderColor: '#E2B5A9', backgroundColor: '#F7EAE6' }, returnButtonText: { color: C.surface, fontSize: 9, fontWeight: '900' }, returnButtonShortText: { color: C.brick, fontSize: 9, fontWeight: '900' }, returnUndo: { alignSelf: 'center', minHeight: 34, paddingHorizontal: 9, flexDirection: 'row', alignItems: 'center', gap: 4 }, returnUndoText: { color: C.ink40, fontSize: 8, fontWeight: '700' }, focusTrackerResult: { marginTop: 12, color: C.ink70, fontSize: 9, lineHeight: 14, fontWeight: '700', textAlign: 'center' },
   liveCourtCard: { marginHorizontal: 20, marginTop: 16, overflow: 'hidden', borderRadius: 22, borderBottomLeftRadius: 9, borderBottomRightRadius: 9, borderWidth: 1, borderColor: C.line, backgroundColor: C.surface }, liveCourtHead: { minHeight: 62, paddingHorizontal: 14, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }, liveCourtEyebrow: { color: C.ink40, fontSize: 7, fontWeight: '900', letterSpacing: .8 }, liveCourtTitle: { marginTop: 1, color: C.ink, fontSize: 17, fontWeight: '900' }, liveNowPill: { minHeight: 27, paddingHorizontal: 9, flexDirection: 'row', alignItems: 'center', gap: 5, borderRadius: 14, backgroundColor: C.ink }, liveNowDot: { width: 7, height: 7, borderRadius: 4, backgroundColor: C.optic }, liveNowText: { color: C.surface, fontSize: 7, fontWeight: '900', letterSpacing: .6 },

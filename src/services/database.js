@@ -1380,7 +1380,11 @@ export async function listMyMatches({ limit } = {}) {
   if (limit != null) query = query.limit(limit);
   const { data, error } = await query;
   if (error) throw error;
-  return data.map((match) => {
+  // A sideline scorer records a connected match without playing in it. It
+  // belongs to the registered players, not to the scorer's history or rating.
+  const played = data.filter((match) => match.match_participants.some((player) => player.user_id === userId)
+    || !match.match_participants.some((player) => player.user_id));
+  return played.map((match) => {
     const games = [...match.match_games].sort((a, b) => a.game_number - b.game_number);
     const currentParticipant = match.match_participants.find((player) => player.user_id === userId);
     const currentSide = currentParticipant?.side ?? 0;
