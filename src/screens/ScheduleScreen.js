@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { ActivityIndicator, Linking, Platform, Pressable, RefreshControl, Share, StyleSheet, Text, TextInput, useWindowDimensions, View } from 'react-native';
+import { ActivityIndicator, Linking, Platform, Pressable, RefreshControl, ScrollView as HorizontalScrollView, Share, StyleSheet, Text, TextInput, useWindowDimensions, View } from 'react-native';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { StatusBar } from 'expo-status-bar';
 import { useFocusEffect } from '@react-navigation/native';
@@ -742,12 +742,23 @@ export default function ScheduleScreen({ navigation, route }) {
   );
 
   const legend = (
-    <View style={styles.legend}>
+    <HorizontalScrollView horizontal showsHorizontalScrollIndicator={false} accessibilityLabel="Activity filters" style={styles.legendScroll} contentContainerStyle={styles.legend}>
       {Object.entries(KINDS).map(([kind, meta]) => {
         const hidden = hiddenKinds.includes(kind);
-        return <Pressable key={kind} accessibilityRole="checkbox" accessibilityState={{ checked: !hidden }} accessibilityLabel={`Show ${meta.label}`} onPress={() => toggleKind(kind)} style={({ pressed }) => [styles.legendItem, !hidden && styles.legendItemActive, hidden && styles.legendItemOff, pressed && styles.pressed]}><View style={[styles.legendDot, { backgroundColor: hidden ? 'transparent' : kindColor(kind, isDark), borderColor: kindColor(kind, isDark) }]} /><Text style={styles.legendText}>{meta.label}</Text>{!hidden ? <AppIcon name="checkmark" size={12} color={palette.teal} /> : null}</Pressable>;
+        const color = kindColor(kind, isDark);
+        return (
+          <Pressable key={kind} accessibilityRole="checkbox" accessibilityState={{ checked: !hidden }} aria-checked={!hidden} accessibilityLabel={`Show ${meta.label}`} onPress={() => toggleKind(kind)} style={({ pressed }) => [styles.legendItem, !hidden && styles.legendItemActive, pressed && styles.pressed]}>
+            <View style={[styles.legendIcon, { backgroundColor: `${color}${hidden ? '12' : '22'}` }]}>
+              <AppIcon name={meta.icon} size={22} color={hidden ? palette.ink40 : color} />
+              <View style={[styles.legendCheck, !hidden && { backgroundColor: color, borderColor: color }]}>
+                {!hidden ? <AppIcon name="checkmark" size={10} color={isDark || kind === 'open_play' ? '#0E2321' : '#FFFFFF'} /> : null}
+              </View>
+            </View>
+            <Text style={[styles.legendText, hidden && styles.legendTextOff]}>{meta.label}</Text>
+          </Pressable>
+        );
       })}
-    </View>
+    </HorizontalScrollView>
   );
 
   const agenda = (
@@ -799,7 +810,7 @@ export default function ScheduleScreen({ navigation, route }) {
         {error ? <View style={styles.errorBox}><AppIcon name="cloud-offline-outline" size={17} color={palette.brick} /><Text style={styles.errorText}>{error}</Text><Pressable accessibilityRole="button" onPress={() => load({ refresh: true })}><Text style={styles.retryText}>Retry</Text></Pressable></View> : null}
         {view === 'discover' ? <>{legend}{discover}</> : (
           <View {...webLayout('schedule-columns')} style={styles.columns}>
-            <View style={styles.calendarColumn}><ScheduleCalendar monthKey={monthKey} selectedKey={selectedKey} todayKey={todayKey} byDay={byDay} monthOpen={monthOpen} onToggleMonth={() => setMonthOpen((value) => !value)} onSelect={selectDay} onMonth={changeMonth} expanded={layoutWidth >= 680} kindColor={kindColor} filters={legend} /></View>
+            <View style={styles.calendarColumn}><ScheduleCalendar monthKey={monthKey} selectedKey={selectedKey} todayKey={todayKey} byDay={byDay} monthOpen={monthOpen} onToggleMonth={() => setMonthOpen((value) => !value)} onSelect={selectDay} onMonth={changeMonth} onOpenEntry={(entry) => setOpenEntryId(entry.id)} expanded={layoutWidth >= 680} kindColor={kindColor} filters={legend} /></View>
             <View style={styles.mainColumn}>{agenda}</View>
           </View>
         )}
@@ -856,12 +867,15 @@ const lightStyles = StyleSheet.create({
   dayTextDisabled: { color: C.line },
   dayTextToday: { color: C.teal, fontWeight: '900' },
   dayTextSelected: { color: C.paper, fontWeight: '900' },
-  legend: { marginTop: 12, flexDirection: 'row', flexWrap: 'wrap', gap: 6 },
-  legendItem: { minHeight: 36, paddingHorizontal: 10, flexDirection: 'row', alignItems: 'center', gap: 6, borderRadius: 10, borderWidth: 1, borderColor: C.line, backgroundColor: C.surface },
-  legendItemActive: { backgroundColor: C.tealWash, borderColor: C.tealWash },
-  legendItemOff: { opacity: .55 },
+  legendScroll: { flexGrow: 0, marginTop: 16 },
+  legend: { paddingVertical: 3, paddingHorizontal: 1, flexDirection: 'row', gap: 8 },
+  legendItem: { minHeight: 54, paddingLeft: 7, paddingRight: 14, flexDirection: 'row', alignItems: 'center', gap: 10, borderRadius: 16, borderWidth: 1, borderColor: 'transparent', backgroundColor: C.paper },
+  legendItemActive: { backgroundColor: C.surface, borderColor: C.line },
+  legendIcon: { width: 36, height: 36, alignItems: 'center', justifyContent: 'center', borderRadius: 10 },
+  legendCheck: { position: 'absolute', right: -3, bottom: -2, width: 16, height: 16, borderRadius: 8, borderWidth: 1.5, borderColor: C.ink40, backgroundColor: C.surface, alignItems: 'center', justifyContent: 'center' },
   legendDot: { width: 9, height: 9, borderRadius: 5, borderWidth: 1.5 },
-  legendText: { color: C.ink70, fontSize: 11, fontWeight: '700' },
+  legendText: { color: C.ink, fontSize: 14, fontWeight: '700' },
+  legendTextOff: { color: C.ink40 },
   agenda: { padding: 16, borderRadius: 22, borderWidth: 1, borderColor: C.line, backgroundColor: C.surface },
   discoverAgenda: { marginTop: 18 },
   inviteBanner: { minHeight: 52, marginBottom: 14, paddingHorizontal: 14, flexDirection: 'row', alignItems: 'center', gap: 9, borderRadius: 14, backgroundColor: C.optic },

@@ -41,10 +41,12 @@ import useResponsiveWidth from '../hooks/useResponsiveWidth';
 import { webLongPress } from '../utils/webLongPress';
 import useStableHandlers from '../hooks/useStableHandlers';
 import { saveDirectMedia } from '../components/DirectMessageMedia';
+import ChatInfoScreen, { ChatInfoSection, ChatSearchModal, NicknamesModal, chatInfoColors, extractChatLinks } from '../components/ChatInfoScreen';
+import { listChatNicknames, listTeamChatMutes, muteTeamChat, setChatNickname, unmuteTeamChat } from '../services/chatInfo';
 import { PH_LOCATIONS, formatLocation, locationMatchesSearch, parseLocation } from '../data/phLocations';
 import { useAuth } from '../context/AuthContext';
 import { distanceInKm, formatDistance, geocodeArea, useUserLocation } from '../context/LocationContext';
-import { acknowledgeChatSafety, blockChatUser, cancelTeamJoin, createTeamRecord, deleteTeamChatMedia, editTeamMessage, getChatSafetyStatus, getTeamMessage, hideTeamMessage, inviteTeamMember, listBlockedChatUsers, listMyTeamInvitations, listMyTeamRequests, listPinnedTeamMessages, listTeamConversationSummaries, listTeamMessageReadStates, listTeamMessages, listTeamRequests, listTeamSharedMedia, listTeams, markTeamConversationRead, moderateTeamMessage, removeTeamMember, reportTeamMessage, requestTeamJoin, respondTeamInvitation, reviewTeamRequest, searchTeamInviteCandidates, sendTeamMessage, toggleTeamMessagePin, toggleTeamMessageReaction, unblockChatUser, unsendTeamMessage, updateTeamMemberRole, updateTeamRecord, uploadTeamChatMedia, uploadTeamImage } from '../services/database';
+import { acknowledgeChatSafety, blockChatUser, cancelTeamJoin, createTeamRecord, deleteTeamChatMedia, editTeamMessage, getChatSafetyStatus, getTeamChatLastActive, getTeamMessage, hideTeamMessage, inviteTeamMember, listBlockedChatUsers, listMyTeamInvitations, listMyTeamRequests, listPinnedTeamMessages, listTeamConversationSummaries, listTeamMessageReadStates, listTeamMessages, listTeamRequests, listTeamSharedMedia, listTeams, markTeamConversationRead, moderateTeamMessage, removeTeamMember, reportTeamMessage, requestTeamJoin, respondTeamInvitation, reviewTeamRequest, searchTeamInviteCandidates, sendTeamMessage, toggleTeamMessagePin, toggleTeamMessageReaction, unblockChatUser, unsendTeamMessage, updateTeamMemberRole, updateTeamRecord, uploadTeamChatMedia, uploadTeamImage } from '../services/database';
 import { completeTeamMatch, completeTeamMatchGame, getAcceptedTeamChallenges, getTeamMatch, handoffTeamMatchScorer, recordTeamMatchRally, startTeamMatch, undoTeamMatchRally } from '../services/pickleball';
 import { supabase } from '../lib/supabase';
 import { createDarkStyleSheet, DARK_CONTENT_COLORS, useTheme } from '../context/ThemeContext';
@@ -52,7 +54,7 @@ import { createMobileStyleSheet } from '../utils/mobileStyles';
 import { peekCachedData, readCachedData, withTimeout, writeCachedData } from '../lib/asyncData';
 import { teamScreenCacheKey } from '../lib/cacheKeys';
 import { TEAM_SKILL_LEVELS, skillCategoryForRating } from '../utils/skillCategories';
-import { listDirectConversations } from '../services/directMessages';
+import { isMuteActive, listDirectConversations, muteStatusLabel } from '../services/directMessages';
 import { getFeatureVote, setFeatureVote } from '../services/featureInterest';
 import { speakScoreAnnouncement, stopScoreAnnouncement } from '../utils/scoreAccessibility';
 import { createReactionTracker, toggleOwnReaction } from '../utils/reactions';
@@ -274,7 +276,7 @@ function ClubWarsTeaser() {
   );
 }
 
-function TeamCard({ team, joined, invited, requested, requesting, cancelling, summary, onJoin, onCancel, onOpen, onChat }) {
+function TeamCard({ team, joined, invited, requested, requesting, cancelling, summary, muted = false, onJoin, onCancel, onOpen, onChat }) {
   return (
     <Pressable onPress={onOpen} style={({ pressed }) => [styles.teamCard, pressed && styles.pressed]}>
       <TeamCover team={team}>
@@ -282,7 +284,7 @@ function TeamCard({ team, joined, invited, requested, requesting, cancelling, su
         <View style={styles.coverBottom}><Crest team={team} size={44} /><View style={styles.coverCopy}><Text numberOfLines={1} style={styles.coverTitle}>{team.name}</Text><View style={styles.coverLocation}><Icon name="location-outline" size={13} color="rgba(255,255,255,.82)" /><Text numberOfLines={1} style={styles.coverLocationText}>{team.location}{team.distance ? ` · ${team.distance}` : ''}</Text></View></View></View>
       </TeamCover>
       <View style={styles.stats}><View style={styles.stat}><Text style={styles.statValue}>{team.rating}</Text><Text style={styles.statLabel}>RATING</Text></View><View style={styles.stat}><Text style={styles.statValue}>{team.members}/{team.capacity}</Text><Text style={styles.statLabel}>MEMBERS</Text></View><View style={[styles.level, team.level === 'Advanced' && styles.levelAdvanced]}><Text style={[styles.levelText, team.level === 'Advanced' && styles.levelTextAdvanced]}>{team.level}</Text></View></View>
-      {joined && <Pressable accessibilityLabel={`Open ${team.name} chat`} onPress={(event) => { event.stopPropagation?.(); onChat?.(); }} style={styles.conversationRow}><View style={[styles.conversationIcon, summary?.unread_count > 0 && styles.conversationIconUnread]}><Icon name="chatbubble-outline" size={17} color={C.teal} /></View><View style={styles.conversationCopy}><Text numberOfLines={1} style={styles.conversationText}>{summary?.last_body || (summary?.last_has_image ? 'Shared a photo' : 'Start the team conversation')}</Text><Text style={styles.conversationMeta}>{summary?.last_sender_name ? `${summary.last_sender_name} · ` : ''}{summary?.last_created_at ? new Date(summary.last_created_at).toLocaleDateString([], { month: 'short', day: 'numeric' }) : 'TEAM CHAT'}</Text></View>{summary?.unread_count > 0 ? <View style={styles.unreadBadge}><Text style={styles.unreadBadgeText}>{summary.unread_count > 99 ? '99+' : summary.unread_count}</Text></View> : <Icon name="chevron-forward" size={17} color={C.teal} />}</Pressable>}
+      {joined && <Pressable accessibilityLabel={`Open ${team.name} chat`} onPress={(event) => { event.stopPropagation?.(); onChat?.(); }} style={styles.conversationRow}><View style={[styles.conversationIcon, summary?.unread_count > 0 && styles.conversationIconUnread]}><Icon name="chatbubble-outline" size={17} color={C.teal} /></View><View style={styles.conversationCopy}><Text numberOfLines={1} style={styles.conversationText}>{summary?.last_body || (summary?.last_has_image ? 'Shared a photo' : 'Start the team conversation')}</Text><Text style={styles.conversationMeta}>{summary?.last_sender_name ? `${summary.last_sender_name} · ` : ''}{summary?.last_created_at ? new Date(summary.last_created_at).toLocaleDateString([], { month: 'short', day: 'numeric' }) : 'TEAM CHAT'}</Text></View>{muted ? <Icon name="notifications-off" size={14} color={C.ink40} /> : null}{summary?.unread_count > 0 ? <View style={[styles.unreadBadge, muted && styles.unreadBadgeMuted]}><Text style={styles.unreadBadgeText}>{summary.unread_count > 99 ? '99+' : summary.unread_count}</Text></View> : <Icon name="chevron-forward" size={17} color={C.teal} />}</Pressable>}
       {!joined && (requested ? <View style={styles.pendingRequestActions}><View style={styles.requestSentStatus}><Icon name="checkmark-circle-outline" size={17} color={C.teal} /><Text style={styles.requestSentStatusText}>Request sent</Text></View><Pressable onPress={(event) => { event.stopPropagation?.(); onCancel(); }} disabled={cancelling} style={[styles.cancelRequestButton, cancelling && styles.saveButtonDisabled]}>{cancelling ? <ActivityIndicator size="small" color={C.brick} /> : <Icon name="close-circle-outline" size={17} color={C.brick} />}<Text style={styles.cancelRequestText}>{cancelling ? 'Cancelling…' : 'Cancel'}</Text></Pressable></View> : <Pressable onPress={(event) => { event.stopPropagation?.(); onJoin(); }} disabled={requesting} style={[styles.joinButton, requesting && styles.requestedButton]}>{requesting ? <ActivityIndicator size="small" color="#0E2321" /> : <Icon name="add" size={17} color="#0E2321" />}<Text style={[styles.joinButtonText, requesting && styles.requestedText]}>{requesting ? (invited ? 'Joining…' : 'Sending request…') : invited ? 'Accept invite' : 'Ask to join'}</Text></Pressable>)}
     </Pressable>
   );
@@ -296,7 +298,7 @@ function TeamDetail({ team, joined, invited, requested, requesting, cancelling, 
     <ScrollView contentContainerStyle={[styles.content, compactPhone && styles.contentCompact]} showsVerticalScrollIndicator={false}>
       <View style={[styles.detailHeader, compactPhone && styles.detailHeaderCompact]}><Pressable onPress={onBack} accessibilityLabel="Go back" hitSlop={8} style={styles.backButton}><Icon name="arrow-back" /></Pressable><View style={styles.detailHeaderCopy}><Text style={styles.eyebrow}>TEAM PROFILE</Text><Text numberOfLines={1} style={styles.detailHeaderTitle}>{team.name}</Text></View><Pressable accessibilityLabel={`Share ${team.name}`} onPress={onShare} style={styles.iconButton}><Icon name="share-social-outline" /></Pressable></View><KitchenLine style={compactPhone && styles.headerLineCompact} />
       <Pressable disabled={!editable} onPress={editable ? () => onUpdateImage(team.id) : undefined} style={styles.detailCoverPressable}><TeamCover team={team} height={218}><View style={styles.detailCoverTop}><View />{editable && <View style={styles.editCoverBadge}><Icon name="camera" size={13} color={C.surface} /><Text style={styles.editCoverText}>Edit cover</Text></View>}</View><View style={styles.detailCoverBottom}><View style={styles.detailIdentity}><Crest team={team} size={62} /><View style={styles.detailIdentityCopy}><Text style={styles.heroTitle}>{team.name}</Text><View style={styles.heroLocation}><Icon name="location-outline" size={15} color="rgba(255,255,255,.78)" /><Text style={styles.heroLocationText}>{team.location}</Text></View></View></View></View></TeamCover></Pressable>
-      <View style={[styles.detailStats, compactPhone && styles.detailStatsCompact]}><View style={styles.detailStat}><Text style={styles.detailStatValue}>{team.rating}</Text><Text style={styles.statLabel}>TEAM RATING</Text></View><View style={styles.detailStat}><Text style={styles.detailStatValue}>{team.members}</Text><Text style={styles.statLabel}>MEMBERS</Text></View><View style={styles.detailStat}><Text style={styles.detailStatValue}>—</Text><Text style={styles.statLabel}>WIN RATE</Text></View></View>
+      <View style={[styles.detailStats, compactPhone && styles.detailStatsCompact]}><View style={styles.detailStat}><Text style={styles.detailStatValue}>{team.rating}</Text><Text style={styles.statLabel}>TEAM RATING</Text></View><View style={styles.detailStat}><Text style={styles.detailStatValue}>{team.members}</Text><Text style={styles.statLabel}>MEMBERS</Text></View><View style={styles.detailStat}><Text style={styles.detailStatValue}>{team.winRate || '—'}</Text><Text style={styles.statLabel}>WIN RATE</Text></View></View>
       <Text style={[styles.sectionLabel, compactPhone && styles.sectionLabelCompact]}>ABOUT THE TEAM</Text><Text style={styles.about}>{team.about || 'A friendly local team looking for reliable players and great games.'}</Text>
       <View style={[styles.requirement, compactPhone && styles.requirementCompact]}><Icon name="checkmark-circle-outline" color={C.teal} /><View style={styles.requirementCopy}><Text style={styles.requirementTitle}>Good fit for you</Text><Text style={styles.footText}>{team.level} · Doubles · Weekday evenings</Text></View></View>
       <View style={styles.sectionHead}><Text style={[styles.sectionLabel, compactPhone && styles.sectionLabelCompact]}>MEMBERS</Text><Text style={styles.sectionLink}>{team.members} total</Text></View><View style={[styles.members, compactPhone && styles.membersCompact]}>{(team.roster || []).slice(0, 4).map((member, index) => <ProfilePhoto key={member.id} photo={member.avatar} name={member.name} size={42} style={[styles.avatar, index > 0 && styles.avatarOffset]} />)}</View>
@@ -437,7 +439,7 @@ function TeamChatMenu({ team, visible, currentUserId, onClose, onInfo, onMessage
   const showMembers = view === 'members';
   const rows = [
     { key: 'members', icon: 'people-outline', label: 'Members', detail: `${team?.members || roster.length} ${(team?.members || roster.length) === 1 ? 'member' : 'members'}`, onPress: () => setView('members') },
-    { key: 'info', icon: 'information-circle-outline', label: 'Chat info', detail: 'Pinned messages, media, and blocked players', onPress: () => { onClose(); onInfo(); } },
+    { key: 'info', icon: 'information-circle-outline', label: 'Chat info', detail: 'Nicknames, media, search, and mute', onPress: () => { onClose(); onInfo(); } },
   ];
   return (
     <Modal visible={visible} transparent animationType="fade" onRequestClose={onClose}>
@@ -609,10 +611,12 @@ function TeamMediaPreview({ message, onClose }) {
 }
 
 const NO_PEOPLE = [];
+const NO_MESSAGES = [];
+const NO_NICKNAMES = {};
 
 // Memoized so opening the reaction menu (or typing) doesn't re-render every bubble;
 // TeamChat passes stable handlers from useStableHandlers.
-const ChatMessage = React.memo(function ChatMessage({ message, grouped, highlighted, seenBy, showDeliveryStatus, currentUserId, peopleById, onMessageLayout, onOpenActions, onReact, onShowPeople, onPreview }) {
+const ChatMessage = React.memo(function ChatMessage({ message, grouped, highlighted, seenBy, showDeliveryStatus, delivered, currentUserId, peopleById, onMessageLayout, onOpenActions, onReact, onShowPeople, onPreview }) {
   const enter = useRef(new Animated.Value(0)).current;
   useEffect(() => {
     Animated.timing(enter, { toValue: 1, duration: 190, easing: Easing.out(Easing.cubic), useNativeDriver: Platform.OS !== 'web' }).start();
@@ -626,7 +630,7 @@ const ChatMessage = React.memo(function ChatMessage({ message, grouped, highligh
   const hasMedia = Boolean(message.image || message.video);
   const visibleText = message.text && !/^Shared a (photo|video|GIF|sticker)$/i.test(message.text) ? message.text : null;
   const mediaOnly = hasMedia && !visibleText;
-  const status = message.deliveryState === 'uploading' ? 'Uploading…' : message.deliveryState === 'sending' ? 'Sending…' : 'Sent';
+  const status = message.deliveryState === 'uploading' ? 'Uploading…' : message.deliveryState === 'sending' ? 'Sending…' : delivered ? 'Delivered' : 'Sent';
   return (
     <Animated.View onLayout={({ nativeEvent }) => onMessageLayout(message.id, nativeEvent.layout.y)} style={[styles.messageRow, message.mine && styles.messageRowMine, grouped && styles.messageGrouped, {
       opacity: enter,
@@ -715,7 +719,19 @@ function TeamChat({ team, messages, readStates, currentUser, typing, liveMatch, 
     });
     return receipts;
   }, [currentUserId, messages, peopleById, readStates]);
-  const latestMineId = [...messages].reverse().find((message) => message.mine && message.kind !== 'member_joined')?.id;
+  const latestMine = [...messages].reverse().find((message) => message.mine && message.kind !== 'member_joined');
+  const latestMineId = latestMine?.id;
+  // Sent becomes Delivered once another member's app checks in after the
+  // message; no realtime event reports check-ins, so re-read while open.
+  const [teamLastActive, setTeamLastActive] = useState(null);
+  useEffect(() => {
+    let active = true;
+    const load = () => getTeamChatLastActive(team.id).then((at) => { if (active) setTeamLastActive(at); });
+    load();
+    const timer = setInterval(load, 20 * 1000);
+    return () => { active = false; clearInterval(timer); };
+  }, [team.id, messages.length]);
+  const latestMineDelivered = Boolean(latestMine && !latestMine.deliveryState && teamLastActive && new Date(teamLastActive) >= new Date(latestMine.createdAt));
   const selectedMessage = messages.find((message) => message.id === selectedMessageId) || null;
   const revealMessage = useCallback((messageId, y) => {
     if (!focusMessageId || focusMessageId !== messageId || y == null || handledFocusMessageRef.current === messageId) return;
@@ -821,7 +837,7 @@ function TeamChat({ team, messages, readStates, currentUser, typing, liveMatch, 
   ]);
   return (
     <KeyboardAvoidingView style={styles.chatScreen} behavior={Platform.OS === 'ios' ? 'padding' : undefined} keyboardVerticalOffset={8}>
-      <View style={[styles.detailHeader, styles.chatHeader]}><Pressable onPress={onBack} accessibilityLabel="Go back" hitSlop={8} style={styles.backButton}><Icon name="arrow-back" /></Pressable><Crest team={team} size={43} /><View style={styles.detailHeaderCopy}><Text style={styles.detailHeaderTitle}>{team.name}</Text><View style={styles.onlineRow}><Text style={styles.chatStatus}>{team.members} {team.members === 1 ? 'member' : 'members'}</Text></View></View><Pressable accessibilityLabel="Chat options" accessibilityHint="See members or open chat info" onPress={() => setMenuOpen(true)} style={styles.iconButton}><Icon name="ellipsis-horizontal" /></Pressable></View>
+      <View style={[styles.detailHeader, styles.chatHeader]}><Pressable onPress={onBack} accessibilityLabel="Go back" hitSlop={8} style={styles.backButton}><Icon name="arrow-back" /></Pressable><Pressable accessibilityRole="button" accessibilityLabel={`${team.name}. Chat info`} onPress={onInfo} style={({ pressed }) => [styles.chatHeaderIdentity, pressed && styles.pressed]}><Crest team={team} size={43} /><View style={styles.detailHeaderCopy}><Text style={styles.detailHeaderTitle}>{team.name}</Text><View style={styles.onlineRow}><Text style={styles.chatStatus}>{team.members} {team.members === 1 ? 'member' : 'members'}</Text></View></View></Pressable><Pressable accessibilityLabel="Chat options" accessibilityHint="See members or open chat info" onPress={() => setMenuOpen(true)} style={styles.iconButton}><Icon name="ellipsis-horizontal" /></Pressable></View>
       {latestPinned && (
         <Pressable accessibilityLabel="Go to pinned message" accessibilityHint="Scrolls to the original message in this chat" onPress={() => onJumpToMessage(latestPinned)} style={styles.chatPinnedBanner}>
           <Icon name="pin" size={14} color={C.teal} />
@@ -857,7 +873,7 @@ function TeamChat({ team, messages, readStates, currentUser, typing, liveMatch, 
           if (message.kind === 'member_joined') return message.text ? <View key={message.id} accessibilityRole="text" style={styles.memberJoinedNotice}><Icon name="person-add-outline" size={13} color={C.teal} /><Text style={styles.memberJoinedText}>{message.mine ? 'You joined the club' : message.text}</Text><Text style={styles.memberJoinedTime}>{message.time}</Text></View> : null;
           const previous = messages[index - 1];
           const grouped = previous?.kind !== 'member_joined' && previous?.sender === message.sender && previous?.mine === message.mine;
-          return <ChatMessage key={message.id} message={message} grouped={grouped} highlighted={highlightedMessageId === message.id} seenBy={seenByMessage[message.id] || NO_PEOPLE} showDeliveryStatus={message.id === latestMineId} currentUserId={currentUserId} peopleById={peopleById} onMessageLayout={rowHandlers.onMessageLayout} onOpenActions={rowHandlers.onOpenActions} onReact={rowHandlers.onReact} onShowPeople={rowHandlers.onShowPeople} onPreview={setPreviewMessage} />;
+          return <ChatMessage key={message.id} message={message} grouped={grouped} highlighted={highlightedMessageId === message.id} seenBy={seenByMessage[message.id] || NO_PEOPLE} showDeliveryStatus={message.id === latestMineId} delivered={message.id === latestMineId && latestMineDelivered} currentUserId={currentUserId} peopleById={peopleById} onMessageLayout={rowHandlers.onMessageLayout} onOpenActions={rowHandlers.onOpenActions} onReact={rowHandlers.onReact} onShowPeople={rowHandlers.onShowPeople} onPreview={setPreviewMessage} />;
         })}
         {typing?.length > 0 && <TypingBubble people={typing} />}
         </View>
@@ -964,9 +980,13 @@ function MemberManagementModal({ member, visible, managerRole, onClose, onChange
   );
 }
 
-function TeamChatInfo({ team, currentUserId, pinnedMessages, sharedMedia, blockedUsers, loading, openingMessageId, onBack, onViewTeam, onViewMessage, onPin, onUnblock, onChangeMemberRole, onRemoveMember, onMessageMember }) {
+// Messenger-style chat info for a team chat. Nicknames and search open on top
+// of this screen; search covers the messages this chat has loaded.
+function TeamChatInfo({ team, isDark, currentUserId, messages, nicknames, mutedUntil, pinnedMessages, sharedMedia, blockedUsers, loading, openingMessageId, onBack, onViewTeam, onViewMessage, onPin, onUnblock, onChangeMemberRole, onRemoveMember, onMessageMember, onSaveNickname, onMute, onUnmute }) {
   const [previewMessage, setPreviewMessage] = useState(null);
   const [managedMember, setManagedMember] = useState(null);
+  const [panel, setPanel] = useState(null);
+  const colors = chatInfoColors(isDark);
   const messagePreview = (message) => {
     if (message.text && !/^Shared a (photo|video|GIF|sticker)$/i.test(message.text)) return message.text;
     if (message.video) return 'Video';
@@ -974,53 +994,62 @@ function TeamChatInfo({ team, currentUserId, pinnedMessages, sharedMedia, blocke
     if (message.image) return 'Photo';
     return 'Message';
   };
+  const displayName = (member) => nicknames[member.id] || member.name;
+  const media = useMemo(() => sharedMedia
+    .filter((message) => message.mediaKind !== 'stickers' && (message.image || message.video))
+    .map((message) => ({ id: message.id, uri: message.image, kind: message.video ? 'video' : message.mediaType === 'gif' ? 'gif' : 'photo', source: message })), [sharedMedia]);
+  const links = useMemo(() => extractChatLinks(messages), [messages]);
+  const people = (team.roster || []).filter((member) => member.id).map((member) => ({ id: member.id, name: member.name, avatar: member.avatar, you: member.id === currentUserId, nickname: nicknames[member.id] || null }));
+  const muted = isMuteActive(mutedUntil);
+  const goToMessage = (message) => {
+    setPanel(null);
+    setTimeout(() => onViewMessage(message), Platform.OS === 'ios' ? 350 : 0);
+  };
   return (
     <View style={styles.chatInfoScreen}>
-      <View style={[styles.detailHeader, styles.chatHeader]}>
-        <Pressable onPress={onBack} accessibilityLabel="Back to team chat" hitSlop={8} style={styles.backButton}><Icon name="arrow-back" /></Pressable>
-        <View style={styles.detailHeaderCopy}><Text style={styles.detailHeaderTitle}>Chat info</Text></View>
-      </View>
-      <ScrollView contentContainerStyle={styles.chatInfoContent} showsVerticalScrollIndicator={false}>
-        <View style={styles.chatInfoCoverWrapper}>
-          <TeamCover team={team} height={230}>
-            <View style={styles.chatInfoHeroCover}>
-              <Crest team={team} size={78} />
-              <Text style={styles.chatInfoTitleCover}>{team.name}</Text>
-              <Text style={styles.chatInfoMetaCover}>{team.members} {team.members === 1 ? 'member' : 'members'}</Text>
-              <Pressable onPress={onViewTeam} style={styles.chatInfoProfileButtonCover}><Icon name="people-outline" size={17} color={C.surface} /><Text style={styles.chatInfoProfileTextCover}>View team profile</Text></Pressable>
-            </View>
-          </TeamCover>
-        </View>
+      <ChatInfoScreen
+        colors={colors}
+        title={team.name}
+        subtitle={`${team.members} ${team.members === 1 ? 'member' : 'members'}`}
+        avatar={<Crest team={team} size={112} />}
+        quickActions={[
+          { key: 'team', icon: 'people-circle-outline', label: 'Team', onPress: onViewTeam },
+          { key: 'nicknames', icon: 'text-outline', label: 'Nicknames', onPress: () => setPanel('nicknames') },
+          { key: 'search', icon: 'search', label: 'Search', onPress: () => setPanel('search') },
+        ]}
+        media={media}
+        links={links}
+        mediaLoading={loading}
+        onOpenMedia={(item) => setPreviewMessage(item.source)}
+        preview={<TeamMediaPreview message={previewMessage} onClose={() => setPreviewMessage(null)} />}
+        mute={{ muted, label: muteStatusLabel(mutedUntil), name: team.name, onMute, onUnmute }}
+        onBack={onBack}
+        footer={<>
+          <ChatInfoSection title="Privacy & support" colors={colors} right={blockedUsers.length > 0 ? <Text style={styles.sectionLink}>{blockedUsers.length} blocked</Text> : null}>
+            {blockedUsers.length ? <View style={styles.chatInfoMembers}>{blockedUsers.map((player, index) => <View key={player.id} style={[styles.chatInfoMember, index > 0 && styles.rosterBorder]}><ProfilePhoto photo={player.avatar} name={player.name} size={42} /><View style={styles.rosterCopy}><Text style={styles.rosterName}>{player.name}</Text><Text style={styles.footText}>Messages hidden from your team chats</Text></View><Pressable accessibilityLabel={`Unblock ${player.name}`} onPress={() => onUnblock(player)} style={styles.unblockButton}><Text style={styles.unblockButtonText}>Unblock</Text></Pressable></View>)}</View> : <View style={styles.chatInfoEmpty}><View style={styles.chatInfoEmptyIcon}><Icon name="shield-checkmark-outline" size={22} color={C.teal} /></View><View style={styles.rosterCopy}><Text style={styles.emptyTitle}>No blocked players</Text><Text style={styles.footText}>Use a message’s options to report or block its sender.</Text></View></View>}
+          </ChatInfoSection>
+          <View style={styles.chatInfoSafetyNote}><Icon name="information-circle-outline" size={17} color={C.teal} /><Text style={styles.chatInfoSafetyText}>If someone may be in immediate danger, contact local emergency services. Reporting in Peakle does not replace emergency help.</Text></View>
+        </>}
+      >
+        <ChatInfoSection title="Pinned messages" colors={colors} right={pinnedMessages.length > 0 ? <Text style={styles.sectionLink}>{pinnedMessages.length}</Text> : null}>
+          {loading ? <View style={styles.chatInfoLoading}><ActivityIndicator color={C.teal} /><Text style={styles.footText}>Loading conversation details…</Text></View> : pinnedMessages.length ? (
+            <View style={styles.pinnedList}>{pinnedMessages.map((message) => (
+              <Pressable key={message.id} accessibilityLabel={`Go to pinned message from ${message.sender}`} accessibilityHint="Opens the original message in team chat" disabled={Boolean(openingMessageId)} onPress={() => onViewMessage(message)} style={styles.pinnedCard}>
+                <View style={styles.pinnedCardIcon}><Icon name="pin" size={16} color={C.teal} /></View>
+                <View style={styles.pinnedCardCopy}><Text style={styles.pinnedCardSender}>{nicknames[message.senderId] || message.sender}</Text><Text numberOfLines={3} style={styles.pinnedCardText}>{messagePreview(message)}</Text><Text style={styles.pinnedCardTime}>{new Date(message.createdAt).toLocaleDateString([], { month: 'short', day: 'numeric', year: 'numeric' })} · {message.time}</Text></View>
+                {openingMessageId === message.id ? <View style={styles.pinnedCardAction}><ActivityIndicator size="small" color={C.teal} /></View> : <Pressable accessibilityLabel="Unpin message" onPress={(event) => { event.stopPropagation?.(); onPin(message.id); }} style={styles.pinnedCardAction}><Icon name="close" size={16} color={C.ink40} /></Pressable>}
+              </Pressable>
+            ))}</View>
+          ) : <View style={styles.chatInfoEmpty}><View style={styles.chatInfoEmptyIcon}><Icon name="pin-outline" size={22} color={C.teal} /></View><View style={styles.rosterCopy}><Text style={styles.emptyTitle}>No pinned messages</Text><Text style={styles.footText}>Long-press a message and choose Pin message to keep it here.</Text></View></View>}
+        </ChatInfoSection>
 
-        <View style={styles.chatInfoSectionHead}><View><Text style={styles.eyebrow}>KEEP CLOSE</Text><Text style={styles.h2}>Pinned messages</Text></View>{pinnedMessages.length > 0 && <Text style={styles.sectionLink}>{pinnedMessages.length} {pinnedMessages.length === 1 ? 'message' : 'messages'}</Text>}</View>
-        {loading ? <View style={styles.chatInfoLoading}><ActivityIndicator color={C.teal} /><Text style={styles.footText}>Loading conversation details…</Text></View> : pinnedMessages.length ? (
-          <View style={styles.pinnedList}>{pinnedMessages.map((message) => (
-            <Pressable key={message.id} accessibilityLabel={`Go to pinned message from ${message.sender}`} accessibilityHint="Opens the original message in team chat" disabled={Boolean(openingMessageId)} onPress={() => onViewMessage(message)} style={styles.pinnedCard}>
-              <View style={styles.pinnedCardIcon}><Icon name="pin" size={16} color={C.teal} /></View>
-              <View style={styles.pinnedCardCopy}><Text style={styles.pinnedCardSender}>{message.sender}</Text><Text numberOfLines={3} style={styles.pinnedCardText}>{messagePreview(message)}</Text><Text style={styles.pinnedCardTime}>{new Date(message.createdAt).toLocaleDateString([], { month: 'short', day: 'numeric', year: 'numeric' })} · {message.time}</Text></View>
-              {openingMessageId === message.id ? <View style={styles.pinnedCardAction}><ActivityIndicator size="small" color={C.teal} /></View> : <Pressable accessibilityLabel="Unpin message" onPress={(event) => { event.stopPropagation?.(); onPin(message.id); }} style={styles.pinnedCardAction}><Icon name="close" size={16} color={C.ink40} /></Pressable>}
-            </Pressable>
-          ))}</View>
-        ) : <View style={styles.chatInfoEmpty}><View style={styles.chatInfoEmptyIcon}><Icon name="pin-outline" size={22} color={C.teal} /></View><View style={styles.rosterCopy}><Text style={styles.emptyTitle}>No pinned messages</Text><Text style={styles.footText}>Long-press a message and choose Pin message to keep it here.</Text></View></View>}
-
-        <View style={styles.chatInfoSectionHead}><View><Text style={styles.eyebrow}>SHARED IN CHAT</Text><Text style={styles.h2}>Media</Text></View><Text style={styles.sectionLink}>{sharedMedia.length} items</Text></View>
-        {sharedMedia.length ? <View style={styles.sharedMediaGrid}>{sharedMedia.map((message) => (
-          <Pressable key={message.id} accessibilityLabel={`Open shared ${message.video ? 'video' : 'photo'}`} onPress={() => setPreviewMessage(message)} style={styles.sharedMediaTile}>
-            {message.image ? <ExpoImage source={{ uri: message.image }} contentFit="cover" style={StyleSheet.absoluteFillObject} /> : <View style={styles.sharedVideoTile}><Icon name="videocam" size={24} color="#FFFFFF" /></View>}
-            {message.video && <View style={styles.sharedMediaType}><Icon name="play" size={10} color="#FFFFFF" /><Text style={styles.sharedMediaTypeText}>VIDEO</Text></View>}
-            {message.mediaType === 'gif' && <View style={styles.sharedMediaType}><Text style={styles.sharedMediaTypeText}>GIF</Text></View>}
-          </Pressable>
-        ))}</View> : !loading && <View style={styles.chatInfoEmpty}><View style={styles.chatInfoEmptyIcon}><Icon name="images-outline" size={22} color={C.teal} /></View><View style={styles.rosterCopy}><Text style={styles.emptyTitle}>Nothing shared yet</Text><Text style={styles.footText}>Photos, videos, GIFs, and stickers sent in this chat will collect here.</Text></View></View>}
-
-        <View style={styles.chatInfoSectionHead}><View><Text style={styles.eyebrow}>PEOPLE</Text><Text style={styles.h2}>Team members</Text></View><Text style={styles.sectionLink}>{team.members} total</Text></View>
-        <View style={styles.chatInfoMembers}>{(team.roster || []).map((member, index) => <View key={member.id || `${member.name}-${index}`} style={[styles.chatInfoMember, index > 0 && styles.rosterBorder]}><ProfilePhoto photo={member.avatar} name={member.name} size={42} /><View style={styles.rosterCopy}><Text style={styles.rosterName}>{member.name}{member.id === currentUserId ? ' (You)' : ''}</Text><Text style={styles.footText}>{member.role || 'Member'}</Text></View>{PRIVATE_MESSAGES_ENABLED && member.id !== currentUserId && <Pressable accessibilityLabel={`Message ${member.name} privately`} onPress={() => onMessageMember(member)} style={styles.memberMessageButton}><Icon name="chatbubble-outline" size={17} color={C.teal} /></Pressable>}{canManageRosterMember(team, member, currentUserId) && <Pressable accessibilityLabel={`Manage ${member.name}`} accessibilityHint={team.role === 'Co-admin' ? 'Remove this member' : 'Change role or remove this member'} onPress={() => setManagedMember(member)} style={styles.memberMoreButton}><Icon name="ellipsis-horizontal" size={20} color={C.ink70} /></Pressable>}</View>)}</View>
-
-        <View style={styles.chatInfoSectionHead}><View><Text style={styles.eyebrow}>SAFETY</Text><Text style={styles.h2}>Blocked players</Text></View>{blockedUsers.length > 0 && <Text style={styles.sectionLink}>{blockedUsers.length} blocked</Text>}</View>
-        {blockedUsers.length ? <View style={styles.chatInfoMembers}>{blockedUsers.map((player, index) => <View key={player.id} style={[styles.chatInfoMember, index > 0 && styles.rosterBorder]}><ProfilePhoto photo={player.avatar} name={player.name} size={42} /><View style={styles.rosterCopy}><Text style={styles.rosterName}>{player.name}</Text><Text style={styles.footText}>Messages hidden from your team chats</Text></View><Pressable accessibilityLabel={`Unblock ${player.name}`} onPress={() => onUnblock(player)} style={styles.unblockButton}><Text style={styles.unblockButtonText}>Unblock</Text></Pressable></View>)}</View> : <View style={styles.chatInfoEmpty}><View style={styles.chatInfoEmptyIcon}><Icon name="shield-checkmark-outline" size={22} color={C.teal} /></View><View style={styles.rosterCopy}><Text style={styles.emptyTitle}>No blocked players</Text><Text style={styles.footText}>Use a message’s options to report or block its sender.</Text></View></View>}
-        <View style={styles.chatInfoSafetyNote}><Icon name="information-circle-outline" size={17} color={C.teal} /><Text style={styles.chatInfoSafetyText}>If someone may be in immediate danger, contact local emergency services. Reporting in Peakle does not replace emergency help.</Text></View>
-      </ScrollView>
+        <ChatInfoSection title="Members" colors={colors} right={<Text style={styles.sectionLink}>{team.members} total</Text>}>
+          <View style={styles.chatInfoMembers}>{(team.roster || []).map((member, index) => <View key={member.id || `${member.name}-${index}`} style={[styles.chatInfoMember, index > 0 && styles.rosterBorder]}><ProfilePhoto photo={member.avatar} name={member.name} size={42} /><View style={styles.rosterCopy}><Text style={styles.rosterName}>{displayName(member)}{member.id === currentUserId ? ' (You)' : ''}</Text><Text style={styles.footText}>{nicknames[member.id] ? `${member.name} · ` : ''}{member.role || 'Member'}</Text></View>{PRIVATE_MESSAGES_ENABLED && member.id !== currentUserId && <Pressable accessibilityLabel={`Message ${member.name} privately`} onPress={() => onMessageMember(member)} style={styles.memberMessageButton}><Icon name="chatbubble-outline" size={17} color={C.teal} /></Pressable>}{canManageRosterMember(team, member, currentUserId) && <Pressable accessibilityLabel={`Manage ${member.name}`} accessibilityHint={team.role === 'Co-admin' ? 'Remove this member' : 'Change role or remove this member'} onPress={() => setManagedMember(member)} style={styles.memberMoreButton}><Icon name="ellipsis-horizontal" size={20} color={C.ink70} /></Pressable>}</View>)}</View>
+        </ChatInfoSection>
+      </ChatInfoScreen>
       <MemberManagementModal member={managedMember} visible={Boolean(managedMember)} managerRole={team.role} onClose={() => setManagedMember(null)} onChangeRole={onChangeMemberRole} onRemove={onRemoveMember} />
-      <TeamMediaPreview message={previewMessage} onClose={() => setPreviewMessage(null)} />
+      <NicknamesModal visible={panel === 'nicknames'} people={people} colors={colors} onSave={onSaveNickname} onClose={() => setPanel(null)} />
+      <ChatSearchModal visible={panel === 'search'} messages={messages} colors={colors} onSelect={goToMessage} onClose={() => setPanel(null)} />
     </View>
   );
 }
@@ -1362,7 +1391,7 @@ function TeamHub({ team, requests, liveMatch, nextChallenges = [], matchBusy, on
     <ScrollView contentContainerStyle={styles.content} showsVerticalScrollIndicator={false} stickyHeaderIndices={[1]}>
       <View>
       <View style={styles.detailHeader}><Pressable onPress={onBack} accessibilityLabel="Go back" hitSlop={8} style={styles.backButton}><Icon name="arrow-back" /></Pressable><View style={styles.detailHeaderCopy}><Text style={styles.eyebrow}>YOUR TEAM · {team.role?.toUpperCase()}</Text><Text style={styles.detailHeaderTitle}>{team.name}</Text></View>{editable && <Pressable onPress={onEdit} accessibilityLabel="Edit team" style={styles.iconButton}><Icon name="settings-outline" /></Pressable>}</View><KitchenLine />
-      <View style={styles.hubHero}><Pressable disabled={!editable} onPress={editable ? () => onUpdateImage(team.id) : undefined}><TeamCover team={team} height={168}><View style={styles.hubCoverContent}>{editable && <View style={styles.hubCoverTop}><View style={styles.editCoverBadge}><Icon name="camera" size={12} color={C.surface} /><Text style={styles.editCoverText}>Cover</Text></View></View>}<View style={styles.hubIdentity}><Crest team={team} size={56} /><View style={styles.hubIdentityCopy}><Text numberOfLines={1} style={styles.hubTitle}>{team.name}</Text><View style={styles.hubMetaRow}><View style={styles.rolePill}><Icon name="shield-checkmark" size={11} color={C.surface} /><Text style={styles.rolePillText}>{team.role}</Text></View><Text style={styles.hubMeta}> · {team.members} {team.members === 1 ? 'member' : 'members'} · </Text><Icon name={team.isDiscoverable ? 'globe-outline' : 'lock-closed-outline'} size={11} color="rgba(255,255,255,.85)" /><Text style={styles.hubMeta}> {team.isDiscoverable ? 'Public' : 'Private'}</Text></View></View></View></View></TeamCover></Pressable><View style={styles.hubRecord}><View><Text style={styles.hubRecordValue}>—</Text><Text style={styles.hubRecordLabel}>SEASON RECORD</Text></View><View><Text style={styles.hubRecordValue}>—</Text><Text style={styles.hubRecordLabel}>WIN RATE</Text></View><View><Text style={styles.hubRecordValue}>—</Text><Text style={styles.hubRecordLabel}>LOCAL RANK</Text></View></View></View>
+      <View style={styles.hubHero}><Pressable disabled={!editable} onPress={editable ? () => onUpdateImage(team.id) : undefined}><TeamCover team={team} height={168}><View style={styles.hubCoverContent}>{editable && <View style={styles.hubCoverTop}><View style={styles.editCoverBadge}><Icon name="camera" size={12} color={C.surface} /><Text style={styles.editCoverText}>Cover</Text></View></View>}<View style={styles.hubIdentity}><Crest team={team} size={56} /><View style={styles.hubIdentityCopy}><Text numberOfLines={1} style={styles.hubTitle}>{team.name}</Text><View style={styles.hubMetaRow}><View style={styles.rolePill}><Icon name="shield-checkmark" size={11} color={C.surface} /><Text style={styles.rolePillText}>{team.role}</Text></View><Text style={styles.hubMeta}> · {team.members} {team.members === 1 ? 'member' : 'members'} · </Text><Icon name={team.isDiscoverable ? 'globe-outline' : 'lock-closed-outline'} size={11} color="rgba(255,255,255,.85)" /><Text style={styles.hubMeta}> {team.isDiscoverable ? 'Public' : 'Private'}</Text></View></View></View></View></TeamCover></Pressable><View style={styles.hubRecord}><View><Text style={styles.hubRecordValue}>{team.wins || team.losses ? `${team.wins}-${team.losses}` : '—'}</Text><Text style={styles.hubRecordLabel}>RECORD</Text></View><View><Text style={styles.hubRecordValue}>{team.winRate || '—'}</Text><Text style={styles.hubRecordLabel}>WIN RATE</Text></View><View><Text style={styles.hubRecordValue}>—</Text><Text style={styles.hubRecordLabel}>LOCAL RANK</Text></View></View></View>
       {team.status !== 'active' && <View style={styles.formingNotice}><Icon name="people-outline" color={C.teal} /><View style={styles.rosterCopy}><Text style={styles.requirementTitle}>Team is still forming</Text><Text style={styles.footText}>Reach four confirmed members to unlock team competition. You need {Math.max(0, 4 - team.members)} more.</Text></View>{reviewer && <Pressable onPress={onInvite} style={styles.noticeInvite}><Text style={styles.inviteButtonText}>Invite</Text></Pressable>}</View>}
       </View>
       <View style={styles.hubTabsSticky}><View style={styles.hubTabs}>{tabs.map((item) => <Pressable key={item} onPress={() => { setSection(item); if (item === 'Requests') onRefreshRequests?.(); }} style={[styles.hubTab, section === item && styles.hubTabActive]}><Text style={[styles.hubTabText, section === item && styles.hubTabTextActive]}>{item}{item === 'Requests' && requests.length ? ` (${requests.length})` : ''}</Text></Pressable>)}</View></View>
@@ -1558,6 +1587,29 @@ export default function TeamScreen({ navigation, route }) {
   useEffect(() => {
     if (chatInfoTeam?.id) refreshChatInfo(chatInfoTeam.id);
   }, [chatInfoTeam?.id, refreshChatInfo]);
+  // Nicknames rename senders in the open team chat and its chat info.
+  const nicknameTeamId = chatInfoTeam?.id || chatTeam?.id;
+  const [teamNicknames, setTeamNicknames] = useState({});
+  const [teamMutes, setTeamMutes] = useState({});
+  useEffect(() => {
+    if (!nicknameTeamId) return undefined;
+    let active = true;
+    listChatNicknames('team', nicknameTeamId).then((names) => {
+      if (active) setTeamNicknames((current) => ({ ...current, [nicknameTeamId]: names }));
+    }).catch(() => {});
+    return () => { active = false; };
+  }, [nicknameTeamId, chatInfoTeam?.id]);
+  const joinedTeamKey = joined.map((team) => team.id).join(',');
+  useEffect(() => {
+    if (!joinedTeamKey) return;
+    listTeamChatMutes().then(setTeamMutes).catch(() => {});
+  }, [joinedTeamKey]);
+  const activeNicknames = teamNicknames[nicknameTeamId] || NO_NICKNAMES;
+  const nicknamedChatMessages = useMemo(() => {
+    const rows = messages[nicknameTeamId] || NO_MESSAGES;
+    if (!Object.keys(activeNicknames).length) return rows;
+    return rows.map((message) => (activeNicknames[message.senderId] ? { ...message, sender: activeNicknames[message.senderId] } : message));
+  }, [activeNicknames, messages, nicknameTeamId]);
   useEffect(() => {
     const teamUnreadCount = chatSafetyStatus?.eligible
       ? Object.values(conversationSummaries).reduce((total, item) => total + Number(item?.unread_count || 0), 0)
@@ -1636,11 +1688,18 @@ export default function TeamScreen({ navigation, route }) {
       cacheApplied.current = true;
     }
     try {
-      const [teams, pending, incomingInvitations] = await withTimeout(
-        Promise.all([listTeams(), listMyTeamRequests(), listMyTeamInvitations()]),
+      // Invitations load on their own: if the team list is slow or fails, a
+      // pending invite must still show instead of the stale cached list.
+      const invitationsRequest = listMyTeamInvitations().then((items) => {
+        setInvitations(items || []);
+        return items || [];
+      }, () => null);
+      const [teams, pending] = await withTimeout(
+        Promise.all([listTeams(), listMyTeamRequests()]),
         12000,
         'Team data took too long to refresh.',
       );
+      const incomingInvitations = (await invitationsRequest) ?? cached?.incomingInvitations ?? [];
       const mine = teams.filter((team) => team.role);
       const manageable = mine.filter(canReviewRequests).map((team) => team.id);
       refreshJoinRequests(manageable).catch(() => {});
@@ -2026,7 +2085,17 @@ export default function TeamScreen({ navigation, route }) {
       respondInvitation(invitation, true).finally(() => setRequesting((value) => value.filter((id) => id !== team.id)));
       return;
     }
-    setJoinTeam(team);
+    // The local list can lag behind a just-sent invite; check before asking to join.
+    setRequesting((value) => [...value, team.id]);
+    listMyTeamInvitations()
+      .then((items) => {
+        setInvitations(items || []);
+        const fresh = (items || []).find((item) => item.team_id === team.id);
+        if (fresh) return respondInvitation(fresh, true);
+        setJoinTeam(team);
+        return undefined;
+      }, () => setJoinTeam(team))
+      .finally(() => setRequesting((value) => value.filter((id) => id !== team.id)));
   };
   const requestJoin = async (introduction) => {
     const id = joinTeam?.id;
@@ -2214,6 +2283,43 @@ export default function TeamScreen({ navigation, route }) {
       if (chatInfoTeam?.id === chatTeam.id) await refreshChatInfo(chatTeam.id);
     } catch (error) { Alert.alert('Pin not updated', error.message); }
   };
+  const saveTeamNickname = async (person, nickname) => {
+    const teamId = chatInfoTeam?.id;
+    if (!teamId) return;
+    const saved = await setChatNickname('team', teamId, person.id, nickname);
+    setTeamNicknames((current) => {
+      const names = { ...(current[teamId] || {}) };
+      if (saved) names[person.id] = saved;
+      else delete names[person.id];
+      return { ...current, [teamId]: names };
+    });
+  };
+  const muteTeam = async (minutes) => {
+    const teamId = chatInfoTeam?.id;
+    if (!teamId) return;
+    const previous = teamMutes[teamId] || null;
+    const localUntil = minutes == null ? 'infinity' : new Date(Date.now() + minutes * 60000).toISOString();
+    setTeamMutes((current) => ({ ...current, [teamId]: localUntil }));
+    try {
+      const mutedUntil = await muteTeamChat(teamId, minutes);
+      setTeamMutes((current) => ({ ...current, [teamId]: mutedUntil || localUntil }));
+    } catch (error) {
+      setTeamMutes((current) => ({ ...current, [teamId]: previous }));
+      setTimeout(() => Alert.alert('Chat not muted', error.message), Platform.OS === 'ios' ? 350 : 0);
+    }
+  };
+  const unmuteTeam = async () => {
+    const teamId = chatInfoTeam?.id;
+    if (!teamId) return;
+    const previous = teamMutes[teamId] || null;
+    setTeamMutes((current) => ({ ...current, [teamId]: null }));
+    try {
+      await unmuteTeamChat(teamId);
+    } catch (error) {
+      setTeamMutes((current) => ({ ...current, [teamId]: previous }));
+      Alert.alert('Chat not unmuted', error.message);
+    }
+  };
   const jumpToPinnedMessage = async (message) => {
     const team = chatInfoTeam || chatTeam;
     if (!team?.id || !message?.id || openingPinnedMessageId) return;
@@ -2273,7 +2379,7 @@ export default function TeamScreen({ navigation, route }) {
   });
   const attachMedia = async (type) => {
     if (!chatTeam) return;
-    const result = await ImagePicker.launchImageLibraryAsync({ mediaTypes: type === 'video' ? ['videos'] : ['images'], quality: type === 'image' ? .85 : 1, videoMaxDuration: 60 });
+    const result = await ImagePicker.launchImageLibraryAsync({ mediaTypes: type === 'video' ? ['videos'] : ['images'], quality: 1, videoMaxDuration: 60 });
     if (result.canceled) return;
     const teamId = chatTeam.id;
     const asset = result.assets[0];
@@ -2549,8 +2655,8 @@ export default function TeamScreen({ navigation, route }) {
   if (liveScoreTeam) return <SafeAreaView style={styles.safe}><StatusBar style={isDark ? 'light' : 'dark'} backgroundColor={C.paper} /><LiveScore team={liveScoreTeam} match={liveMatches[liveScoreTeam.id]} scoringMode={liveScoreMode === 'scorer'} busy={matchBusy} currentUserId={user?.id} onRally={(winner) => recordRally(liveScoreTeam.id, winner)} onUndo={() => undoRally(liveScoreTeam.id)} onFinishGame={() => finishGame(liveScoreTeam.id)} onFinishMatch={() => finishMatch(liveScoreTeam.id)} onChangeScorer={() => setScorerChangeMatchId(liveMatches[liveScoreTeam.id]?.id)} onBack={() => { setScorerChangeMatchId(null); setLiveScoreTeam(null); setLiveScoreMode('viewer'); }} /><TeamScorerPicker visible={Boolean(scorerChangeMatchId)} team={liveScoreTeam} currentUserId={user?.id} selectedId={liveMatches[liveScoreTeam.id]?.scorerId} busy={matchBusy} changing onClose={() => setScorerChangeMatchId(null)} onSelect={(scorerId) => changeTeamMatchScorer(liveScoreTeam.id, scorerChangeMatchId, scorerId)} /></SafeAreaView>;
   if (openingChatFromInbox) return <SafeAreaView style={styles.safe}><StatusBar style={isDark ? 'light' : 'dark'} backgroundColor={C.paper} /><View accessibilityLabel="Opening team chat" accessibilityLiveRegion="polite" style={styles.chatOpening}><ActivityIndicator color={C.teal} /></View></SafeAreaView>;
   if (chatSafetyTeam) return <SafeAreaView style={styles.safe}><StatusBar style={isDark ? 'light' : 'dark'} backgroundColor={C.paper} /><ChatSafetyScreen team={chatSafetyTeam} status={chatSafetyStatus} busy={chatSafetyBusy} onConfirm={confirmChatSafety} onBack={() => { setChatSafetyTeam(null); if (chatReturnTo) navigation.navigate(chatReturnTo); }} /></SafeAreaView>;
-  if (chatInfoTeam) return <SafeAreaView style={styles.safe}><StatusBar style={isDark ? 'light' : 'dark'} backgroundColor={C.paper} /><TeamChatInfo team={chatInfoTeam} currentUserId={user?.id} pinnedMessages={chatInfo.pinned} sharedMedia={chatInfo.media} blockedUsers={chatInfo.blocked} loading={chatInfo.loading} openingMessageId={openingPinnedMessageId} onViewMessage={jumpToPinnedMessage} onPin={pinMessage} onUnblock={unblockPlayer} onChangeMemberRole={changeMemberRole} onRemoveMember={removeMember} onMessageMember={(member) => navigation.navigate('DirectChat', { player: { id: member.id, name: member.name, avatar: member.avatar }, ownerTab: 'Team' })} onBack={() => setChatInfoTeam(null)} onViewTeam={() => { setChatReturnTo(null); setSelected(chatInfoTeam); setChatInfoTeam(null); setChatTeam(null); }} /></SafeAreaView>;
-  if (chatTeam) return <SafeAreaView style={styles.safe}><StatusBar style={isDark ? 'light' : 'dark'} backgroundColor={C.paper} /><TeamChat team={chatTeam} messages={messages[chatTeam.id] || []} readStates={messageReadStates[chatTeam.id] || []} currentUser={user} typing={Object.values(typingByTeam[chatTeam.id] || {})} liveMatch={liveMatches[chatTeam.id]} hasEarlier={messagePagination[chatTeam.id]?.hasMore} loadingEarlier={messagePagination[chatTeam.id]?.loading} focusMessageId={focusMessageId} onFocusHandled={() => setFocusMessageId(null)} onLoadEarlier={loadEarlierMessages} onWatchLive={() => { setLiveScoreMode('viewer'); setLiveScoreTeam(chatTeam); }} onSend={sendMessage} onEdit={editMessage} onDelete={deleteMessageForMe} onUnsend={unsendMessage} onReact={reactToMessage} onPin={pinMessage} onReport={reportMessage} onBlock={blockMessageSender} onModerate={moderateMessage} onTypingChange={changeChatTyping} onAttach={attachMedia} onJumpToMessage={jumpToPinnedMessage} onInfo={() => { changeChatTyping(false); setChatInfoTeam(chatTeam); }} onMessageMember={(member) => { changeChatTyping(false); navigation.navigate('DirectChat', { player: { id: member.id, name: member.name, avatar: member.avatar }, ownerTab: 'Team' }); }} onBack={() => { changeChatTyping(false); setFocusMessageId(null); if (chatReturnTo) { navigation.navigate(chatReturnTo); return; } setSelected(chatTeam); setChatTeam(null); }} /></SafeAreaView>;
+  if (chatInfoTeam) return <SafeAreaView style={styles.safe}><StatusBar style={isDark ? 'light' : 'dark'} backgroundColor={C.paper} /><TeamChatInfo team={chatInfoTeam} isDark={isDark} currentUserId={user?.id} messages={nicknamedChatMessages} nicknames={activeNicknames} mutedUntil={teamMutes[chatInfoTeam.id]} onSaveNickname={saveTeamNickname} onMute={muteTeam} onUnmute={unmuteTeam} pinnedMessages={chatInfo.pinned} sharedMedia={chatInfo.media} blockedUsers={chatInfo.blocked} loading={chatInfo.loading} openingMessageId={openingPinnedMessageId} onViewMessage={jumpToPinnedMessage} onPin={pinMessage} onUnblock={unblockPlayer} onChangeMemberRole={changeMemberRole} onRemoveMember={removeMember} onMessageMember={(member) => navigation.navigate('DirectChat', { player: { id: member.id, name: member.name, avatar: member.avatar }, ownerTab: 'Team' })} onBack={() => setChatInfoTeam(null)} onViewTeam={() => { setChatReturnTo(null); setSelected(chatInfoTeam); setChatInfoTeam(null); setChatTeam(null); }} /></SafeAreaView>;
+  if (chatTeam) return <SafeAreaView style={styles.safe}><StatusBar style={isDark ? 'light' : 'dark'} backgroundColor={C.paper} /><TeamChat team={chatTeam} messages={nicknamedChatMessages} readStates={messageReadStates[chatTeam.id] || []} currentUser={user} typing={Object.values(typingByTeam[chatTeam.id] || {})} liveMatch={liveMatches[chatTeam.id]} hasEarlier={messagePagination[chatTeam.id]?.hasMore} loadingEarlier={messagePagination[chatTeam.id]?.loading} focusMessageId={focusMessageId} onFocusHandled={() => setFocusMessageId(null)} onLoadEarlier={loadEarlierMessages} onWatchLive={() => { setLiveScoreMode('viewer'); setLiveScoreTeam(chatTeam); }} onSend={sendMessage} onEdit={editMessage} onDelete={deleteMessageForMe} onUnsend={unsendMessage} onReact={reactToMessage} onPin={pinMessage} onReport={reportMessage} onBlock={blockMessageSender} onModerate={moderateMessage} onTypingChange={changeChatTyping} onAttach={attachMedia} onJumpToMessage={jumpToPinnedMessage} onInfo={() => { changeChatTyping(false); setChatInfoTeam(chatTeam); }} onMessageMember={(member) => { changeChatTyping(false); navigation.navigate('DirectChat', { player: { id: member.id, name: member.name, avatar: member.avatar }, ownerTab: 'Team' }); }} onBack={() => { changeChatTyping(false); setFocusMessageId(null); if (chatReturnTo) { navigation.navigate(chatReturnTo); return; } setSelected(chatTeam); setChatTeam(null); }} /></SafeAreaView>;
   if (joinTeam) return <SafeAreaView style={styles.safe}><StatusBar style={isDark ? 'light' : 'dark'} backgroundColor={C.paper} /><JoinRequestScreen team={joinTeam} user={user} submitting={requesting.includes(joinTeam.id)} onBack={() => setJoinTeam(null)} onSubmit={requestJoin} /></SafeAreaView>;
   if (hubTeam) return <SafeAreaView style={styles.safe}><StatusBar style={isDark ? 'light' : 'dark'} backgroundColor={C.paper} /><TeamHub team={hubTeam} requests={joinRequests[hubTeam.id] || []} liveMatch={liveMatches[hubTeam.id]} nextChallenges={teamChallenges[hubTeam.id] || []} matchBusy={matchBusy} onOpenMatch={() => { setLiveScoreMode(liveMatches[hubTeam.id]?.canScore ? 'scorer' : 'viewer'); setLiveScoreTeam(hubTeam); }} onStartMatch={(challengeId) => setScorerChallengeId(challengeId)} onRefreshRequests={() => refreshJoinRequests([hubTeam.id]).catch(() => {})} onBack={() => { setScorerChallengeId(null); setHubTeam(null); setSelected(hubTeam); }} onUpdateImage={updateTeamImage} onEdit={() => { if (canEditTeam(hubTeam)) { setEditingTeam(hubTeam); setHubTeam(null); } }} onInvite={() => { setInvitingTeam(hubTeam); setHubTeam(null); }} onChallenges={() => navigation.navigate('Pickleball', { openTab: 'Compete', ownerTab: 'Team' })} onAccept={(request) => acceptRequest(hubTeam, request)} onDecline={(requestId) => declineRequest(hubTeam, requestId)} /><TeamScorerPicker visible={Boolean(scorerChallengeId)} team={hubTeam} currentUserId={user?.id} busy={matchBusy} onClose={() => setScorerChallengeId(null)} onSelect={(scorerId) => startMatchForChallenge(hubTeam.id, scorerChallengeId, scorerId)} /></SafeAreaView>;
   if (selected) return <SafeAreaView style={styles.safe}><StatusBar style={isDark ? 'light' : 'dark'} backgroundColor={C.paper} /><TeamDetail team={selected} joined={joined.some((team) => team.id === selected.id)} invited={invitations.some((item) => item.team_id === selected.id)} requested={requested.includes(selected.id)} requesting={requesting.includes(selected.id)} cancelling={cancellingRequests.includes(selected.id)} onBack={() => setSelected(null)} onJoin={() => openJoinRequest(selected)} onCancel={() => cancelJoinRequest(selected)} onShare={() => shareTeam(selected)} onChat={() => openTeamChat(selected)} onViewHub={() => { setHubTeam(selected); setSelected(null); }} onUpdateImage={updateTeamImage} /></SafeAreaView>;
@@ -2576,7 +2682,7 @@ export default function TeamScreen({ navigation, route }) {
         {!tab ? <View style={styles.teamLoading}><ActivityIndicator color={C.teal} /><Text style={styles.footText}>Loading your teams…</Text></View> : <View style={styles.tabs}>{['Joined', 'Discover'].map((item) => <Pressable key={item} onPress={() => setTab(item)} style={[styles.tab, tab === item && styles.tabActive]}><Text style={[styles.tabText, tab === item && styles.tabTextActive]}>{item}</Text>{item === 'Joined' && <View style={[styles.count, tab === item && styles.countActive]}><Text style={[styles.countText, tab === item && styles.countTextActive]}>{joined.length}</Text></View>}</Pressable>)}</View>}
         {tab && invitations.length > 0 && <><View style={styles.sectionHead}><View><Text style={styles.eyebrow}>ACTION REQUIRED</Text><Text style={styles.h2}>Team invitations</Text></View><Text style={styles.sectionLink}>{invitations.length} pending</Text></View>{invitations.map((invitation) => <TeamInvitationCard key={invitation.id} invitation={invitation} onAccept={() => respondInvitation(invitation, true)} onDecline={() => respondInvitation(invitation, false)} />)}</>}
         {tab === 'Discover' && <><View style={styles.search}><Icon name="search-outline" color={C.ink40} /><TextInput value={query} onChangeText={setQuery} placeholder="Search teams, area, or level" placeholderTextColor={C.ink40} style={styles.searchInput} /></View><ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.filters}>{['For you', 'Nearby', 'My level', 'Open spots'].map((item) => <Pressable key={item} onPress={() => setFilter(item)} style={[styles.filter, filter === item && styles.filterActive]}><Text style={filter === item ? styles.filterActiveText : styles.filterText}>{item}</Text></Pressable>)}</ScrollView><View style={styles.sectionHead}><View style={styles.discoverSectionCopy}><Text numberOfLines={1} style={styles.eyebrow}>NEAREST TO {userLocation.label.toUpperCase()}</Text><Text style={styles.h2}>{discoverTeams.length} teams to explore</Text></View><Pressable accessibilityLabel="Change team search location" onPress={() => setLocationOpen(true)} style={styles.discoveryLocationChange}><Icon name="location-outline" size={14} color={C.teal} /><Text style={styles.discoveryLocationChangeText}>Change</Text></Pressable></View><View {...webLayout('two-columns')}>{discoverTeams.map((team) => <TeamCard key={team.id} team={team} invited={invitations.some((item) => item.team_id === team.id)} requested={requested.includes(team.id)} requesting={requesting.includes(team.id)} cancelling={cancellingRequests.includes(team.id)} onJoin={() => openJoinRequest(team)} onCancel={() => cancelJoinRequest(team)} onOpen={() => setSelected(team)} />)}</View>{!discoverTeams.length && <View style={styles.empty}><Icon name="people-outline" size={35} color={C.ink40} /><Text style={styles.emptyTitle}>No teams found</Text><Text style={styles.footText}>Try another filter or change your search location.</Text></View>}</>}
-        {tab === 'Joined' && <><View style={styles.sectionHead}><View><Text style={styles.eyebrow}>TEAM INBOX</Text><Text style={styles.h2}>Your teams</Text></View></View><View {...webLayout('two-columns')}>{joined.map((team) => <TeamCard key={team.id} team={team} joined summary={chatSafetyStatus?.eligible ? conversationSummaries[team.id] : undefined} onOpen={() => setSelected(team)} onChat={() => openTeamChat(team)} />)}</View><ClubWarsTeaser /><Pressable onPress={() => setTab('Discover')} style={styles.exploreButton}><Icon name="compass-outline" color={C.teal} /><View style={styles.exploreCopy}><Text style={styles.exploreTitle}>Find another team</Text><Text style={styles.footText}>Browse public teams with open spots.</Text></View><Icon name="arrow-forward" color={C.teal} /></Pressable></>}
+        {tab === 'Joined' && <><View style={styles.sectionHead}><View><Text style={styles.eyebrow}>TEAM INBOX</Text><Text style={styles.h2}>Your teams</Text></View></View><View {...webLayout('two-columns')}>{joined.map((team) => <TeamCard key={team.id} team={team} joined summary={chatSafetyStatus?.eligible ? conversationSummaries[team.id] : undefined} muted={isMuteActive(teamMutes[team.id])} onOpen={() => setSelected(team)} onChat={() => openTeamChat(team)} />)}</View><ClubWarsTeaser /><Pressable onPress={() => setTab('Discover')} style={styles.exploreButton}><Icon name="compass-outline" color={C.teal} /><View style={styles.exploreCopy}><Text style={styles.exploreTitle}>Find another team</Text><Text style={styles.footText}>Browse public teams with open spots.</Text></View><Icon name="arrow-forward" color={C.teal} /></Pressable></>}
       </ScrollView>
       <LocationPicker visible={locationOpen} onClose={() => setLocationOpen(false)} />
 
@@ -2641,19 +2747,8 @@ const lightStyles = createMobileStyleSheet({
   pinnedMessageBadge: { paddingHorizontal: 5, paddingVertical: 2, flexDirection: 'row', alignItems: 'center', gap: 2, borderRadius: 6, backgroundColor: '#E5F0ED' },
   pinnedMessageBadgeText: { color: C.teal, fontSize: 6, fontWeight: '900', letterSpacing: .4 },
   chatInfoScreen: { flex: 1, backgroundColor: C.paper },
-  chatInfoContent: { paddingHorizontal: 18, paddingBottom: 40 },
-  chatInfoHero: { paddingVertical: 24, alignItems: 'center', borderBottomWidth: 1, borderColor: C.line },
-  chatInfoTitle: { marginTop: 12, color: C.ink, fontSize: 23, fontWeight: '900', letterSpacing: -.4 },
-  chatInfoMeta: { marginTop: 4, color: C.ink40, fontSize: 9 },
-  chatInfoProfileButton: { minHeight: 42, marginTop: 15, paddingHorizontal: 15, flexDirection: 'row', alignItems: 'center', gap: 7, borderRadius: 21, backgroundColor: '#E5F0ED' },
-  chatInfoProfileText: { color: C.teal, fontSize: 10, fontWeight: '900' },
-  chatInfoHeroCover: { flex: 1, paddingVertical: 24, alignItems: 'center', justifyContent: 'center' },
-  chatInfoTitleCover: { marginTop: 12, color: C.surface, fontSize: 23, fontWeight: '900', letterSpacing: -.4 },
-  chatInfoMetaCover: { marginTop: 4, color: 'rgba(255,255,255,.78)', fontSize: 9 },
-  chatInfoProfileButtonCover: { minHeight: 42, marginTop: 15, paddingHorizontal: 15, flexDirection: 'row', alignItems: 'center', gap: 7, borderRadius: 21, backgroundColor: 'rgba(255,255,255,.16)' },
-  chatInfoProfileTextCover: { color: C.surface, fontSize: 10, fontWeight: '900' },
-  chatInfoCoverWrapper: { overflow: 'hidden', borderRadius: 24, marginTop: 12 },
-  chatInfoSectionHead: { marginTop: 24, marginBottom: 11, flexDirection: 'row', alignItems: 'flex-end', justifyContent: 'space-between' },
+  unreadBadgeMuted: { backgroundColor: C.ink40 },
+  chatHeaderIdentity: { flex: 1, minWidth: 0, flexDirection: 'row', alignItems: 'center', gap: 10 },
   chatInfoCount: { minWidth: 25, height: 25, paddingHorizontal: 7, alignItems: 'center', justifyContent: 'center', borderRadius: 13, backgroundColor: C.optic },
   chatInfoCountText: { color: '#0E2321', fontSize: 8, fontWeight: '900' },
   chatInfoLoading: { minHeight: 110, alignItems: 'center', justifyContent: 'center', gap: 8 },
@@ -2667,11 +2762,6 @@ const lightStyles = createMobileStyleSheet({
   pinnedCardText: { marginTop: 3, color: C.ink, fontSize: 11, lineHeight: 16 },
   pinnedCardTime: { marginTop: 4, color: C.ink40, fontSize: 7 },
   pinnedCardAction: { width: 34, height: 34, alignItems: 'center', justifyContent: 'center', borderRadius: 17, backgroundColor: C.paper },
-  sharedMediaGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 5 },
-  sharedMediaTile: { position: 'relative', width: '32%', aspectRatio: 1, overflow: 'hidden', borderRadius: 10, backgroundColor: C.ink },
-  sharedVideoTile: { flex: 1, alignItems: 'center', justifyContent: 'center', backgroundColor: C.ink70 },
-  sharedMediaType: { position: 'absolute', left: 6, bottom: 6, paddingHorizontal: 5, paddingVertical: 3, flexDirection: 'row', alignItems: 'center', gap: 2, borderRadius: 6, backgroundColor: 'rgba(5,14,13,.72)' },
-  sharedMediaTypeText: { color: '#FFFFFF', fontSize: 6, fontWeight: '900', letterSpacing: .4 },
   chatInfoMembers: { overflow: 'hidden', borderRadius: 17, borderWidth: 1, borderColor: C.line, backgroundColor: C.surface },
   chatInfoMember: { minHeight: 65, marginHorizontal: 13, flexDirection: 'row', alignItems: 'center', gap: 10 },
   memberMoreButton: { width: 38, height: 38, alignItems: 'center', justifyContent: 'center', borderRadius: 19, backgroundColor: C.paper },

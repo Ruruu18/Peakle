@@ -275,7 +275,7 @@ function ActionButton({ icon, imageSource, overline, label, type, onPress }) {
   );
 }
 
-function HeaderAction({ active = false, compact = false, docked = false, icon, label, onPress, showBadge = false, textLabel }) {
+function HeaderAction({ active = false, compact = false, docked = false, icon, label, onPress, badgeCount = 0, textLabel }) {
   const { isDark } = useTheme();
   return (
     <MotionPressable
@@ -287,9 +287,9 @@ function HeaderAction({ active = false, compact = false, docked = false, icon, l
       onPress={onPress}
       style={[styles.headerAction, compact && styles.headerActionCompact, isDark && darkStyles.headerAction, docked && styles.headerActionDocked, active && styles.headerActionActive, active && isDark && styles.headerActionActiveDark]}
     >
-      <Icon name={icon} size={17} color={active ? C.ink : isDark ? C.paper : C.ink} />
+      <Icon name={badgeCount > 0 ? icon.replace('-outline', '') : icon} size={17} color={active ? C.ink : isDark ? C.paper : C.ink} />
       {Platform.OS === 'web' && textLabel ? <Text {...webLayout('home-header-action-label')} style={[styles.headerActionLabel, isDark && darkStyles.text]}>{textLabel}</Text> : null}
-      {showBadge ? <View style={[styles.unreadDot, isDark && darkStyles.unreadDot]} /> : null}
+      {badgeCount > 0 ? <View pointerEvents="none" style={[styles.unreadBadge, isDark && darkStyles.unreadBadge]}><Text style={styles.unreadBadgeText}>{badgeCount > 99 ? '99+' : badgeCount}</Text></View> : null}
     </MotionPressable>
   );
 }
@@ -916,13 +916,13 @@ export default function HomeScreen() {
           <View {...webLayout('home-header-actions')} style={desktop ? styles.headerActionsDesktop : [styles.headerDock, isDark && darkStyles.headerDock]}>
             <HeaderAction docked={!desktop} compact={compactHeader} active={isDark && !desktop} icon={isDark ? 'sunny-outline' : 'moon-outline'} label={isDark ? 'Use light dashboard' : 'Use dark dashboard'} onPress={toggleColorMode} />
             {desktop ? null : <HeaderAction docked compact={compactHeader} icon="podium-outline" label="Open leaderboard" textLabel="Leaderboard" onPress={() => navigation.navigate('Leaderboard', { defaultFormat: user?.preference?.toLowerCase() === 'singles' ? 'singles' : 'doubles' })} />}
-            <HeaderAction docked={!desktop} compact={compactHeader} icon="notifications-outline" label={`Open notifications${unreadCount ? `, ${unreadCount} unread` : ''}`} onPress={() => setNotifications(true)} showBadge={unreadCount > 0} />
+            <HeaderAction docked={!desktop} compact={compactHeader} icon="notifications-outline" label={`Open notifications${unreadCount ? `, ${unreadCount} unread` : ''}`} onPress={() => setNotifications(true)} badgeCount={unreadCount} />
           </View>
         </View>
         <KitchenLine style={[styles.headerLine, compactHeader && styles.headerLineCompact]} />
         {tablet ? <View {...webLayout('home')} style={styles.tabletGrid}><View style={styles.primaryColumn}>{schedule}{discovery}{peopleYouMayKnow}{COURT_BOOKING_ENABLED ? nearby : null}</View><View style={styles.secondaryColumn}>{gameOverview}{feed}</View></View> : <>{schedule}{discovery}{peopleYouMayKnow}{gameOverview}{COURT_BOOKING_ENABLED ? nearby : null}{feed}</>}
       </ScrollView>
-      <NotificationSheet visible={notifications} onClose={() => setNotifications(false)} items={notices} unreadCount={unreadCount} onRead={(id) => readNotification(id).catch((error) => Alert.alert('Notifications', error.message || 'This notification could not be marked as read.'))} onReadAll={() => readAllNotifications().catch((error) => Alert.alert('Notifications', error.message || 'Notifications could not be marked as read.'))} onDelete={removeNotification} onClearRead={clearNotifications} onFollowResponse={respondToFollow} onOpen={(item) => { if (!item.read_at) readNotification(item.id).catch(() => {}); setNotifications(false); if (item.kind === 'community_announcement' && item.data?.eventKind && item.data?.eventId) navigation.navigate('CommunityChat', { eventKind: item.data.eventKind, eventId: item.data.eventId, ownerTab: 'Home' }); else if (item.data?.conversationId) navigation.navigate('DirectChat', { conversationId: item.data.conversationId, player: item.data?.playerId ? { id: item.data.playerId } : undefined, ownerTab: 'Team' }); else if (item.data?.teamId && item.kind?.startsWith('team_invite')) navigation.navigate('Team', { openInvitationTeamId: item.data.teamId, openInvitationToken: Date.now() }); else if (item.data?.gameId) navigation.navigate('Schedule', { openGameId: item.data.gameId, openGameToken: Date.now() }); else if (item.data?.sessionId) navigation.navigate('OpenPlayActivity', { token: Date.now(), sessionId: item.data.sessionId, direct: true, returnTo: 'Home' }); }} />
+      <NotificationSheet visible={notifications} onClose={() => setNotifications(false)} items={notices} unreadCount={unreadCount} onRead={(id) => readNotification(id).catch((error) => Alert.alert('Notifications', error.message || 'This notification could not be marked as read.'))} onReadAll={() => readAllNotifications().catch((error) => Alert.alert('Notifications', error.message || 'Notifications could not be marked as read.'))} onDelete={removeNotification} onClearRead={clearNotifications} onFollowResponse={respondToFollow} onOpen={(item) => { if (!item.read_at && item.kind !== 'team_invite') readNotification(item.id).catch(() => {}); setNotifications(false); if (item.kind === 'community_announcement' && item.data?.eventKind && item.data?.eventId) navigation.navigate('CommunityChat', { eventKind: item.data.eventKind, eventId: item.data.eventId, ownerTab: 'Home' }); else if (item.data?.conversationId) navigation.navigate('DirectChat', { conversationId: item.data.conversationId, player: item.data?.playerId ? { id: item.data.playerId } : undefined, ownerTab: 'Team' }); else if (item.data?.teamId && item.kind?.startsWith('team_invite')) navigation.navigate('Team', { openInvitationTeamId: item.data.teamId, openInvitationToken: Date.now() }); else if (item.data?.gameId) navigation.navigate('Schedule', { openGameId: item.data.gameId, openGameToken: Date.now() }); else if (item.data?.sessionId) navigation.navigate('OpenPlayActivity', { token: Date.now(), sessionId: item.data.sessionId, direct: true, returnTo: 'Home' }); }} />
       <LocationPicker visible={locationOpen} onClose={() => setLocationOpen(false)} />
       {!!toast && <Animated.View style={[styles.toast, { opacity: toastAnim, transform: [{ translateY: toastAnim.interpolate({ inputRange: [0, 1], outputRange: [18, 0] }) }] }]}><Text style={styles.toastText}>{toast}</Text></Animated.View>}
     </SafeAreaView>
@@ -940,7 +940,7 @@ const styles = createMobileStyleSheet({
   greetingRow: { flexDirection: 'row', alignItems: 'center', gap: 6 }, greeting: { flexShrink: 1, color: C.teal, fontSize: 13, lineHeight: 17, fontWeight: '600', letterSpacing: -0.1 }, greetingDark: { color: C.optic },
   h1: { marginTop: 1, color: C.ink, fontSize: 24, lineHeight: 29, fontWeight: '600', letterSpacing: -0.9 }, h1Compact: { fontSize: 22, lineHeight: 27, letterSpacing: -0.6 }, h1Desktop: { marginTop: 6, fontSize: 36, lineHeight: 42, letterSpacing: -1.4 }, h1Muted: { color: C.ink40 },
   headerDesktop: { alignItems: 'flex-end', paddingTop: 8 }, headerDock: { flexShrink: 0, flexDirection: 'row', alignItems: 'center', gap: 2, padding: 3, borderWidth: 1, borderColor: C.line, borderRadius: 14, backgroundColor: C.surface, ...shadow }, headerActionsDesktop: { flexShrink: 0, flexDirection: 'row', alignItems: 'center', gap: 8 }, headerActionDocked: { borderWidth: 0, backgroundColor: 'transparent', borderRadius: 12, shadowOpacity: 0, elevation: 0 }, h2: { marginTop: 3, color: C.ink, fontSize: 23, lineHeight: 29, fontWeight: '700', letterSpacing: -0.5 },
-  headerAction: { width: 36, height: 36, borderWidth: 1, borderColor: C.line, borderRadius: 11, backgroundColor: C.surface, alignItems: 'center', justifyContent: 'center', ...shadow }, headerActionCompact: { width: 34, height: 34, borderRadius: 10 }, headerActionActive: { backgroundColor: C.optic }, headerActionActiveDark: { backgroundColor: C.optic }, unreadDot: { position: 'absolute', top: 5, right: 5, width: 8, height: 8, borderRadius: 4, borderWidth: 2, borderColor: C.surface, backgroundColor: C.brick },
+  headerAction: { width: 36, height: 36, borderWidth: 1, borderColor: C.line, borderRadius: 11, backgroundColor: C.surface, alignItems: 'center', justifyContent: 'center', ...shadow }, headerActionCompact: { width: 34, height: 34, borderRadius: 10 }, headerActionActive: { backgroundColor: C.optic }, headerActionActiveDark: { backgroundColor: C.optic }, unreadBadge: { position: 'absolute', top: -6, right: -7, minWidth: 19, height: 19, paddingHorizontal: 5, borderRadius: 10, borderWidth: 2, borderColor: C.surface, backgroundColor: C.brick, alignItems: 'center', justifyContent: 'center' }, unreadBadgeText: { color: '#FFFFFF', fontSize: 10, lineHeight: 12, fontWeight: '900' },
   kitchen: { height: 7, marginVertical: 18 }, solid: { height: 2, backgroundColor: C.ink }, dashed: { marginTop: 4, borderTopWidth: 1, borderStyle: 'dashed', borderColor: C.ink40 }, headerLine: { marginTop: 10, marginBottom: 16 }, headerLineCompact: { marginTop: 18, marginBottom: 14 },
   openPlayMore: { minHeight: 40, paddingHorizontal: 12, flexDirection: 'row', alignItems: 'center', gap: 6, borderRadius: 13, backgroundColor: C.optic }, openPlayMoreText: { color: C.ink, fontSize: 9, fontWeight: '900' },
   openPlayScroll: { paddingRight: 20, gap: 12 }, openPlayScrollSingle: { width: '100%', paddingRight: 0 },
@@ -1007,7 +1007,7 @@ const darkStyles = createMobileStyleSheet({
   actionDivider: { backgroundColor: '#304743' },
   subtle: { backgroundColor: '#203B37' },
   themeButton: { backgroundColor: '#203B37', borderColor: '#3B5550' },
-  unreadDot: { borderColor: '#17302D' },
+  unreadBadge: { borderColor: '#17302D' },
   border: { borderColor: '#304743' },
   ring: { borderRightColor: '#304743' },
   track: { backgroundColor: '#304743' },

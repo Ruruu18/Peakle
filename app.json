@@ -96,6 +96,14 @@
         }
       ],
       [
+        "expo-camera",
+        {
+          "cameraPermission": "Allow Peakle to use your camera so you can take photos and videos to share in chats.",
+          "microphonePermission": "Allow Peakle to use your microphone to record sound with videos you share in chats.",
+          "recordAudioAndroid": true
+        }
+      ],
+      [
         "expo-media-library",
         {
           "photosPermission": "Allow Peakle to access your photos.",

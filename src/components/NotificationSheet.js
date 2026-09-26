@@ -6,6 +6,7 @@ import Modal from './ResponsiveModal';
 import AppIcon from './AppIcon';
 import { DARK_CONTENT_COLORS, LIGHT_CONTENT_COLORS, useTheme } from '../context/ThemeContext';
 import { webDialog } from '../utils/webLayout';
+import { respondTeamInvitation } from '../services/database';
 
 const GROUP_LABELS = { TODAY: 'Today', 'THIS WEEK': 'This week', EARLIER: 'Earlier' };
 
@@ -15,6 +16,10 @@ function NotificationRow({ item, onRead, onDelete, onOpen, onFollowResponse, men
     || (item.kind?.startsWith('team_invite') && item.data?.teamId)
     || (item.kind === 'community_announcement' && item.data?.eventKind && item.data?.eventId)));
   const followRequest = Boolean(item.kind === 'follow_request' && item.data?.requesterId && onFollowResponse);
+  // Answering updates the invite, and the server then marks this notice read,
+  // so the buttons only show while it is still unread.
+  const [inviteAnswer, setInviteAnswer] = useState('');
+  const teamInvite = Boolean(item.kind === 'team_invite' && item.data?.invitationId && unread && !inviteAnswer);
   const [busy, setBusy] = useState('');
   const [actionError, setActionError] = useState('');
   const runAction = async (action, callback) => {
@@ -97,6 +102,29 @@ function NotificationRow({ item, onRead, onDelete, onOpen, onFollowResponse, men
             {busy === 'decline' ? <ActivityIndicator size="small" color={colors.ink70} /> : <Text style={styles.secondaryText}>Decline</Text>}
           </Pressable>
         </View>
+      ) : teamInvite ? (
+        <View style={styles.rowActions}>
+          <Pressable
+            accessibilityRole="button"
+            accessibilityLabel="Accept team invitation"
+            disabled={Boolean(busy)}
+            onPress={() => runAction('accept', async () => { await respondTeamInvitation(item.data.invitationId, true); setInviteAnswer('accepted'); })}
+            style={({ pressed }) => [styles.acceptButton, pressed && styles.controlPressed, busy && styles.controlDisabled]}
+          >
+            {busy === 'accept' ? <ActivityIndicator size="small" color={colors.onAccent} /> : <Text style={styles.acceptText}>Accept</Text>}
+          </Pressable>
+          <Pressable
+            accessibilityRole="button"
+            accessibilityLabel="Decline team invitation"
+            disabled={Boolean(busy)}
+            onPress={() => runAction('decline', async () => { await respondTeamInvitation(item.data.invitationId, false); setInviteAnswer('declined'); })}
+            style={({ pressed }) => [styles.secondaryButton, pressed && styles.controlPressed, busy && styles.controlDisabled]}
+          >
+            {busy === 'decline' ? <ActivityIndicator size="small" color={colors.ink70} /> : <Text style={styles.secondaryText}>Decline</Text>}
+          </Pressable>
+        </View>
+      ) : inviteAnswer ? (
+        <Text accessibilityRole="text" style={styles.actionStatus}>{inviteAnswer === 'accepted' ? 'You joined the team.' : 'Invitation declined.'}</Text>
       ) : menuOpen ? (
         <View style={styles.rowActions}>
           {unread ? (
@@ -289,6 +317,7 @@ const createStyles = (c) => StyleSheet.create({
   inlineAction: { minHeight: 44, paddingHorizontal: 8, flexDirection: 'row', alignItems: 'center', gap: 5, borderRadius: 8, backgroundColor: c.soft },
   inlineActionText: { color: c.teal, fontSize: 12, lineHeight: 18, fontWeight: '600' },
   actionError: { marginLeft: 52, marginTop: 8, paddingRight: 10, color: c.error, fontSize: 12, lineHeight: 18 },
+  actionStatus: { marginLeft: 52, marginTop: 8, paddingRight: 10, color: c.teal, fontSize: 12, lineHeight: 18, fontWeight: '600' },
   emptyState: { paddingVertical: 40, paddingHorizontal: 32, alignItems: 'center' },
   emptyIcon: { width: 64, height: 64, alignItems: 'center', justifyContent: 'center', borderRadius: 32, backgroundColor: c.soft },
   emptyTitle: { marginTop: 20, color: c.ink, textAlign: 'center', fontSize: 19, lineHeight: 26, fontWeight: '600', letterSpacing: -0.3 },

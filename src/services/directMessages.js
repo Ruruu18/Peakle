@@ -387,6 +387,21 @@ export async function findDirectConversation(playerId) {
   return normalizeDirectConversation(row);
 }
 
+// The other participant's last app check-in, for Sent / Delivered receipts.
+// Non-essential: before the migration is applied, or on any error, receipts
+// simply stay at Sent.
+export async function getDirectPeerActivity(conversationId) {
+  if (DEMO_MODE || !conversationId) return null;
+  try {
+    const { data, error } = await requireSupabase().rpc('get_direct_peer_activity', { p_conversation_id: conversationId });
+    if (error) return null;
+    const row = Array.isArray(data) ? data[0] : data;
+    return row ? { isOnline: Boolean(row.is_online), lastActiveAt: row.last_active_at || null } : null;
+  } catch {
+    return null;
+  }
+}
+
 export async function listDirectMessages(conversationId) {
   if (DEMO_MODE) return conversationId === DEMO_CONVERSATION_ID ? DEMO_DIRECT_MESSAGES : [];
   const client = requireSupabase();

@@ -695,17 +695,33 @@ export async function listTeams() {
   const { data, error } = await client.from('teams').select('*, team_members(user_id, role, profiles(display_name, avatar_url))').neq('status', 'archived').order('created_at', { ascending: false });
   if (error) throw error;
   const unique = data.filter((team, index, arr) => arr.findIndex((t) => t.id === team.id) === index);
+  const statsByTeam = await getTeamStats(unique.map((team) => team.id));
   return unique.map((team) => {
     const mine = team.team_members.find((member) => member.user_id === auth.user?.id);
+    const stats = statsByTeam[team.id];
+    const memberRating = (userId) => stats?.member_ratings?.[userId] != null ? Number(stats.member_ratings[userId]).toFixed(1) : 'Unrated';
     return {
       id: team.id, name: team.name, tag: team.tag, location: team.location || '', latitude: team.latitude, longitude: team.longitude,
-      members: team.member_count ?? team.team_members.length, capacity: team.capacity, rating: '—', level: team.skill_level || 'Open level', color: team.color || '#1C6B66',
+      members: team.member_count ?? team.team_members.length, capacity: team.capacity, rating: stats?.rating != null ? Number(stats.rating).toFixed(1) : '—', winRate: stats?.win_rate != null ? `${stats.win_rate}%` : '—', wins: stats?.wins ?? 0, losses: stats?.losses ?? 0, level: team.skill_level || 'Open level', color: team.color || '#1C6B66',
       icon: 'people-outline', role: mine ? ({ creator: 'Owner', admin: 'Admin', co_admin: 'Co-admin', member: 'Member' }[mine.role]) : null, about: team.about || '',
       image: team.image_url, coverImage: team.cover_image_url, isDiscoverable: team.is_discoverable, status: team.status || ((team.member_count ?? team.team_members.length) >= 4 ? 'active' : 'forming'),
-      roster: team.team_members.map((member) => ({ id: member.user_id, name: member.profiles?.display_name || 'Player', initials: (member.profiles?.display_name || 'P').split(/\s+/).map((part) => part[0]).join('').slice(0, 2).toUpperCase(), avatar: member.profiles?.avatar_url || null, role: ({ creator: 'Owner', admin: 'Admin', co_admin: 'Co-admin', member: 'Member' }[member.role]) || 'Member', rating: member.profiles?.skill_rating ?? 'Unrated', color: '#1C6B66' })),
-      acceptedMembers: team.team_members.filter((member) => member.user_id !== auth.user?.id).map((member) => ({ id: member.user_id, name: member.profiles?.display_name || 'Player', rating: member.profiles?.skill_rating ?? 'Unrated' })),
+      roster: team.team_members.map((member) => ({ id: member.user_id, name: member.profiles?.display_name || 'Player', initials: (member.profiles?.display_name || 'P').split(/\s+/).map((part) => part[0]).join('').slice(0, 2).toUpperCase(), avatar: member.profiles?.avatar_url || null, role: ({ creator: 'Owner', admin: 'Admin', co_admin: 'Co-admin', member: 'Member' }[member.role]) || 'Member', rating: memberRating(member.user_id), color: '#1C6B66' })),
+      acceptedMembers: team.team_members.filter((member) => member.user_id !== auth.user?.id).map((member) => ({ id: member.user_id, name: member.profiles?.display_name || 'Player', rating: memberRating(member.user_id) })),
     };
   });
+}
+
+// Team rating, win rate, and member ratings come from members' completed
+// matches (see get_team_stats). Stats are secondary: a missing RPC or error
+// leaves the dashes in place instead of failing the Teams list.
+export async function getTeamStats(teamIds) {
+  if (DEMO_MODE || !teamIds?.length) return {};
+  const { data, error } = await requireSupabase().rpc('get_team_stats', { p_team_ids: teamIds });
+  if (error) {
+    console.warn('Team stats unavailable:', error.message);
+    return {};
+  }
+  return Object.fromEntries((data || []).map((row) => [row.team_id, row]));
 }
 
 export async function createTeamRecord(details) {
@@ -1059,6 +1075,19 @@ export async function moderateTeamMessage(messageId, reason) {
   if (error) throw error;
 }
 
+// When any other member's app last checked in, for Sent / Delivered receipts.
+// Non-essential: before the migration is applied, or on any error, it is null
+// and receipts stay at Sent.
+export async function getTeamChatLastActive(teamId) {
+  if (DEMO_MODE || !teamId) return null;
+  try {
+    const { data, error } = await requireSupabase().rpc('get_team_chat_last_active', { p_team_id: teamId });
+    return error ? null : data || null;
+  } catch {
+    return null;
+  }
+}
+
 export async function sendTeamMessage(teamId, body, media = null) {
   const client = requireSupabase();
   const { data: auth } = await client.auth.getUser();
@@ -1124,6 +1153,8 @@ const mediaExtension = (mime, fileName = '') => {
   return known[mime] || fileName.split('.').pop()?.toLowerCase() || 'bin';
 };
 
+const CHAT_IMAGE_MIMES = ['image/jpeg', 'image/png', 'image/webp'];
+
 export async function uploadTeamChatMedia(teamId, asset, requestedType) {
   return uploadChatMedia('team-chat-media', (userId) => `${teamId}/${userId}`, asset, requestedType, 'Team');
 }
@@ -1176,12 +1207,12 @@ export async function uploadChatMedia(bucket, folderFor, asset, requestedType, n
   let uploadUri = asset.uri;
   let mime = originalMime;
   let type = requestedType;
-  if (requestedType === 'image') {
-    const actions = Math.max(asset.width || 0, asset.height || 0) > 1600
-      ? [{ resize: asset.width >= asset.height ? { width: 1600 } : { height: 1600 } }]
-      : [];
-    const optimized = await ImageManipulator.manipulateAsync(uploadUri, actions, { compress: 0.76, format: ImageManipulator.SaveFormat.JPEG });
-    uploadUri = optimized.uri;
+  if (requestedType === 'image' && !CHAT_IMAGE_MIMES.includes(originalMime)) {
+    // Photos are sent as the original file so they arrive at full quality on
+    // every device. Only formats other devices cannot show (HEIC and friends)
+    // are converted, at full size and maximum quality.
+    const converted = await ImageManipulator.manipulateAsync(uploadUri, [], { compress: 1, format: ImageManipulator.SaveFormat.JPEG });
+    uploadUri = converted.uri;
     mime = 'image/jpeg';
   } else if (requestedType === 'video') {
     const extension = asset.fileName?.split('.').pop()?.toLowerCase();
@@ -1202,7 +1233,7 @@ export async function uploadChatMedia(bucket, folderFor, asset, requestedType, n
   report(0.05);
   const response = await fetch(uploadUri);
   const file = await response.arrayBuffer();
-  const maxBytes = { video: 15, audio: 10 }[type] * 1024 * 1024 || 2 * 1024 * 1024;
+  const maxBytes = { image: 50, video: 15, audio: 10 }[type] * 1024 * 1024;
   if (file.byteLength > maxBytes) throw new Error(`${{ video: 'Video', audio: 'Voice message' }[type] || 'Image'} is too large. The limit is ${Math.round(maxBytes / 1024 / 1024)} MB.`);
 
   const extension = mediaExtension(mime, asset.fileName);

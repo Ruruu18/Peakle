@@ -20,7 +20,7 @@ import AppIcon from './AppIcon';
 import { webLongPress } from '../utils/webLongPress';
 
 // Photos, videos, and voice messages for private chats: the bubble contents,
-// the Messenger-style recording bar, and a full-screen photo preview.
+// the Messenger-style recording bar, and a full-screen photo or video preview.
 
 export const MAX_VOICE_MS = 2 * 60 * 1000;
 const WAVE_BARS = 28;
@@ -72,9 +72,9 @@ export function UploadProgressRing({ progress = 0, size = 56, strokeWidth = 4, c
   );
 }
 
-function VideoContent({ uri }) {
+function VideoContent({ uri, style }) {
   const player = useVideoPlayer(uri, (videoPlayer) => { videoPlayer.loop = false; });
-  return <VideoView player={player} nativeControls contentFit="contain" style={styles.video} />;
+  return <VideoView player={player} nativeControls contentFit="contain" style={[styles.video, style]} />;
 }
 
 function VoiceContent({ message, colors }) {
@@ -223,8 +223,8 @@ export function MediaPreviewModal({ message, onClose }) {
     <Modal visible={Boolean(message)} transparent animationType="fade" onRequestClose={onClose}>
       <View style={styles.previewBackdrop} {...blockWebImageMenu}>
         <Pressable accessibilityLabel="Close photo" onPress={onClose} style={StyleSheet.absoluteFillObject} />
-        {message?.mediaUrl ? <StillImage uri={message.mediaUrl} contentFit="contain" style={styles.previewImage} /> : null}
-        {message?.mediaUrl ? <Pressable accessibilityRole="button" accessibilityLabel="Save photo" disabled={saving} onPress={save} style={[styles.previewClose, styles.previewSave]}>{saving ? <ActivityIndicator color="#FFFFFF" /> : <AppIcon name="download-outline" size={22} color="#FFFFFF" />}</Pressable> : null}
+        {message?.mediaUrl ? (message.mediaType === 'video' ? <VideoContent uri={message.mediaUrl} style={styles.previewImage} /> : <StillImage uri={message.mediaUrl} contentFit="contain" style={styles.previewImage} />) : null}
+        {message?.mediaUrl ? <Pressable accessibilityRole="button" accessibilityLabel={message.mediaType === 'video' ? 'Save video' : 'Save photo'} disabled={saving} onPress={save} style={[styles.previewClose, styles.previewSave]}>{saving ? <ActivityIndicator color="#FFFFFF" /> : <AppIcon name="download-outline" size={22} color="#FFFFFF" />}</Pressable> : null}
         <Pressable accessibilityLabel="Close photo" onPress={onClose} style={styles.previewClose}><AppIcon name="close" size={22} color="#FFFFFF" /></Pressable>
       </View>
     </Modal>

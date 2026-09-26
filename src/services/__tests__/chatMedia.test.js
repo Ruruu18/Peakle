@@ -115,3 +115,12 @@ it('rejects oversized recordings before sending any bytes', async () => {
   expect(global.XMLHttpRequest).not.toHaveBeenCalled();
   expect(storage.upload).not.toHaveBeenCalled();
 });
+
+it('uploads chat photos as the original file without resizing or re-compressing', async () => {
+  global.fetch = jest.fn(async () => ({ arrayBuffer: async () => new ArrayBuffer(48 * 1024 * 1024) }));
+  const photo = { uri: 'file:///photo.jpg', mimeType: 'image/jpeg', fileName: 'photo.jpg', width: 8000, height: 6000 };
+  const result = await uploadChatMedia('direct-message-media', (id) => `conversation/${id}`, photo, 'image', 'Private');
+  expect(global.fetch).toHaveBeenCalledWith('file:///photo.jpg');
+  expect(storage.upload).toHaveBeenCalledWith('conversation/me/upload-id.jpg', expect.any(ArrayBuffer), { contentType: 'image/jpeg', upsert: false });
+  expect(result.size).toBe(48 * 1024 * 1024);
+});
