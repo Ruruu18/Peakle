@@ -4,26 +4,41 @@ import {
   DEMO_CONVERSATIONS, DEMO_CONVERSATION, DEMO_CONVERSATION_ID, DEMO_DIRECT_MESSAGES,
   DEMO_SUGGESTIONS, DEMO_FOLLOWING, DEMO_FOLLOW_COUNTS,
 } from '../config/demoData';
+import { uploadChatMedia } from './database';
+
+const DIRECT_MEDIA_BUCKET = 'direct-message-media';
 
 const DIRECT_MESSAGE_SELECT_BASE = 'id, conversation_id, sender_id, body, created_at, profiles!direct_messages_sender_id_fkey(display_name, avatar_url)';
 const DIRECT_MESSAGE_SELECT = `${DIRECT_MESSAGE_SELECT_BASE}, direct_message_reactions(emoji, user_id)`;
-// Newest schema first. Projects without the unsend column (42703) or the
-// reactions table fall back to the older shapes.
-const DIRECT_MESSAGE_SELECTS = [
-  `${DIRECT_MESSAGE_SELECT_BASE}, deleted_at, direct_message_reactions(emoji, user_id)`,
-  DIRECT_MESSAGE_SELECT,
-  DIRECT_MESSAGE_SELECT_BASE,
-];
-const messageSchemaMissing = (error) => ['42P01', '42703', 'PGRST200', 'PGRST204', 'PGRST205'].includes(error?.code);
+const reactionsSchemaMissing = (error) => ['42P01', 'PGRST200', 'PGRST205'].includes(error?.code);
+// 42703: a newer column (unsend or media) has not reached this project yet.
+const columnMissing = (error) => ['42703', 'PGRST204'].includes(error?.code);
 const deleteSchemaMissing = (error) => ['42P01', '42703', 'PGRST202', 'PGRST205'].includes(error?.code);
+// Newest first: media (202609260007) builds on unsend (202609260006).
+const MESSAGE_COLUMN_LEVELS = ['', ', deleted_at', ', deleted_at, media_path, media_type, media_mime, media_name, media_duration_ms'];
 
+// Tries the newest message shape first and drops only the part the project
+// is missing: newer columns, the reactions table, or both.
 async function selectDirectMessages(run) {
-  let result;
-  for (const select of DIRECT_MESSAGE_SELECTS) {
-    result = await run(select);
-    if (!result.error || !messageSchemaMissing(result.error)) return result;
+  let columnLevel = MESSAGE_COLUMN_LEVELS.length - 1;
+  let withReactions = true;
+  for (;;) {
+    const select = `${withReactions ? DIRECT_MESSAGE_SELECT : DIRECT_MESSAGE_SELECT_BASE}${MESSAGE_COLUMN_LEVELS[columnLevel]}`;
+    const result = await run(select);
+    if (!result.error) return result;
+    if (columnLevel > 0 && columnMissing(result.error)) columnLevel -= 1;
+    else if (withReactions && reactionsSchemaMissing(result.error)) withReactions = false;
+    else return result;
   }
-  return result;
+}
+
+// Media is private, so each message gets a short-lived signed URL.
+async function addSignedDirectMedia(client, rows) {
+  const paths = [...new Set((rows || []).map((row) => row?.media_path).filter(Boolean))];
+  if (!paths.length) return rows || [];
+  const { data, error } = await client.storage.from(DIRECT_MEDIA_BUCKET).createSignedUrls(paths, 3600);
+  const urls = error ? new Map() : new Map((data || []).map((item, index) => [paths[index], item.signedUrl]));
+  return rows.map((row) => (row?.media_path ? { ...row, media_url: urls.get(row.media_path) || null } : row));
 }
 
 export function normalizeDirectConversation(row) {
@@ -62,6 +77,10 @@ export function normalizeDirectMessage(row, currentUserId) {
     mine: row.sender_id === currentUserId,
     text: row.deleted_at ? null : row.body,
     deletedAt: row.deleted_at || null,
+    mediaType: row.deleted_at ? null : row.media_type || null,
+    mediaPath: row.deleted_at ? null : row.media_path || null,
+    mediaUrl: row.deleted_at ? null : row.media_url || null,
+    mediaDurationMs: row.deleted_at ? null : row.media_duration_ms ?? null,
     reactions: row.direct_message_reactions || [],
     createdAt: row.created_at,
     time: new Date(row.created_at).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }),
@@ -388,9 +407,8 @@ export async function listDirectMessages(conversationId) {
   };
   const { data, error } = await selectDirectMessages(query);
   if (error) throw error;
-  return (data || [])
-    .filter((row) => !hiddenIds.has(row.id))
-    .map((row) => normalizeDirectMessage(row, auth.user?.id));
+  const visible = await addSignedDirectMedia(client, (data || []).filter((row) => !hiddenIds.has(row.id)));
+  return visible.map((row) => normalizeDirectMessage(row, auth.user?.id));
 }
 
 // Messages this player deleted for themselves only.
@@ -399,7 +417,7 @@ async function listHiddenDirectMessageIds(client, conversationId) {
     .select('message_id, direct_messages!inner(conversation_id)')
     .eq('direct_messages.conversation_id', conversationId);
   if (error) {
-    if (messageSchemaMissing(error)) return new Set();
+    if (deleteSchemaMissing(error) || reactionsSchemaMissing(error)) return new Set();
     throw error;
   }
   return new Set((data || []).map((row) => row.message_id));
@@ -413,7 +431,8 @@ export async function getDirectMessage(messageId) {
     .eq('id', messageId)
     .maybeSingle());
   if (error) throw error;
-  return normalizeDirectMessage(data, auth.user?.id);
+  const [row] = await addSignedDirectMedia(client, data ? [data] : []);
+  return normalizeDirectMessage(row || null, auth.user?.id);
 }
 
 export async function startDirectConversation(playerId, body) {
@@ -680,11 +699,37 @@ function deleteError(error) {
 
 // Delete for everyone: only the sender can unsend, and both players then see
 // "Message unsent" in its place.
-export async function unsendDirectMessage(messageId) {
+export async function unsendDirectMessage(messageId, mediaPath = null) {
   if (DEMO_MODE) return new Date().toISOString();
-  const { data, error } = await requireSupabase().rpc('unsend_direct_message', { p_message_id: messageId });
+  const client = requireSupabase();
+  const { data, error } = await client.rpc('unsend_direct_message', { p_message_id: messageId });
   if (error) throw deleteError(error);
+  // The message no longer points at the file, so removing it is best effort.
+  if (mediaPath) client.storage.from(DIRECT_MEDIA_BUCKET).remove([mediaPath]).catch(() => {});
   return data || null;
+}
+
+// Uploads a picked photo or video, or a recorded voice message, into this
+// conversation's folder, then sends it. A failed send removes the upload so no orphaned file is left behind.
+export async function sendDirectMediaMessage(conversationId, asset, type) {
+  const client = requireSupabase();
+  const uploaded = await uploadChatMedia(DIRECT_MEDIA_BUCKET, (userId) => `${conversationId}/${userId}`, asset, type, 'Private');
+  const { data, error } = await client.rpc('send_direct_media_message', {
+    p_conversation_id: conversationId,
+    p_media_path: uploaded.path,
+    p_media_type: uploaded.type,
+    p_media_mime: uploaded.mime,
+    p_media_size: uploaded.size,
+    p_media_name: uploaded.name,
+    // Picker and recorder durations are both in milliseconds.
+    p_media_duration_ms: Number.isFinite(asset.duration) ? Math.min(600000, Math.round(asset.duration)) : null,
+  });
+  if (error) {
+    client.storage.from(DIRECT_MEDIA_BUCKET).remove([uploaded.path]).catch(() => {});
+    if (['PGRST202', '42883'].includes(error.code)) throw new Error('Sending photos and videos is not available yet. Please try again after the next update.');
+    throw error;
+  }
+  return getDirectMessage(data);
 }
 
 // Delete for you: hides the message from this player only.

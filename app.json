@@ -82,9 +82,17 @@
         }
       ],
       [
+        "expo-audio",
+        {
+          "microphonePermission": "Allow $(PRODUCT_NAME) to use the microphone so you can send voice messages and call out the score."
+        }
+      ],
+      [
         "expo-image-picker",
         {
-          "photosPermission": "Allow Peakle to access your photos so you can choose a profile picture."
+          "photosPermission": "Allow Peakle to access your photos so you can choose a profile picture and share photos and videos in chats.",
+          "cameraPermission": "Allow Peakle to use your camera so you can take photos and videos to share in chats.",
+          "microphonePermission": "Allow Peakle to use your microphone to record sound with videos you share in chats."
         }
       ],
       [

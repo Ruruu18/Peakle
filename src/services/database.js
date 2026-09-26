@@ -1115,11 +1115,20 @@ const mediaExtension = (mime, fileName = '') => {
   const known = {
     'image/jpeg': 'jpg', 'image/png': 'png', 'image/webp': 'webp', 'image/gif': 'gif',
     'video/mp4': 'mp4', 'video/quicktime': 'mov', 'video/webm': 'webm',
+    'audio/mp4': 'm4a', 'audio/m4a': 'm4a', 'audio/x-m4a': 'm4a', 'audio/aac': 'aac', 'audio/webm': 'webm', 'audio/ogg': 'ogg', 'audio/mpeg': 'mp3',
   };
   return known[mime] || fileName.split('.').pop()?.toLowerCase() || 'bin';
 };
 
 export async function uploadTeamChatMedia(teamId, asset, requestedType) {
+  return uploadChatMedia('team-chat-media', (userId) => `${teamId}/${userId}`, asset, requestedType, 'Team');
+}
+
+// Shared by team and private chats: photos are resized to 1600px JPEGs
+// (2 MB max), videos keep their format (15 MB max), and voice recordings are
+// uploaded as recorded (10 MB max; private chats only). folderFor(userId) is the
+// storage folder the bucket's policies expect.
+export async function uploadChatMedia(bucket, folderFor, asset, requestedType, namePrefix = 'Chat') {
   const client = requireSupabase();
   const { data: auth } = await client.auth.getUser();
   if (!auth.user) throw new Error('Sign in before uploading media.');
@@ -1127,7 +1136,7 @@ export async function uploadTeamChatMedia(teamId, asset, requestedType) {
   const originalMime = asset.mimeType || (requestedType === 'video' ? 'video/mp4' : 'image/jpeg');
   const isGif = originalMime === 'image/gif' || asset.fileName?.toLowerCase().endsWith('.gif');
   if (isGif) throw new Error('GIF sending is temporarily unavailable.');
-  if (!['image', 'video'].includes(requestedType)) throw new Error('This attachment type is not supported.');
+  if (!['image', 'video', 'audio'].includes(requestedType)) throw new Error('This attachment type is not supported.');
 
   let uploadUri = asset.uri;
   let mime = originalMime;
@@ -1144,23 +1153,32 @@ export async function uploadTeamChatMedia(teamId, asset, requestedType) {
     if (extension === 'mov') mime = 'video/quicktime';
     else if (extension === 'webm') mime = 'video/webm';
     else if (!['video/mp4', 'video/quicktime', 'video/webm'].includes(mime)) mime = 'video/mp4';
+  } else if (requestedType === 'audio') {
+    // Native recorders write .m4a files; the web recorder hands over a blob
+    // URL, so its caller passes the mime type.
+    const extension = (asset.fileName || asset.uri || '').split('?')[0].split('.').pop()?.toLowerCase();
+    if (asset.mimeType?.startsWith('audio/')) mime = asset.mimeType.split(';')[0];
+    else if (extension === 'webm') mime = 'audio/webm';
+    else if (extension === 'ogg') mime = 'audio/ogg';
+    else if (extension === 'mp3') mime = 'audio/mpeg';
+    else mime = 'audio/mp4';
   }
 
   const response = await fetch(uploadUri);
   const file = await response.arrayBuffer();
-  const maxBytes = type === 'video' ? 15 * 1024 * 1024 : 2 * 1024 * 1024;
-  if (file.byteLength > maxBytes) throw new Error(`${type === 'video' ? 'Video' : 'Image'} is too large. The limit is ${Math.round(maxBytes / 1024 / 1024)} MB.`);
+  const maxBytes = { video: 15, audio: 10 }[type] * 1024 * 1024 || 2 * 1024 * 1024;
+  if (file.byteLength > maxBytes) throw new Error(`${{ video: 'Video', audio: 'Voice message' }[type] || 'Image'} is too large. The limit is ${Math.round(maxBytes / 1024 / 1024)} MB.`);
 
   const extension = mediaExtension(mime, asset.fileName);
-  const path = `${teamId}/${auth.user.id}/${Crypto.randomUUID()}.${extension}`;
-  const { error } = await client.storage.from('team-chat-media').upload(path, file, { contentType: mime, upsert: false });
+  const path = `${folderFor(auth.user.id)}/${Crypto.randomUUID()}.${extension}`;
+  const { error } = await client.storage.from(bucket).upload(path, file, { contentType: mime, upsert: false });
   if (error) throw error;
-  const { data: signed, error: signedError } = await client.storage.from('team-chat-media').createSignedUrl(path, 3600);
+  const { data: signed, error: signedError } = await client.storage.from(bucket).createSignedUrl(path, 3600);
   if (signedError) {
-    await client.storage.from('team-chat-media').remove([path]).catch(() => {});
+    await client.storage.from(bucket).remove([path]).catch(() => {});
     throw signedError;
   }
-  return { path, url: signed.signedUrl, type, mime, size: file.byteLength, name: asset.fileName || `Team ${type}.${extension}` };
+  return { path, url: signed.signedUrl, type, mime, size: file.byteLength, name: asset.fileName || `${namePrefix} ${type}.${extension}` };
 }
 
 export async function deleteTeamChatMedia(path) {

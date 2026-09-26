@@ -10,7 +10,6 @@ import ScrollView from '../components/FocusResetScrollView';
 import CourtPickerSheet from '../components/CourtPickerSheet';
 import ScheduleCalendar from '../components/ScheduleCalendar';
 import { HeaderAvatar } from '../components/AccountMenu';
-import { ORGANIZER_EVENTS_ENABLED } from '../config/features';
 import useDesktopLayout from '../hooks/useDesktopLayout';
 import { webDialog, webLayout } from '../utils/webLayout';
 import { useAuth } from '../context/AuthContext';
@@ -47,7 +46,7 @@ function Segmented({ options, value, onChange, styles, accessibilityLabel }) {
     <View accessibilityRole="tablist" accessibilityLabel={accessibilityLabel} style={styles.segmented}>
       {options.map((option) => {
         const selected = option.value === value;
-        return <Pressable key={option.value} accessibilityRole="tab" accessibilityState={{ selected }} onPress={() => onChange(option.value)} style={({ pressed }) => [styles.segment, selected && styles.segmentActive, pressed && styles.pressed]}><Text style={[styles.segmentText, selected && styles.segmentTextActive]}>{option.label}</Text></Pressable>;
+        return <Pressable key={option.value} accessibilityRole="tab" accessibilityLabel={option.label} accessibilityState={{ selected }} aria-selected={selected} onPress={() => onChange(option.value)} style={({ pressed }) => [styles.segment, selected && styles.segmentActive, pressed && styles.pressed]}><Text style={[styles.segmentText, selected && styles.segmentTextActive]}>{option.label}</Text></Pressable>;
       })}
     </View>
   );
@@ -74,23 +73,27 @@ function MonthCalendar({ monthKey, selectedKey, todayKey, markers, onSelect, onM
       </View>
       <View style={styles.weekdayRow}>{WEEKDAYS.map((day, index) => <Text key={`${day}-${index}`} style={styles.weekday}>{day}</Text>)}</View>
       <View style={styles.dayGrid}>
-        {days.map((key) => {
-          const inMonth = key.startsWith(monthKey);
-          const selected = key === selectedKey;
-          const today = key === todayKey;
-          const disabled = Boolean(minKey && key < minKey);
-          const hasItems = Boolean(markers[key]?.length);
-          return (
-            <Pressable key={key} disabled={disabled} accessibilityRole="button" accessibilityState={{ selected, disabled }} accessibilityLabel={`${formatDayLabel(key)}${hasItems ? `, ${markers[key].length} scheduled` : ''}`} onPress={() => onSelect(key)} style={styles.dayCell}>
-              {({ pressed }) => (
-                <View style={[styles.day, hasItems && !selected && styles.dayBusy, selected && styles.daySelected, pressed && !selected && styles.dayPressed]}>
-                  <Text style={[styles.dayText, !inMonth && styles.dayTextMuted, disabled && styles.dayTextDisabled, today && !selected && styles.dayTextToday, selected && styles.dayTextSelected]}>{Number(key.slice(8))}</Text>
-                  <DayMarkers kinds={markers[key]} />
-                </View>
-              )}
-            </Pressable>
-          );
-        })}
+        {Array.from({ length: days.length / 7 }, (_, week) => (
+          <View key={days[week * 7]} style={styles.dayWeekRow}>
+            {days.slice(week * 7, week * 7 + 7).map((key) => {
+              const inMonth = key.startsWith(monthKey);
+              const selected = key === selectedKey;
+              const today = key === todayKey;
+              const disabled = Boolean(minKey && key < minKey);
+              const hasItems = Boolean(markers[key]?.length);
+              return (
+                <Pressable key={key} disabled={disabled} accessibilityRole="button" accessibilityState={{ selected, disabled }} accessibilityLabel={`${formatDayLabel(key)}${hasItems ? `, ${markers[key].length} scheduled` : ''}`} onPress={() => onSelect(key)} style={styles.dayCell}>
+                  {({ pressed }) => (
+                    <View style={[styles.day, hasItems && !selected && styles.dayBusy, selected && styles.daySelected, pressed && !selected && styles.dayPressed]}>
+                      <Text style={[styles.dayText, !inMonth && styles.dayTextMuted, disabled && styles.dayTextDisabled, today && !selected && styles.dayTextToday, selected && styles.dayTextSelected]}>{Number(key.slice(8))}</Text>
+                      <DayMarkers kinds={markers[key]} />
+                    </View>
+                  )}
+                </Pressable>
+              );
+            })}
+          </View>
+        ))}
       </View>
     </View>
   );
@@ -540,7 +543,6 @@ export default function ScheduleScreen({ navigation, route }) {
   }, [visible]);
   const pendingInvites = games.filter((game) => game.myStatus === 'invited' && game.status === 'scheduled' && new Date(game.endsAt).getTime() > Date.now());
   const openEntry = openEntryId ? allEntries.find((entry) => entry.id === openEntryId) || null : null;
-  const availableKinds = Object.entries(KINDS).filter(([kind]) => kind === 'game' || ORGANIZER_EVENTS_ENABLED || scoped.some((entry) => entry.kind === kind));
   const hasFilteredEntries = scoped.some((entry) => dayKey(entry.startsAt) === selectedKey && hiddenKinds.includes(entry.kind));
 
   const selectDay = (key) => {
@@ -580,7 +582,7 @@ export default function ScheduleScreen({ navigation, route }) {
 
   const legend = (
     <View style={styles.legend}>
-      {availableKinds.map(([kind, meta]) => {
+      {Object.entries(KINDS).map(([kind, meta]) => {
         const hidden = hiddenKinds.includes(kind);
         return <Pressable key={kind} accessibilityRole="checkbox" accessibilityState={{ checked: !hidden }} accessibilityLabel={`Show ${meta.label}`} onPress={() => toggleKind(kind)} style={({ pressed }) => [styles.legendItem, !hidden && styles.legendItemActive, hidden && styles.legendItemOff, pressed && styles.pressed]}><View style={[styles.legendDot, { backgroundColor: hidden ? 'transparent' : kindColor(kind, isDark), borderColor: kindColor(kind, isDark) }]} /><Text style={styles.legendText}>{meta.label}</Text>{!hidden ? <AppIcon name="checkmark" size={12} color={palette.teal} /> : null}</Pressable>;
       })}
@@ -635,9 +637,9 @@ export default function ScheduleScreen({ navigation, route }) {
         </View>
         {error ? <View style={styles.errorBox}><AppIcon name="cloud-offline-outline" size={17} color={palette.brick} /><Text style={styles.errorText}>{error}</Text><Pressable accessibilityRole="button" onPress={() => load({ refresh: true })}><Text style={styles.retryText}>Retry</Text></Pressable></View> : null}
         {view === 'discover' ? <>{legend}{discover}</> : (
-          <View {...webLayout('schedule-columns')} style={[styles.columns, wide && styles.columnsWide]}>
-            <View style={[styles.calendarColumn, wide && styles.calendarColumnWide]}><ScheduleCalendar monthKey={monthKey} selectedKey={selectedKey} todayKey={todayKey} byDay={byDay} monthOpen={monthOpen} onToggleMonth={() => setMonthOpen((value) => !value)} onSelect={selectDay} onMonth={changeMonth} expanded={layoutWidth >= 680} kindColor={kindColor} footer={legend} /></View>
-            <View style={[styles.mainColumn, wide && styles.mainColumnWide]}>{agenda}</View>
+          <View {...webLayout('schedule-columns')} style={styles.columns}>
+            <View style={styles.calendarColumn}><ScheduleCalendar monthKey={monthKey} selectedKey={selectedKey} todayKey={todayKey} byDay={byDay} monthOpen={monthOpen} onToggleMonth={() => setMonthOpen((value) => !value)} onSelect={selectDay} onMonth={changeMonth} expanded={layoutWidth >= 680} kindColor={kindColor} filters={legend} /></View>
+            <View style={styles.mainColumn}>{agenda}</View>
           </View>
         )}
       </ScrollView>
@@ -672,20 +674,18 @@ const lightStyles = StyleSheet.create({
   segmentText: { color: C.ink40, fontSize: 12, fontWeight: '700' },
   segmentTextActive: { color: C.ink, fontWeight: '900' },
   columns: { marginTop: 20, gap: 18 },
-  columnsWide: { flexDirection: 'row', alignItems: 'flex-start', gap: 20 },
-  calendarColumn: { minWidth: 0 },
-  calendarColumnWide: { flex: 1 },
-  mainColumn: { minWidth: 0 },
-  mainColumnWide: { width: 340 },
+  calendarColumn: { width: '100%', minWidth: 0 },
+  mainColumn: { width: '100%', minWidth: 0 },
   calendar: { marginTop: 16, padding: 14, borderRadius: 18, borderWidth: 1, borderColor: C.line, backgroundColor: C.surface },
-  calendarHead: { marginBottom: 10, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
-  calendarTitle: { color: C.ink, fontSize: 15, fontWeight: '800' },
+  calendarHead: { marginBottom: 14, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 10 },
+  calendarTitle: { flex: 1, minWidth: 0, color: C.ink, fontSize: 17, lineHeight: 23, fontWeight: '800' },
   calendarNav: { flexDirection: 'row', gap: 6 },
   calendarNavButton: { width: 34, height: 34, alignItems: 'center', justifyContent: 'center', borderRadius: 10, borderWidth: 1, borderColor: C.line, backgroundColor: C.paper },
   weekdayRow: { flexDirection: 'row' },
   weekday: { flex: 1, paddingVertical: 6, color: C.ink40, fontSize: 10, fontWeight: '800', textAlign: 'center' },
-  dayGrid: { flexDirection: 'row', flexWrap: 'wrap' },
-  dayCell: { width: `${100 / 7}%`, aspectRatio: 1, padding: 2 },
+  dayGrid: { gap: 4 },
+  dayWeekRow: { flexDirection: 'row' },
+  dayCell: { flex: 1, minWidth: 0, minHeight: 44, aspectRatio: 1, padding: 2 },
   day: { flex: 1, alignItems: 'center', justifyContent: 'center', borderRadius: 10 },
   dayBusy: { backgroundColor: C.paper },
   dayPressed: { backgroundColor: C.tealWash },

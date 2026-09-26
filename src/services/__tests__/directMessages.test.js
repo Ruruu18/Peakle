@@ -31,14 +31,24 @@ import {
   respondDirectMessageRequest,
   markDirectConversationRead,
   reportDirectMessage,
+  unsendDirectMessage,
+  hideDirectMessage,
+  sendDirectMediaMessage,
 } from '../directMessages';
+import { uploadChatMedia } from '../database';
 
 jest.mock('../../lib/supabase', () => ({ requireSupabase: jest.fn() }));
+jest.mock('../database', () => ({ uploadChatMedia: jest.fn() }));
 
 // Mirrors the exact select strings built in directMessages.js so tests can
-// assert the fallback query really drops the reactions join.
-const MESSAGE_SELECT_BASE = 'id, conversation_id, sender_id, body, created_at, profiles!direct_messages_sender_id_fkey(display_name, avatar_url)';
-const MESSAGE_SELECT_FULL = `${MESSAGE_SELECT_BASE}, direct_message_reactions(emoji, user_id)`;
+// assert each fallback drops only the missing part (reactions or unsend).
+const MESSAGE_SELECT_CORE = 'id, conversation_id, sender_id, body, created_at, profiles!direct_messages_sender_id_fkey(display_name, avatar_url)';
+const MESSAGE_MEDIA_COLUMNS = ', deleted_at, media_path, media_type, media_mime, media_name, media_duration_ms';
+const MESSAGE_SELECT_FULL = `${MESSAGE_SELECT_CORE}, direct_message_reactions(emoji, user_id)${MESSAGE_MEDIA_COLUMNS}`;
+const MESSAGE_SELECT_BASE = `${MESSAGE_SELECT_CORE}${MESSAGE_MEDIA_COLUMNS}`;
+const MESSAGE_SELECT_UNSEND_ONLY = `${MESSAGE_SELECT_CORE}, direct_message_reactions(emoji, user_id), deleted_at`;
+// listDirectMessages reads settings, then this player's hidden messages, then the messages.
+const noHides = () => makeQueryBuilder({ data: [], error: null });
 
 // Mimics the real supabase-js query builder: every filter/chain method
 // returns the same object, and awaiting it (or calling a terminal method
@@ -131,6 +141,12 @@ describe('normalizeDirectConversation', () => {
 describe('normalizeDirectMessage', () => {
   it('returns null for a missing row', () => {
     expect(normalizeDirectMessage(null, 'me')).toBeNull();
+  });
+
+  it('blanks the text of an unsent message and keeps when it was unsent', () => {
+    const message = normalizeDirectMessage({ id: 'm1', sender_id: 'p1', body: null, deleted_at: '2026-09-26T10:00:00Z', created_at: '2026-09-26T09:00:00Z' }, 'me');
+    expect(message.text).toBeNull();
+    expect(message.deletedAt).toBe('2026-09-26T10:00:00Z');
   });
 
   it('uses the sender profile name and marks the message as mine', () => {
@@ -433,12 +449,13 @@ describe('listDirectMessages (reactions-schema fallback)', () => {
       data: [{ id: 'm1', sender_id: 'me', body: 'hi', created_at: '2026-08-10T12:00:00Z' }],
       error: null,
     });
-    client.from.mockReturnValueOnce(makeQueryBuilder({ data: null, error: null })).mockReturnValueOnce(builder);
+    client.from.mockReturnValueOnce(makeQueryBuilder({ data: null, error: null })).mockReturnValueOnce(noHides()).mockReturnValueOnce(builder);
     requireSupabase.mockReturnValue(client);
 
     const result = await listDirectMessages('c1');
     expect(client.from).toHaveBeenNthCalledWith(1, 'direct_conversation_settings');
-    expect(client.from).toHaveBeenCalledTimes(2);
+    expect(client.from).toHaveBeenNthCalledWith(2, 'direct_message_hides');
+    expect(client.from).toHaveBeenCalledTimes(3);
     expect(builder.gt).not.toHaveBeenCalled();
     expect(builder.select).toHaveBeenCalledWith(MESSAGE_SELECT_FULL);
     expect(builder.eq).toHaveBeenCalledWith('conversation_id', 'c1');
@@ -453,11 +470,11 @@ describe('listDirectMessages (reactions-schema fallback)', () => {
       data: [{ id: 'm1', sender_id: 'p1', body: 'hi', created_at: '2026-08-10T12:00:00Z' }],
       error: null,
     });
-    client.from.mockReturnValueOnce(makeQueryBuilder({ data: null, error: null })).mockReturnValueOnce(failing).mockReturnValueOnce(fallback);
+    client.from.mockReturnValueOnce(makeQueryBuilder({ data: null, error: null })).mockReturnValueOnce(noHides()).mockReturnValueOnce(failing).mockReturnValueOnce(fallback);
     requireSupabase.mockReturnValue(client);
 
     const result = await listDirectMessages('c1');
-    expect(client.from).toHaveBeenCalledTimes(3);
+    expect(client.from).toHaveBeenCalledTimes(4);
     expect(fallback.select).toHaveBeenCalledWith(MESSAGE_SELECT_BASE);
     expect(fallback.eq).toHaveBeenCalledWith('conversation_id', 'c1');
     expect(result[0].reactions).toEqual([]);
@@ -467,26 +484,26 @@ describe('listDirectMessages (reactions-schema fallback)', () => {
     const client = makeClient();
     const failing = makeQueryBuilder({ data: null, error: { code } });
     const fallback = makeQueryBuilder({ data: [], error: null });
-    client.from.mockReturnValueOnce(makeQueryBuilder({ data: null, error: null })).mockReturnValueOnce(failing).mockReturnValueOnce(fallback);
+    client.from.mockReturnValueOnce(makeQueryBuilder({ data: null, error: null })).mockReturnValueOnce(noHides()).mockReturnValueOnce(failing).mockReturnValueOnce(fallback);
     requireSupabase.mockReturnValue(client);
     await expect(listDirectMessages('c1')).resolves.toEqual([]);
-    expect(client.from).toHaveBeenCalledTimes(3);
+    expect(client.from).toHaveBeenCalledTimes(4);
   });
 
   it('throws immediately on a real error without attempting the fallback', async () => {
     const client = makeClient();
     const failing = makeQueryBuilder({ data: null, error: new Error('rls denied') });
-    client.from.mockReturnValueOnce(makeQueryBuilder({ data: null, error: null })).mockReturnValueOnce(failing);
+    client.from.mockReturnValueOnce(makeQueryBuilder({ data: null, error: null })).mockReturnValueOnce(noHides()).mockReturnValueOnce(failing);
     requireSupabase.mockReturnValue(client);
     await expect(listDirectMessages('c1')).rejects.toThrow('rls denied');
-    expect(client.from).toHaveBeenCalledTimes(2);
+    expect(client.from).toHaveBeenCalledTimes(3);
   });
 
   it('only loads messages newer than a delete-for-me', async () => {
     const client = makeClient();
     const settings = makeQueryBuilder({ data: { cleared_at: '2026-09-26T08:00:00Z' }, error: null });
     const builder = makeQueryBuilder({ data: [], error: null });
-    client.from.mockReturnValueOnce(settings).mockReturnValueOnce(builder);
+    client.from.mockReturnValueOnce(settings).mockReturnValueOnce(noHides()).mockReturnValueOnce(builder);
     requireSupabase.mockReturnValue(client);
     await listDirectMessages('c1');
     expect(settings.eq).toHaveBeenCalledWith('conversation_id', 'c1');
@@ -496,10 +513,53 @@ describe('listDirectMessages (reactions-schema fallback)', () => {
   it('still throws when the fallback query itself errors', async () => {
     const client = makeClient();
     client.from
+      .mockReturnValueOnce(makeQueryBuilder({ data: null, error: null }))
+      .mockReturnValueOnce(noHides())
       .mockReturnValueOnce(makeQueryBuilder({ data: null, error: { code: '42P01' } }))
       .mockReturnValueOnce(makeQueryBuilder({ data: null, error: new Error('fallback also failed') }));
     requireSupabase.mockReturnValue(client);
     await expect(listDirectMessages('c1')).rejects.toThrow('fallback also failed');
+  });
+});
+
+describe('listDirectMessages (per-message delete)', () => {
+  it('drops only the media columns when they are missing (42703)', async () => {
+    const client = makeClient();
+    const failing = makeQueryBuilder({ data: null, error: { code: '42703' } });
+    const fallback = makeQueryBuilder({ data: [], error: null });
+    client.from.mockReturnValueOnce(makeQueryBuilder({ data: null, error: null })).mockReturnValueOnce(noHides()).mockReturnValueOnce(failing).mockReturnValueOnce(fallback);
+    requireSupabase.mockReturnValue(client);
+    await listDirectMessages('c1');
+    expect(failing.select).toHaveBeenCalledWith(MESSAGE_SELECT_FULL);
+    expect(fallback.select).toHaveBeenCalledWith(MESSAGE_SELECT_UNSEND_ONLY);
+  });
+
+  it('leaves out messages this player deleted for themselves', async () => {
+    const client = makeClient({ authUser: { id: 'me' } });
+    const hides = makeQueryBuilder({ data: [{ message_id: 'm1' }], error: null });
+    const builder = makeQueryBuilder({
+      data: [
+        { id: 'm1', sender_id: 'p1', body: 'hidden', created_at: '2026-09-26T10:00:00Z' },
+        { id: 'm2', sender_id: 'p1', body: 'kept', created_at: '2026-09-26T10:01:00Z' },
+      ],
+      error: null,
+    });
+    client.from.mockReturnValueOnce(makeQueryBuilder({ data: null, error: null })).mockReturnValueOnce(hides).mockReturnValueOnce(builder);
+    requireSupabase.mockReturnValue(client);
+    const result = await listDirectMessages('c1');
+    expect(hides.eq).toHaveBeenCalledWith('direct_messages.conversation_id', 'c1');
+    expect(result.map((message) => message.id)).toEqual(['m2']);
+  });
+
+  it('shows every message when the hides table is not deployed yet', async () => {
+    const client = makeClient();
+    const builder = makeQueryBuilder({ data: [{ id: 'm1', sender_id: 'p1', body: 'hi', created_at: '2026-09-26T10:00:00Z' }], error: null });
+    client.from
+      .mockReturnValueOnce(makeQueryBuilder({ data: null, error: null }))
+      .mockReturnValueOnce(makeQueryBuilder({ data: null, error: { code: 'PGRST205' } }))
+      .mockReturnValueOnce(builder);
+    requireSupabase.mockReturnValue(client);
+    await expect(listDirectMessages('c1')).resolves.toHaveLength(1);
   });
 });
 
@@ -995,6 +1055,89 @@ describe('markDirectConversationRead', () => {
   it('propagates an RPC error', async () => {
     requireSupabase.mockReturnValue({ rpc: jest.fn(async () => ({ data: null, error: new Error('nope') })) });
     await expect(markDirectConversationRead('c1')).rejects.toThrow('nope');
+  });
+});
+
+describe('sendDirectMediaMessage', () => {
+  const uploaded = { path: 'c1/me/v.m4a', type: 'audio', mime: 'audio/mp4', size: 2048, name: 'voice-message.m4a' };
+
+  it('uploads into the conversation folder, then sends with the recorded duration', async () => {
+    uploadChatMedia.mockResolvedValueOnce(uploaded);
+    const client = makeClient({ authUser: { id: 'me' } });
+    client.rpc = jest.fn(async () => ({ data: 'm9', error: null }));
+    client.storage = { from: jest.fn(() => ({ createSignedUrls: jest.fn(async () => ({ data: [{ signedUrl: 'https://signed/v' }], error: null })) })) };
+    client.from.mockReturnValueOnce(makeQueryBuilder({ data: { id: 'm9', sender_id: 'me', body: null, media_path: uploaded.path, media_type: 'audio', media_duration_ms: 4200, created_at: '2026-09-26T10:00:00Z' }, error: null }));
+    requireSupabase.mockReturnValue(client);
+
+    const message = await sendDirectMediaMessage('c1', { uri: 'file:///v.m4a', duration: 4200.4 }, 'audio');
+    const [bucket, folderFor, , type] = uploadChatMedia.mock.calls[0];
+    expect(bucket).toBe('direct-message-media');
+    expect(folderFor('me')).toBe('c1/me');
+    expect(type).toBe('audio');
+    expect(client.rpc).toHaveBeenCalledWith('send_direct_media_message', expect.objectContaining({
+      p_conversation_id: 'c1', p_media_path: uploaded.path, p_media_type: 'audio', p_media_duration_ms: 4200,
+    }));
+    expect(message).toMatchObject({ id: 'm9', mediaType: 'audio', mediaUrl: 'https://signed/v', mediaDurationMs: 4200 });
+  });
+
+  it('removes the upload and explains when the send RPC is not deployed yet', async () => {
+    uploadChatMedia.mockResolvedValueOnce(uploaded);
+    const remove = jest.fn(() => Promise.resolve({ error: null }));
+    requireSupabase.mockReturnValue({ rpc: jest.fn(async () => ({ data: null, error: { code: 'PGRST202' } })), storage: { from: jest.fn(() => ({ remove })) } });
+    await expect(sendDirectMediaMessage('c1', { uri: 'file:///v.m4a' }, 'audio')).rejects.toThrow('not available yet');
+    expect(remove).toHaveBeenCalledWith([uploaded.path]);
+  });
+});
+
+describe('unsendDirectMessage / hideDirectMessage', () => {
+  it('unsends through the RPC and returns when it happened', async () => {
+    const rpc = jest.fn(async () => ({ data: '2026-09-26T10:00:00Z', error: null }));
+    requireSupabase.mockReturnValue({ rpc });
+    await expect(unsendDirectMessage('m1')).resolves.toBe('2026-09-26T10:00:00Z');
+    expect(rpc).toHaveBeenCalledWith('unsend_direct_message', { p_message_id: 'm1' });
+  });
+
+  it('hides a message for the caller through the RPC', async () => {
+    const rpc = jest.fn(async () => ({ data: null, error: null }));
+    requireSupabase.mockReturnValue({ rpc });
+    await hideDirectMessage('m1');
+    expect(rpc).toHaveBeenCalledWith('hide_direct_message', { p_message_id: 'm1' });
+  });
+
+  it('explains when the delete RPCs are not deployed yet (PGRST202)', async () => {
+    requireSupabase.mockReturnValue({ rpc: jest.fn(async () => ({ data: null, error: { code: 'PGRST202', message: 'missing' } })) });
+    await expect(unsendDirectMessage('m1')).rejects.toThrow('Deleting messages is not available yet');
+    await expect(hideDirectMessage('m1')).rejects.toThrow('Deleting messages is not available yet');
+  });
+
+  it('signs private media URLs when loading messages', async () => {
+    const client = makeClient({ authUser: { id: 'me' } });
+    const createSignedUrls = jest.fn(async () => ({ data: [{ signedUrl: 'https://signed/photo' }], error: null }));
+    client.storage = { from: jest.fn(() => ({ createSignedUrls })) };
+    const builder = makeQueryBuilder({
+      data: [{ id: 'm1', sender_id: 'p1', body: null, media_path: 'c1/p1/a.jpg', media_type: 'image', media_duration_ms: null, created_at: '2026-09-26T10:00:00Z' }],
+      error: null,
+    });
+    client.from.mockReturnValueOnce(makeQueryBuilder({ data: null, error: null })).mockReturnValueOnce(noHides()).mockReturnValueOnce(builder);
+    requireSupabase.mockReturnValue(client);
+    const [message] = await listDirectMessages('c1');
+    expect(client.storage.from).toHaveBeenCalledWith('direct-message-media');
+    expect(createSignedUrls).toHaveBeenCalledWith(['c1/p1/a.jpg'], 3600);
+    expect(message).toMatchObject({ mediaType: 'image', mediaUrl: 'https://signed/photo', mediaPath: 'c1/p1/a.jpg' });
+  });
+
+  it('removes the attachment file after unsending a media message', async () => {
+    const remove = jest.fn(() => Promise.resolve({ error: null }));
+    const client = { rpc: jest.fn(async () => ({ data: '2026-09-26T10:00:00Z', error: null })), storage: { from: jest.fn(() => ({ remove })) } };
+    requireSupabase.mockReturnValue(client);
+    await unsendDirectMessage('m1', 'c1/me/a.jpg');
+    expect(client.storage.from).toHaveBeenCalledWith('direct-message-media');
+    expect(remove).toHaveBeenCalledWith(['c1/me/a.jpg']);
+  });
+
+  it('passes through a real error such as unsending someone else\'s message', async () => {
+    requireSupabase.mockReturnValue({ rpc: jest.fn(async () => ({ data: null, error: new Error('Only the sender can unsend an active message.') })) });
+    await expect(unsendDirectMessage('m1')).rejects.toThrow('Only the sender');
   });
 });
 

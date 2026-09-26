@@ -13,6 +13,7 @@ import { NearbyPlayersProvider } from './src/context/NearbyPlayersContext';
 import { OrganizerPassProvider } from './src/context/OrganizerPassContext';
 import MatchInviteOverlay from './src/components/MatchInviteOverlay';
 import MessageBanner from './src/components/MessageBanner';
+import FeedbackPrompt from './src/components/FeedbackPrompt';
 import SupportBubble from './src/components/SupportBubble';
 import ErrorBoundary from './src/components/ErrorBoundary';
 import DemoAutopilot from './src/components/DemoAutopilot';
@@ -42,7 +43,7 @@ const linking = {
       AccountDeletion: 'account-deletion', PaymentHistory: 'payment-history',
       HelpSupport: 'help', SupportChat: 'support', Inbox: 'chats', CommunityChat: 'chats/:eventKind/:eventId', PublicProfile: 'players/:userId',
       DirectChat: 'chats/direct/:conversationId?',
-      Connections: 'connections', Leaderboard: 'leaderboard',
+      Connections: 'connections', Leaderboard: 'leaderboard', OrganizerPreview: 'organizer',
       CompetitionDivision: 'competitions/:competitionId/divisions/:divisionId',
       // While booking is paused, old /explore links land on Schedule instead.
       ...(COURT_BOOKING_ENABLED
@@ -248,7 +249,7 @@ function Root() {
   if (passwordRecovery) { setWebTitle('Reset Password'); return <AuthFlowScreen key="password-recovery" initialScreen="reset-password" />; }
   if (!user) { setWebTitle('Sign In'); return <AuthFlowScreen key="login" initialScreen="login" />; }
   if (!user.onboardingCompleted) { setWebTitle('Get Started'); return <AuthFlowScreen key={`new-user-setup-${user.id}`} initialScreen="new-user-overview" />; }
-  return <View key={`player-session-${user.id}`} style={[styles.appShell, { backgroundColor: appBackground }]}><NavigationContainer ref={navigationRef} theme={navigationTheme} linking={linking} documentTitle={{ formatter: formatPageTitle }}><AppNavigator /></NavigationContainer><MatchInviteOverlay onAccepted={openAcceptedMatch} /><MessageBanner navigationRef={navigationRef} />{Platform.OS !== 'web' ? <SupportBubble navigationRef={navigationRef} /> : null}{DEMO_MODE && Platform.OS !== 'web' ? <DemoAutopilot navigationRef={navigationRef} /> : null}</View>;
+  return <View key={`player-session-${user.id}`} style={[styles.appShell, { backgroundColor: appBackground }]}><NavigationContainer ref={navigationRef} theme={navigationTheme} linking={linking} documentTitle={{ formatter: formatPageTitle }}><AppNavigator /></NavigationContainer><MatchInviteOverlay onAccepted={openAcceptedMatch} /><MessageBanner navigationRef={navigationRef} />{!DEMO_MODE ? <FeedbackPrompt navigationRef={navigationRef} /> : null}{Platform.OS !== 'web' ? <SupportBubble navigationRef={navigationRef} /> : null}{DEMO_MODE && Platform.OS !== 'web' ? <DemoAutopilot navigationRef={navigationRef} /> : null}</View>;
 }
 
 export default function App() {

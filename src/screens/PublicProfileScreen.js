@@ -439,7 +439,7 @@ const lightStyles = StyleSheet.create({
   topbarEyebrow: { color: LIGHT_C.teal, fontSize: 9, fontWeight: '900', letterSpacing: 1.5 },
   topbarSubtitle: { color: LIGHT_C.ink, fontSize: 13, fontWeight: '800', marginTop: 2 },
   topbarSpacer: { width: 44 },
-  backButton: { width: 44, height: 44, justifyContent: 'center', alignItems: 'center', borderRadius: 15, borderWidth: 1, borderColor: LIGHT_C.line, backgroundColor: LIGHT_C.surface },
+  backButton: { width: 32, height: 44, justifyContent: 'center', alignItems: 'flex-start' },
   buttonPressed: { opacity: 0.72, transform: [{ scale: 0.98 }] },
   buttonBusy: { opacity: 0.62 },
   heroCard: { overflow: 'hidden', backgroundColor: LIGHT_C.surface, borderRadius: 28, borderWidth: 1, borderColor: LIGHT_C.line, shadowColor: LIGHT_C.ink, shadowOpacity: 0.08, shadowRadius: 18, shadowOffset: { width: 0, height: 8 }, elevation: 4 },
@@ -504,7 +504,7 @@ const lightStyles = StyleSheet.create({
 const darkStyles = StyleSheet.create({
   ...lightStyles,
   safe: { ...lightStyles.safe, backgroundColor: DARK_CONTENT_COLORS.paper },
-  backButton: { ...lightStyles.backButton, backgroundColor: DARK_CONTENT_COLORS.surface, borderColor: DARK_CONTENT_COLORS.line },
+  backButton: lightStyles.backButton,
   topbarEyebrow: { ...lightStyles.topbarEyebrow, color: DARK_CONTENT_COLORS.teal },
   topbarSubtitle: { ...lightStyles.topbarSubtitle, color: DARK_CONTENT_COLORS.ink },
   heroCard: { ...lightStyles.heroCard, backgroundColor: DARK_CONTENT_COLORS.surface, borderColor: DARK_CONTENT_COLORS.line, shadowColor: '#000000', shadowOpacity: 0.28 },

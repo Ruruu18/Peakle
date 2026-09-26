@@ -19,6 +19,7 @@ import LegalDocumentScreen from '../screens/LegalDocumentScreen';
 import AccountDeletionScreen from '../screens/AccountDeletionScreen';
 import PaymentHistoryScreen from '../screens/PaymentHistoryScreen';
 import HelpSupportScreen from '../screens/HelpSupportScreen';
+import OrganizerPreviewScreen from '../screens/OrganizerPreviewScreen';
 import SupportChatScreen from '../screens/SupportChatScreen';
 import CommunityChatScreen from '../screens/CommunityChatScreen';
 import { COURT_BOOKING_ENABLED, DISCOVERY_TAB, HUB_TABS_ENABLED, PRIVATE_MESSAGES_ENABLED } from '../config/features';
@@ -142,7 +143,7 @@ function PeakleTabBar({ state, descriptors, navigation }) {
   const [leavingMatch, setLeavingMatch] = useState(false);
   const [leaveError, setLeaveError] = useState('');
   const [pendingRoute, setPendingRoute] = useState(null);
-  const alwaysHiddenRoutes = new Set([COURT_BOOKING_ENABLED ? 'Schedule' : 'Book', 'Pickleball', 'Activities', 'ActivityDetails', 'OpenPlayActivity', 'Privacy', 'LegalDocument', 'AccountDeletion', 'PaymentHistory', 'HelpSupport', 'SupportChat', 'CommunityChat', 'NotificationTest', 'Inbox', 'DirectChat', 'PublicProfile', 'Connections', 'Leaderboard', 'CompetitionDivision']);
+  const alwaysHiddenRoutes = new Set([COURT_BOOKING_ENABLED ? 'Schedule' : 'Book', 'Pickleball', 'Activities', 'ActivityDetails', 'OpenPlayActivity', 'Privacy', 'LegalDocument', 'AccountDeletion', 'PaymentHistory', 'HelpSupport', 'SupportChat', 'CommunityChat', 'NotificationTest', 'Inbox', 'DirectChat', 'PublicProfile', 'Connections', 'Leaderboard', 'CompetitionDivision', 'OrganizerPreview']);
   const currentRoute = state.routes[state.index];
   const theme = isDark
     ? { background: '#0E2321', surface: '#17302D', line: '#304743', activeText: colors.ink, activeLabel: colors.ink, centerActiveLabel: colors.surface, muted: '#9FB3AC', active: colors.optic, kitchenLine: colors.optic }
@@ -164,7 +165,7 @@ function PeakleTabBar({ state, descriptors, navigation }) {
   const legacyMobileOwner = currentRoute.name === 'Pickleball'
     ? (currentRoute.params?.ownerTab || ({ Ratings: 'Profile', Privacy: 'Profile', 'Find play': 'Play', Compete: DISCOVERY_TAB }[currentRoute.params?.openTab]))
     : currentRoute.name === 'Leaderboard' ? 'Home'
-    : ['Privacy', 'HelpSupport', 'SupportChat', 'NotificationTest', 'Connections'].includes(currentRoute.name) ? 'Profile'
+    : ['Privacy', 'HelpSupport', 'SupportChat', 'NotificationTest', 'Connections', 'OrganizerPreview'].includes(currentRoute.name) ? 'Profile'
     : ['Inbox', 'DirectChat', 'CommunityChat'].includes(currentRoute.name) ? (currentRoute.params?.ownerTab || 'Team')
     : ['Activities', 'ActivityDetails', 'OpenPlayActivity'].includes(currentRoute.name) ? (currentRoute.params?.returnTo === 'Schedule' ? 'Schedule' : 'Home')
     : null;
@@ -176,7 +177,7 @@ function PeakleTabBar({ state, descriptors, navigation }) {
   const contextualOwner = desktop ? ({
     ...(COURT_BOOKING_ENABLED ? { ActivityDetails: 'Activities', OpenPlayActivity: 'Activities' } : {}),
     Privacy: 'Profile', LegalDocument: 'Profile', AccountDeletion: 'Profile',
-    PaymentHistory: 'Profile', PublicProfile: 'Profile', Connections: 'Profile',
+    PaymentHistory: 'Profile', PublicProfile: 'Profile', Connections: 'Profile', OrganizerPreview: 'Profile',
     SupportChat: 'HelpSupport', CommunityChat: 'Inbox', CompetitionDivision: DISCOVERY_TAB,
   }[currentRoute.name] || mobileOwner) : mobileOwner;
   const guardedNavigate = (name, params) => {
@@ -309,6 +310,7 @@ function PlayerWorkspace({ isDark }) {
       <Tab.Screen name="AccountDeletion" component={AccountDeletionScreen} />
       <Tab.Screen name="PaymentHistory" component={PaymentHistoryScreen} />
       <Tab.Screen name="HelpSupport" component={HelpSupportScreen} />
+      <Tab.Screen name="OrganizerPreview" component={OrganizerPreviewScreen} />
       <Tab.Screen name="SupportChat" component={SupportChatScreen} />
       <Tab.Screen name="CommunityChat" component={CommunityChatScreen} />
       {Platform.OS !== 'web' ? <Tab.Screen name="NotificationTest" component={NotificationTestScreen} /> : null}
