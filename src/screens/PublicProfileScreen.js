@@ -190,7 +190,7 @@ export default function PublicProfileScreen({ navigation, route }) {
     [mutualConnections, mutualCount],
   );
 
-  const handleFollow = async () => {
+  const toggleFollow = async () => {
     if (!player.id || followBusy) return;
     const wasFollowing = following;
     const wasPending = followRequestPending;
@@ -220,6 +220,21 @@ export default function PublicProfileScreen({ navigation, route }) {
     } finally {
       setFollowBusy(false);
     }
+  };
+
+  // Following again needs a new request the other player has to accept, so
+  // unfollowing asks first. Cancelling a pending request does not.
+  const handleFollow = () => {
+    if (!player.id || followBusy) return;
+    if (!following) { toggleFollow(); return; }
+    Alert.alert(
+      `Unfollow ${playerName}?`,
+      `To follow ${playerName} again, you'll need to send a new request.`,
+      [
+        { text: 'Cancel', style: 'cancel' },
+        { text: 'Unfollow', style: 'destructive', onPress: toggleFollow },
+      ],
+    );
   };
 
   const openChat = () => {
