@@ -29,6 +29,7 @@ import ScrollView from '../components/FocusResetScrollView';
 import ProfilePhoto from '../components/ProfilePhoto';
 import MessageFocusModal, { canCopyText, copyText, unselectable } from '../components/MessageFocusModal';
 import ChatCamera from '../components/ChatCamera';
+import ComposerAttachments from '../components/ComposerAttachments';
 import { ChatGallerySheet, prepareGalleryItems } from '../components/ChatGallery';
 import { DirectMediaContent, MediaPreviewModal, MediaThumbnail, saveDirectMedia, VoiceRecorderBar } from '../components/DirectMessageMedia';
 import ChatInfoScreen, { ChatSearchModal, NicknamesModal, chatInfoColors, extractChatLinks } from '../components/ChatInfoScreen';
@@ -1109,42 +1110,6 @@ function MessageRelationshipGate({ peer, permission, busy, onFollow, colors }) {
 
 const mediaLabel = (message) => ({ image: 'Photo', video: 'Video', audio: 'Voice message' }[message?.mediaType] || '');
 
-const ATTACH_BUTTON_WIDTH = 38;
-const ATTACH_TRAY_WIDTH = ATTACH_BUTTON_WIDTH * 3;
-
-// The composer's attachment buttons. "+" (or ">" once minimized) slides away
-// as camera, gallery, and mic slide in, and the reverse when minimizing.
-function ComposerAttachments({ mode, colors, onOpen, onCamera, onLibrary, onVoice }) {
-  const open = mode === 'open';
-  const progress = useRef(new Animated.Value(open ? 1 : 0)).current;
-  useEffect(() => {
-    const animation = Animated.timing(progress, { toValue: open ? 1 : 0, duration: 200, easing: Easing.out(Easing.cubic), useNativeDriver: false });
-    animation.start();
-    return () => animation.stop();
-  }, [open, progress]);
-  const toggleStyle = {
-    width: progress.interpolate({ inputRange: [0, 1], outputRange: [ATTACH_BUTTON_WIDTH, 0] }),
-    opacity: progress.interpolate({ inputRange: [0, 0.6], outputRange: [1, 0], extrapolate: 'clamp' }),
-  };
-  const trayStyle = {
-    width: progress.interpolate({ inputRange: [0, 1], outputRange: [0, ATTACH_TRAY_WIDTH] }),
-    opacity: progress.interpolate({ inputRange: [0.3, 1], outputRange: [0, 1], extrapolate: 'clamp' }),
-  };
-  const minimized = mode === 'minimized';
-  return (
-    <View style={styles.attachTray}>
-      <Animated.View accessibilityElementsHidden={open} importantForAccessibility={open ? 'no-hide-descendants' : 'auto'} style={[styles.attachClip, toggleStyle, { pointerEvents: open ? 'none' : 'auto' }]}>
-        <Pressable accessibilityRole="button" accessibilityLabel="Show attachments" accessibilityHint="Photo, video, or voice message" onPress={onOpen} hitSlop={4} style={styles.attachButton}><Icon name={minimized ? 'chevron-forward' : 'add-circle'} size={minimized ? 24 : 27} color={colors.teal} /></Pressable>
-      </Animated.View>
-      <Animated.View accessibilityElementsHidden={!open} importantForAccessibility={open ? 'auto' : 'no-hide-descendants'} style={[styles.attachClip, trayStyle, { pointerEvents: open ? 'auto' : 'none' }]}>
-        <Pressable accessibilityRole="button" accessibilityLabel="Take a photo or video" onPress={onCamera} hitSlop={4} style={styles.attachButton}><Icon name="camera" size={23} color={colors.teal} /></Pressable>
-        <Pressable accessibilityRole="button" accessibilityLabel="Send a photo or video" onPress={onLibrary} hitSlop={4} style={styles.attachButton}><Icon name="image" size={22} color={colors.teal} /></Pressable>
-        <Pressable accessibilityRole="button" accessibilityLabel="Record a voice message" onPress={onVoice} hitSlop={4} style={styles.attachButton}><Icon name="mic" size={23} color={colors.teal} /></Pressable>
-      </Animated.View>
-    </View>
-  );
-}
-
 // An unsent message keeps its place in the thread as a quiet placeholder.
 function UnsentMessageText({ message, colors, style }) {
   const tint = message.mine ? 'rgba(255,255,255,.75)' : colors.ink40;
@@ -2139,9 +2104,6 @@ const styles = StyleSheet.create({
   mediaBubble: { padding: 0, borderWidth: 0, backgroundColor: 'transparent', overflow: 'hidden' },
   composerRow: { flexDirection: 'row', alignItems: 'flex-end', gap: 4 },
   composerInputFlex: { flex: 1 },
-  attachTray: { flexDirection: 'row', alignItems: 'center' },
-  attachButton: { width: ATTACH_BUTTON_WIDTH, height: 43, flexShrink: 0, alignItems: 'center', justifyContent: 'center' },
-  attachClip: { flexDirection: 'row', overflow: 'hidden' },
   unsentRow: { flexDirection: 'row', alignItems: 'center', gap: 6 },
   unsentText: { fontStyle: 'italic' },
   messageTimeMine: { marginRight: 5 },

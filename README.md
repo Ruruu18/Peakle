@@ -46,6 +46,17 @@ npm start
 
 Scan the QR code with Expo Go, or press `i` / `a` for an iOS or Android simulator.
 
+## Spoken score announcements
+
+Announce mode automatically selects an available natural/premium English voice,
+Google English voice, or enhanced device voice before using a basic voice. It uses
+the browser's Web Speech API on web and `expo-speech` on Android/iOS, with no cloud
+API key or billing account. Voice quality depends on the voices supplied by the
+browser or installed in the device's text-to-speech engine. Browser network voices
+can require internet; offline or failed requests fall back to an available local
+voice or the system default. This selection applies to spoken announcements;
+listening for score commands still uses `expo-speech-recognition`.
+
 ## New-account onboarding
 
 The feature overview is part of account setup rather than app startup:

@@ -1155,13 +1155,13 @@ const mediaExtension = (mime, fileName = '') => {
 
 const CHAT_IMAGE_MIMES = ['image/jpeg', 'image/png', 'image/webp'];
 
-export async function uploadTeamChatMedia(teamId, asset, requestedType) {
-  return uploadChatMedia('team-chat-media', (userId) => `${teamId}/${userId}`, asset, requestedType, 'Team');
+export async function uploadTeamChatMedia(teamId, asset, requestedType, options) {
+  return uploadChatMedia('team-chat-media', (userId) => `${teamId}/${userId}`, asset, requestedType, 'Team', options);
 }
 
 // Shared by team and private chats: photos are resized to 1600px JPEGs
 // (2 MB max), videos keep their format (15 MB max), and voice recordings are
-// uploaded as recorded (10 MB max; private chats only). folderFor(userId) is the
+// uploaded as recorded (10 MB max). folderFor(userId) is the
 // storage folder the bucket's policies expect.
 // supabase-js storage uploads report no progress, so uploads that show a
 // progress ring go through the Storage REST endpoint with XMLHttpRequest.

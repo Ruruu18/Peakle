@@ -6,6 +6,7 @@ import {
   ActivityIndicator,
   Dimensions,
   Easing,
+  Keyboard,
   KeyboardAvoidingView,
   Platform,
   Pressable,
@@ -40,7 +41,10 @@ import ScrollView from '../components/FocusResetScrollView';
 import useResponsiveWidth from '../hooks/useResponsiveWidth';
 import { webLongPress } from '../utils/webLongPress';
 import useStableHandlers from '../hooks/useStableHandlers';
-import { saveDirectMedia } from '../components/DirectMessageMedia';
+import { DirectMediaContent, saveDirectMedia, VoiceRecorderBar } from '../components/DirectMessageMedia';
+import ChatCamera from '../components/ChatCamera';
+import { ChatGallerySheet, prepareGalleryItems } from '../components/ChatGallery';
+import ComposerAttachments from '../components/ComposerAttachments';
 import ChatInfoScreen, { ChatInfoSection, ChatSearchModal, NicknamesModal, chatInfoColors, extractChatLinks } from '../components/ChatInfoScreen';
 import { listChatNicknames, listTeamChatMutes, muteTeamChat, setChatNickname, unmuteTeamChat } from '../services/chatInfo';
 import { PH_LOCATIONS, formatLocation, locationMatchesSearch, parseLocation } from '../data/phLocations';
@@ -165,6 +169,7 @@ const normalizeTeamMessage = (row, currentUserId) => ({
   text: row.deleted_at ? null : row.body,
   image: row.deleted_at ? null : (['image', 'gif'].includes(row.media_type) ? (row.media_url || row.image_url) : row.image_url),
   video: row.deleted_at ? null : (row.media_type === 'video' ? row.media_url : null),
+  audio: row.deleted_at ? null : (row.media_type === 'audio' ? row.media_url : null),
   mediaType: row.media_type || (row.image_url ? 'image' : null),
   mediaKind: row.media_name?.startsWith('sticker:') ? 'stickers' : null,
   mediaName: row.media_name || null,
@@ -190,7 +195,10 @@ const upsertTeamMessage = (items, message) => {
   return next;
 };
 
-const optimisticTeamMessage = ({ teamId, currentUserId, text = null, image = null, video = null, mediaType = null, mediaKind = null, deliveryState = 'sending' }) => {
+// The text saved alongside each attachment, so chat previews read naturally.
+const TEAM_MEDIA_LABELS = { image: 'Shared a photo', video: 'Shared a video', audio: 'Shared a voice message' };
+
+const optimisticTeamMessage = ({ teamId, currentUserId, text = null, image = null, video = null, audio = null, mediaType = null, mediaKind = null, deliveryState = 'sending' }) => {
   const createdAt = new Date().toISOString();
   return {
     id: `pending-${Crypto.randomUUID()}`,
@@ -202,6 +210,7 @@ const optimisticTeamMessage = ({ teamId, currentUserId, text = null, image = nul
     text,
     image,
     video,
+    audio,
     mediaType,
     mediaKind,
     createdAt,
@@ -561,7 +570,7 @@ function ChatReportModal({ message, onClose, onSubmit }) {
 
 function MessageInteractionModal({ message, visible, canModerate, currentUserId, onClose, onReact, onPin, onEdit, onDelete, onUnsend, onReport, onBlock, onModerate }) {
   if (!message) return null;
-  const visibleText = message.text && !/^Shared a (photo|video|GIF|sticker)$/i.test(message.text) ? message.text : null;
+  const visibleText = message.text && !/^Shared a (photo|video|GIF|sticker|voice message)$/i.test(message.text) ? message.text : null;
   const actions = [
     canCopyText && visibleText ? { key: 'copy', label: 'Copy', icon: 'copy-outline', onPress: () => copyText(visibleText) } : null,
     { key: 'pin', label: message.pinned ? 'Unpin' : 'Pin', icon: message.pinned ? 'pin' : 'pin-outline', onPress: () => onPin(message.id) },
@@ -583,9 +592,10 @@ function MessageInteractionModal({ message, visible, canModerate, currentUserId,
       actions={actions}
       onClose={onClose}
     >
-      <View style={[styles.bubble, message.mine && styles.bubbleMine, !visibleText && styles.mediaBubble, !visibleText && message.mine && styles.mediaBubbleMine]}>
+      <View style={[styles.bubble, message.mine && styles.bubbleMine, !visibleText && !message.audio && styles.mediaBubble, !visibleText && !message.audio && message.mine && styles.mediaBubbleMine]}>
         {message.image ? <ExpoImage source={{ uri: message.image }} contentFit="cover" style={[styles.chatAttachmentImage, !visibleText && styles.chatAttachmentMediaOnly]} /> : null}
         {!message.image && message.video ? <View style={styles.deletedMessageRow}><Icon name="videocam-outline" size={14} color={message.mine ? C.surface : C.ink70} /><Text style={[styles.bubbleText, message.mine && styles.bubbleTextMine]}>Video</Text></View> : null}
+        {message.audio ? <View style={styles.deletedMessageRow}><Icon name="mic-outline" size={14} color={message.mine ? C.surface : C.ink70} /><Text style={[styles.bubbleText, message.mine && styles.bubbleTextMine]}>Voice message</Text></View> : null}
         {visibleText ? <Text numberOfLines={12} style={[styles.bubbleText, message.mine && styles.bubbleTextMine]}>{visibleText}</Text> : null}
       </View>
     </MessageFocusModal>
@@ -631,7 +641,7 @@ const ChatMessage = React.memo(function ChatMessage({ message, grouped, highligh
       .map((reaction) => ({ ...(peopleById[reaction.user_id] || { id: reaction.user_id, name: 'Peakle player', avatar: null }), emoji })),
   })).filter((reaction) => reaction.people.length);
   const hasMedia = Boolean(message.image || message.video);
-  const visibleText = message.text && !/^Shared a (photo|video|GIF|sticker)$/i.test(message.text) ? message.text : null;
+  const visibleText = message.text && !/^Shared a (photo|video|GIF|sticker|voice message)$/i.test(message.text) ? message.text : null;
   const mediaOnly = hasMedia && !visibleText;
   const status = message.deliveryState === 'uploading' ? 'Uploading…' : message.deliveryState === 'sending' ? 'Sending…' : delivered ? 'Delivered' : 'Sent';
   return (
@@ -647,6 +657,7 @@ const ChatMessage = React.memo(function ChatMessage({ message, grouped, highligh
           <Pressable accessibilityHint="Tap or long press for reactions and message options." disabled={Boolean(message.deletedAt || message.deliveryState)} onPress={() => onOpenActions(message.id)} onLongPress={() => onOpenActions(message.id)} delayLongPress={240} {...webLongPress(!message.deletedAt && !message.deliveryState ? () => onOpenActions(message.id) : null)} style={[styles.bubble, unselectable, message.mine && styles.bubbleMine, mediaOnly && styles.mediaBubble, mediaOnly && message.mine && styles.mediaBubbleMine, message.deletedAt && styles.deletedBubble, highlighted && styles.highlightedMessageBubble]}>
             {message.image && <PopImage uri={message.image} sticker={message.mediaKind === 'stickers'} style={[styles.chatAttachmentImage, message.mediaType === 'gif' && styles.chatAttachmentGif, mediaOnly && styles.chatAttachmentMediaOnly]} onPress={() => onPreview(message)} onLongPress={() => onOpenActions(message.id)} />}
             {message.video && <VideoAttachment uri={message.video} mediaOnly={mediaOnly} />}
+            {message.audio && <DirectMediaContent message={{ id: message.id, mine: message.mine, mediaType: 'audio', mediaUrl: message.audio, uploading: message.deliveryState === 'uploading', uploadProgress: message.uploadProgress }} colors={C} />}
             {message.deletedAt ? <View style={styles.deletedMessageRow}><Icon name="ban-outline" size={14} color={C.ink40} /><Text style={styles.deletedMessageText}>{message.moderatedAt ? 'Message removed by a moderator' : 'Message unsent'}</Text></View> : visibleText ? <Text selectable={false} style={[styles.bubbleText, unselectable, message.mine && styles.bubbleTextMine]}>{visibleText}</Text> : null}
             {message.deliveryState && hasMedia && <View style={styles.mediaProgress}><ActivityIndicator size="small" color={C.surface} /></View>}
           </Pressable>
@@ -661,8 +672,19 @@ const ChatMessage = React.memo(function ChatMessage({ message, grouped, highligh
   );
 });
 
-function TeamChat({ team, messages, loading, readStates, currentUser, typing, liveMatch, hasEarlier, loadingEarlier, focusMessageId, onFocusHandled, onLoadEarlier, onBack, onSend, onEdit, onDelete, onUnsend, onReact, onPin, onReport, onBlock, onModerate, onTypingChange, onWatchLive, onInfo, onMessageMember, onJumpToMessage, onAttach }) {
+function TeamChat({ team, messages, loading, readStates, currentUser, typing, liveMatch, hasEarlier, loadingEarlier, focusMessageId, onFocusHandled, onLoadEarlier, onBack, onSend, onEdit, onDelete, onUnsend, onReact, onPin, onReport, onBlock, onModerate, onTypingChange, onWatchLive, onInfo, onMessageMember, onJumpToMessage, onSendMedia }) {
   const [draft, setDraft] = useState('');
+  // Attachment buttons work like private chats: "+" opens camera, gallery, and
+  // mic, which fold into ">" once the player starts typing.
+  const [trayMode, setTrayMode] = useState('closed');
+  const [cameraOpen, setCameraOpen] = useState(false);
+  // Phones pick photos from a sheet under the composer, like Messenger.
+  const [galleryOpen, setGalleryOpen] = useState(false);
+  const [recordingVoice, setRecordingVoice] = useState(false);
+  const minimizeTray = () => {
+    setGalleryOpen(false);
+    setTrayMode((mode) => (mode === 'open' ? 'minimized' : mode));
+  };
   const [menuOpen, setMenuOpen] = useState(false);
   const [showSafetyBanner, setShowSafetyBanner] = useState(true);
   useEffect(() => {
@@ -787,6 +809,7 @@ function TeamChat({ team, messages, loading, readStates, currentUser, typing, li
   }, [publishTyping]);
   const changeDraft = (value) => {
     setDraft(value);
+    if (value.trim()) minimizeTray();
     if (typingStopTimer.current) clearTimeout(typingStopTimer.current);
     if (!value.trim()) {
       stopTyping();
@@ -817,11 +840,60 @@ function TeamChat({ team, messages, loading, readStates, currentUser, typing, li
     const frame = requestAnimationFrame(() => scrollRef.current?.scrollToEnd({ animated: true }));
     return () => cancelAnimationFrame(frame);
   }, [focusMessageId, lastMessageId, messages]);
-  const showAttachmentOptions = () => Alert.alert('Send attachment', 'Choose what to share with your team.', [
-    { text: 'Photo', onPress: () => onAttach('image') },
-    { text: 'Video', onPress: () => onAttach('video') },
-    { text: 'Cancel', style: 'cancel' },
-  ]);
+  // Peakle's own camera on phones and in the browser: tap for a photo, hold
+  // for a video.
+  const openCamera = () => {
+    setTrayMode('closed');
+    setCameraOpen(true);
+  };
+  const pickMedia = async () => {
+    setTrayMode('closed');
+    try {
+      const result = await ImagePicker.launchImageLibraryAsync({ mediaTypes: ['images', 'videos'], quality: 1, videoMaxDuration: 60 });
+      if (result.canceled || !result.assets?.[0]) return;
+      const asset = result.assets[0];
+      const isVideo = asset.type === 'video' || asset.mimeType?.startsWith('video/');
+      onSendMedia(asset, isVideo ? 'video' : 'image');
+    } catch (error) {
+      Alert.alert('Could not open media', error.message);
+    }
+  };
+  const openGallery = () => {
+    if (Platform.OS === 'web') { pickMedia(); return; }
+    Keyboard.dismiss();
+    setGalleryOpen(true);
+  };
+  // Sends picks one after another so they arrive in the order chosen.
+  const sendGalleryItems = async (items) => {
+    setCameraOpen(false);
+    setGalleryOpen(false);
+    for (const { asset, type } of items) await onSendMedia(asset, type);
+  };
+  const sendFromGallerySheet = async (items, hd) => {
+    try {
+      await sendGalleryItems(await prepareGalleryItems(items, hd));
+    } catch (error) {
+      Alert.alert('Could not open that item', error.message);
+    }
+  };
+  const sendCameraCapture = (asset, type) => {
+    setCameraOpen(false);
+    onSendMedia(asset, type);
+  };
+  // iOS drops a picker presented while the camera modal is still closing.
+  const pickFromCamera = () => {
+    setCameraOpen(false);
+    setTimeout(pickMedia, Platform.OS === 'ios' ? 350 : 0);
+  };
+  const startVoice = () => {
+    stopTyping();
+    setTrayMode('closed');
+    setRecordingVoice(true);
+  };
+  const sendVoice = (recording) => {
+    setRecordingVoice(false);
+    onSendMedia(recording, 'audio');
+  };
   const confirmDelete = (message) => Alert.alert('Delete for you?', 'This message will disappear only from your account.', [
     { text: 'Cancel', style: 'cancel' },
     { text: 'Delete', style: 'destructive', onPress: () => onDelete(message.id) },
@@ -846,7 +918,7 @@ function TeamChat({ team, messages, loading, readStates, currentUser, typing, li
           <Icon name="pin" size={14} color={C.teal} />
           <View style={styles.chatPinnedBannerCopy}>
             <Text style={styles.chatPinnedBannerTitle}>Pinned Message</Text>
-            <Text numberOfLines={1} style={styles.chatPinnedBannerText}>{latestPinned.text || (latestPinned.image ? 'Photo' : (latestPinned.video ? 'Video' : 'Attachment'))}</Text>
+            <Text numberOfLines={1} style={styles.chatPinnedBannerText}>{latestPinned.text || (latestPinned.image ? 'Photo' : (latestPinned.video ? 'Video' : (latestPinned.audio ? 'Voice message' : 'Attachment')))}</Text>
           </View>
           <Icon name="chevron-forward" size={16} color={C.ink40} />
         </Pressable>
@@ -882,7 +954,8 @@ function TeamChat({ team, messages, loading, readStates, currentUser, typing, li
         </View>
       </ScrollView>
       {editingMessage && <View style={styles.editingBanner}><Icon name="create-outline" size={16} color={C.teal} /><View style={styles.editingCopy}><Text style={styles.editingTitle}>Editing message</Text><Text numberOfLines={1} style={styles.editingPreview}>{editingMessage.text}</Text></View><Pressable accessibilityLabel="Cancel editing" onPress={() => { stopTyping(); setEditingMessage(null); setDraft(''); }}><Icon name="close" color={C.ink40} /></Pressable></View>}
-      <View style={styles.composer}><Pressable accessibilityLabel="Add photo or video" onPress={showAttachmentOptions} style={styles.addAttachment}><Icon name="add" size={23} color={C.teal} /></Pressable><View style={styles.composerInput}><TextInput value={draft} onChangeText={changeDraft} onBlur={stopTyping} onSubmitEditing={send} returnKeyType="send" multiline maxLength={4000} placeholder={editingMessage ? 'Edit message' : `Message ${team.name}`} placeholderTextColor={C.ink40} style={styles.chatInput} /><Pressable disabled={!draft.trim()} onPress={send} accessibilityLabel={editingMessage ? 'Save edited message' : 'Send message'} style={[styles.sendButton, !draft.trim() && styles.sendDisabled]}><Icon name={editingMessage ? 'checkmark' : 'arrow-up'} size={19} color="#0E2321" /></Pressable></View></View>
+      <View style={styles.composer}>{recordingVoice ? <View style={styles.composerVoice}><VoiceRecorderBar colors={C} onCancel={() => setRecordingVoice(false)} onSend={sendVoice} /></View> : <>{!editingMessage ? <ComposerAttachments mode={trayMode} colors={C} onOpen={() => setTrayMode('open')} onCamera={openCamera} onLibrary={openGallery} onVoice={startVoice} /> : null}<View style={styles.composerInput}><TextInput value={draft} onChangeText={changeDraft} onBlur={stopTyping} onFocus={minimizeTray} onPressIn={minimizeTray} onSubmitEditing={send} returnKeyType="send" multiline maxLength={4000} placeholder={editingMessage ? 'Edit message' : trayMode === 'open' ? 'Message' : `Message ${team.name}`} placeholderTextColor={C.ink40} style={styles.chatInput} /><Pressable disabled={!draft.trim()} onPress={send} accessibilityLabel={editingMessage ? 'Save edited message' : 'Send message'} style={[styles.sendButton, !draft.trim() && styles.sendDisabled]}><Icon name={editingMessage ? 'checkmark' : 'arrow-up'} size={19} color="#0E2321" /></Pressable></View></>}</View>
+      <ChatGallerySheet visible={galleryOpen} colors={C} isDark={C !== LIGHT_C} onClose={() => setGalleryOpen(false)} onSend={sendFromGallerySheet} />
       <MessageInteractionModal
         message={selectedMessage}
         visible={Boolean(selectedMessage && !selectedMessage.deletedAt && !selectedMessage.deliveryState)}
@@ -902,6 +975,7 @@ function TeamChat({ team, messages, loading, readStates, currentUser, typing, li
       <PeopleModal details={peopleDetails} onClose={() => setPeopleDetails(null)} />
       <TeamChatMenu team={team} visible={menuOpen} currentUserId={currentUserId} onClose={() => setMenuOpen(false)} onInfo={onInfo} onMessageMember={onMessageMember} />
       <TeamMediaPreview message={previewMessage} onClose={() => setPreviewMessage(null)} />
+      <ChatCamera visible={cameraOpen} onClose={() => setCameraOpen(false)} onCapture={sendCameraCapture} onLibrary={pickFromCamera} onSendGallery={sendGalleryItems} />
     </KeyboardAvoidingView>
   );
 }
@@ -991,8 +1065,9 @@ function TeamChatInfo({ team, isDark, currentUserId, messages, nicknames, mutedU
   const [panel, setPanel] = useState(null);
   const colors = chatInfoColors(isDark);
   const messagePreview = (message) => {
-    if (message.text && !/^Shared a (photo|video|GIF|sticker)$/i.test(message.text)) return message.text;
+    if (message.text && !/^Shared a (photo|video|GIF|sticker|voice message)$/i.test(message.text)) return message.text;
     if (message.video) return 'Video';
+    if (message.audio) return 'Voice message';
     if (message.mediaType === 'gif') return 'GIF';
     if (message.image) return 'Photo';
     return 'Message';
@@ -2433,27 +2508,35 @@ export default function TeamScreen({ navigation, route }) {
       ? `Join ${team.name} on Peakle. ${team.location} · ${team.members}/${team.capacity} members.`
       : `Check out ${team.name} on Peakle. ${team.location} · Rating ${team.rating}.`,
   });
-  const attachMedia = async (type) => {
-    if (!chatTeam) return;
-    const result = await ImagePicker.launchImageLibraryAsync({ mediaTypes: type === 'video' ? ['videos'] : ['images'], quality: 1, videoMaxDuration: 60 });
-    if (result.canceled) return;
+  // Shows the attachment right away, then swaps in the sent message.
+  const sendChatMedia = async (asset, type) => {
+    if (!chatTeam || !asset?.uri) return;
     const teamId = chatTeam.id;
-    const asset = result.assets[0];
-    const label = type === 'video' ? 'Shared a video' : 'Shared a photo';
+    const label = TEAM_MEDIA_LABELS[type];
     const optimistic = optimisticTeamMessage({
       teamId,
       currentUserId: user?.id,
       text: label,
       image: type === 'image' ? asset.uri : null,
       video: type === 'video' ? asset.uri : null,
+      audio: type === 'audio' ? asset.uri : null,
       mediaType: type,
       deliveryState: 'uploading',
     });
+    const updateOptimistic = (changes) => setMessages((current) => ({ ...current, [teamId]: (current[teamId] || []).map((item) => item.id === optimistic.id ? { ...item, ...changes } : item) }));
     setMessages((current) => ({ ...current, [teamId]: upsertTeamMessage(current[teamId] || [], optimistic) }));
+    // Re-render only when the ring would visibly move.
+    let shownPercent = 0;
+    const onProgress = (value) => {
+      const percent = Math.round(value * 100);
+      if (percent <= shownPercent) return;
+      shownPercent = percent;
+      updateOptimistic({ uploadProgress: value });
+    };
     let uploaded = null;
     try {
-      uploaded = await uploadTeamChatMedia(teamId, asset, type);
-      setMessages((current) => ({ ...current, [teamId]: (current[teamId] || []).map((item) => item.id === optimistic.id ? { ...item, deliveryState: 'sending' } : item) }));
+      uploaded = await uploadTeamChatMedia(teamId, asset, type, { onProgress });
+      updateOptimistic({ deliveryState: 'sending' });
       const row = await sendTeamMessage(teamId, label, uploaded);
       const message = normalizeTeamMessage(row, user?.id);
       setMessages((current) => ({ ...current, [teamId]: upsertTeamMessage((current[teamId] || []).filter((item) => item.id !== optimistic.id), message) }));
@@ -2461,7 +2544,7 @@ export default function TeamScreen({ navigation, route }) {
     } catch (error) {
       if (uploaded?.path) deleteTeamChatMedia(uploaded.path).catch(() => {});
       setMessages((current) => ({ ...current, [teamId]: (current[teamId] || []).filter((item) => item.id !== optimistic.id) }));
-      Alert.alert(`${type === 'video' ? 'Video' : 'Photo'} not sent`, error.message);
+      Alert.alert(`${{ video: 'Video', audio: 'Voice message' }[type] || 'Photo'} not sent`, error.message);
     }
   };
   const toClientTeamMatch = (payload) => {
@@ -2712,7 +2795,7 @@ export default function TeamScreen({ navigation, route }) {
   if (openingChatFromInbox) return <SafeAreaView style={styles.safe}><StatusBar style={isDark ? 'light' : 'dark'} backgroundColor={C.paper} /><View accessibilityLabel="Opening team chat" accessibilityLiveRegion="polite" style={styles.chatOpening}><ActivityIndicator color={C.teal} /></View></SafeAreaView>;
   if (chatSafetyTeam) return <SafeAreaView style={styles.safe}><StatusBar style={isDark ? 'light' : 'dark'} backgroundColor={C.paper} /><ChatSafetyScreen team={chatSafetyTeam} status={chatSafetyStatus} busy={chatSafetyBusy} onConfirm={confirmChatSafety} onBack={() => { setChatSafetyTeam(null); if (chatReturnTo) navigation.navigate(chatReturnTo); }} /></SafeAreaView>;
   if (chatInfoTeam) return <SafeAreaView style={styles.safe}><StatusBar style={isDark ? 'light' : 'dark'} backgroundColor={C.paper} /><TeamChatInfo team={chatInfoTeam} isDark={isDark} currentUserId={user?.id} messages={nicknamedChatMessages} nicknames={activeNicknames} mutedUntil={teamMutes[chatInfoTeam.id]} onSaveNickname={saveTeamNickname} onMute={muteTeam} onUnmute={unmuteTeam} pinnedMessages={chatInfo.pinned} sharedMedia={chatInfo.media} blockedUsers={chatInfo.blocked} loading={chatInfo.loading} openingMessageId={openingPinnedMessageId} onViewMessage={jumpToPinnedMessage} onPin={pinMessage} onUnblock={unblockPlayer} onChangeMemberRole={changeMemberRole} onRemoveMember={removeMember} onMessageMember={(member) => navigation.navigate('DirectChat', { player: { id: member.id, name: member.name, avatar: member.avatar }, ownerTab: 'Team' })} onBack={() => setChatInfoTeam(null)} onViewTeam={() => { setChatReturnTo(null); setSelected(chatInfoTeam); setChatInfoTeam(null); setChatTeam(null); }} /></SafeAreaView>;
-  if (chatTeam) return <SafeAreaView style={styles.safe}><StatusBar style={isDark ? 'light' : 'dark'} backgroundColor={C.paper} /><TeamChat team={chatTeam} messages={nicknamedChatMessages} loading={!messages[chatTeam.id] && messagePagination[chatTeam.id]?.loading !== false} readStates={messageReadStates[chatTeam.id] || []} currentUser={user} typing={Object.values(typingByTeam[chatTeam.id] || {})} liveMatch={liveMatches[chatTeam.id]} hasEarlier={messagePagination[chatTeam.id]?.hasMore} loadingEarlier={messagePagination[chatTeam.id]?.loading} focusMessageId={focusMessageId} onFocusHandled={() => setFocusMessageId(null)} onLoadEarlier={loadEarlierMessages} onWatchLive={() => { setLiveScoreMode('viewer'); setLiveScoreTeam(chatTeam); }} onSend={sendMessage} onEdit={editMessage} onDelete={deleteMessageForMe} onUnsend={unsendMessage} onReact={reactToMessage} onPin={pinMessage} onReport={reportMessage} onBlock={blockMessageSender} onModerate={moderateMessage} onTypingChange={changeChatTyping} onAttach={attachMedia} onJumpToMessage={jumpToPinnedMessage} onInfo={() => { changeChatTyping(false); setChatInfoTeam(chatTeam); }} onMessageMember={(member) => { changeChatTyping(false); navigation.navigate('DirectChat', { player: { id: member.id, name: member.name, avatar: member.avatar }, ownerTab: 'Team' }); }} onBack={() => { changeChatTyping(false); setFocusMessageId(null); if (chatReturnTo) { navigation.navigate(chatReturnTo); return; } setSelected(chatTeam); setChatTeam(null); }} /></SafeAreaView>;
+  if (chatTeam) return <SafeAreaView style={styles.safe}><StatusBar style={isDark ? 'light' : 'dark'} backgroundColor={C.paper} /><TeamChat team={chatTeam} messages={nicknamedChatMessages} loading={!messages[chatTeam.id] && messagePagination[chatTeam.id]?.loading !== false} readStates={messageReadStates[chatTeam.id] || []} currentUser={user} typing={Object.values(typingByTeam[chatTeam.id] || {})} liveMatch={liveMatches[chatTeam.id]} hasEarlier={messagePagination[chatTeam.id]?.hasMore} loadingEarlier={messagePagination[chatTeam.id]?.loading} focusMessageId={focusMessageId} onFocusHandled={() => setFocusMessageId(null)} onLoadEarlier={loadEarlierMessages} onWatchLive={() => { setLiveScoreMode('viewer'); setLiveScoreTeam(chatTeam); }} onSend={sendMessage} onEdit={editMessage} onDelete={deleteMessageForMe} onUnsend={unsendMessage} onReact={reactToMessage} onPin={pinMessage} onReport={reportMessage} onBlock={blockMessageSender} onModerate={moderateMessage} onTypingChange={changeChatTyping} onSendMedia={sendChatMedia} onJumpToMessage={jumpToPinnedMessage} onInfo={() => { changeChatTyping(false); setChatInfoTeam(chatTeam); }} onMessageMember={(member) => { changeChatTyping(false); navigation.navigate('DirectChat', { player: { id: member.id, name: member.name, avatar: member.avatar }, ownerTab: 'Team' }); }} onBack={() => { changeChatTyping(false); setFocusMessageId(null); if (chatReturnTo) { navigation.navigate(chatReturnTo); return; } setSelected(chatTeam); setChatTeam(null); }} /></SafeAreaView>;
   if (joinTeam) return <SafeAreaView style={styles.safe}><StatusBar style={isDark ? 'light' : 'dark'} backgroundColor={C.paper} /><JoinRequestScreen team={joinTeam} user={user} submitting={requesting.includes(joinTeam.id)} onBack={() => setJoinTeam(null)} onSubmit={requestJoin} /></SafeAreaView>;
   if (hubTeam) return <SafeAreaView style={styles.safe}><StatusBar style={isDark ? 'light' : 'dark'} backgroundColor={C.paper} /><TeamHub team={hubTeam} requests={joinRequests[hubTeam.id] || []} liveMatch={liveMatches[hubTeam.id]} nextChallenges={teamChallenges[hubTeam.id] || []} matchBusy={matchBusy} onOpenMatch={() => { setLiveScoreMode(liveMatches[hubTeam.id]?.canScore ? 'scorer' : 'viewer'); setLiveScoreTeam(hubTeam); }} onStartMatch={(challengeId) => setScorerChallengeId(challengeId)} onRefreshRequests={() => refreshJoinRequests([hubTeam.id]).catch(() => {})} onBack={() => { setScorerChallengeId(null); setHubTeam(null); setSelected(hubTeam); }} onUpdateImage={updateTeamImage} onEdit={() => { if (canEditTeam(hubTeam)) { setEditingTeam(hubTeam); setHubTeam(null); } }} onInvite={() => { setInvitingTeam(hubTeam); setHubTeam(null); }} onChallenges={() => navigation.navigate('Pickleball', { openTab: 'Compete', ownerTab: 'Team' })} onAccept={(request) => acceptRequest(hubTeam, request)} onDecline={(requestId) => declineRequest(hubTeam, requestId)} /><TeamScorerPicker visible={Boolean(scorerChallengeId)} team={hubTeam} currentUserId={user?.id} busy={matchBusy} onClose={() => setScorerChallengeId(null)} onSelect={(scorerId) => startMatchForChallenge(hubTeam.id, scorerChallengeId, scorerId)} /></SafeAreaView>;
   if (selected) return <SafeAreaView style={styles.safe}><StatusBar style={isDark ? 'light' : 'dark'} backgroundColor={C.paper} /><TeamDetail team={selected} joined={joined.some((team) => team.id === selected.id)} invited={invitations.some((item) => item.team_id === selected.id)} requested={requested.includes(selected.id)} requesting={requesting.includes(selected.id)} cancelling={cancellingRequests.includes(selected.id)} onBack={() => setSelected(null)} onJoin={() => openJoinRequest(selected)} onCancel={() => cancelJoinRequest(selected)} onShare={() => shareTeam(selected)} onChat={() => openTeamChat(selected)} onViewHub={() => { setHubTeam(selected); setSelected(null); }} onUpdateImage={updateTeamImage} /></SafeAreaView>;
@@ -2780,7 +2863,7 @@ const lightStyles = createMobileStyleSheet({
   wizardProgress: { marginBottom: 22, flexDirection: 'row' }, wizardStep: { position: 'relative', flex: 1, alignItems: 'center' }, wizardDot: { width: 27, height: 27, zIndex: 2, alignItems: 'center', justifyContent: 'center', borderRadius: 14, borderWidth: 1, borderColor: C.line, backgroundColor: C.surface }, wizardDotActive: { borderColor: C.optic, backgroundColor: C.optic }, wizardDotText: { color: C.ink40, fontSize: 8, fontWeight: '900' }, wizardDotTextActive: { color: C.ink }, wizardStepText: { maxWidth: 72, marginTop: 6, color: C.ink40, textAlign: 'center', fontSize: 7, fontWeight: '700' }, wizardStepTextActive: { color: C.ink, fontWeight: '900' }, wizardLine: { position: 'absolute', top: 13, left: '62%', right: '-38%', height: 1, backgroundColor: C.line }, wizardLineActive: { backgroundColor: C.optic }, stepIntro: { marginBottom: 18 }, stepTitle: { color: C.ink, fontSize: 23, lineHeight: 28, fontWeight: '900', letterSpacing: -.5 }, stepBody: { marginTop: 6, color: C.ink70, fontSize: 11, lineHeight: 17 }, selectedBaseCard: { minHeight: 82, marginBottom: 12, paddingHorizontal: 13, flexDirection: 'row', alignItems: 'center', gap: 11, borderRadius: 16, borderWidth: 1, borderColor: '#BFD8D2', backgroundColor: '#E5F0ED' }, selectedBaseIcon: { width: 44, height: 44, alignItems: 'center', justifyContent: 'center', borderRadius: 13, backgroundColor: C.surface }, selectedBaseCopy: { flex: 1 }, selectedBaseLabel: { color: C.teal, fontSize: 7, fontWeight: '900', letterSpacing: .7 }, selectedBaseCity: { marginTop: 2, color: C.ink, fontSize: 15, fontWeight: '900' }, selectedBaseMeta: { marginTop: 2, color: C.ink40, fontSize: 9 }, baseRequired: { minHeight: 48, marginBottom: 12, paddingHorizontal: 12, flexDirection: 'row', alignItems: 'center', gap: 7, borderRadius: 13, backgroundColor: '#F7EAE6' }, baseRequiredText: { flex: 1, color: C.brick, fontSize: 9, fontWeight: '700' }, useCurrentBase: { minHeight: 58, marginBottom: 18, paddingHorizontal: 13, flexDirection: 'row', alignItems: 'center', gap: 9, borderRadius: 14, backgroundColor: C.optic }, useCurrentBaseCopy: { flex: 1 }, useCurrentBaseTitle: { color: C.ink, fontSize: 10, fontWeight: '900' }, useCurrentBaseMeta: { marginTop: 2, color: C.ink70, fontSize: 8 }, baseSearch: { minHeight: 52, paddingHorizontal: 13, flexDirection: 'row', alignItems: 'center', gap: 8, borderRadius: 14, borderWidth: 1, borderColor: C.line, backgroundColor: C.surface }, baseSearchInput: { flex: 1, minHeight: 50, color: C.ink, fontSize: 12 }, baseResults: { marginTop: 9, overflow: 'hidden', borderRadius: 16, borderWidth: 1, borderColor: C.line, backgroundColor: C.surface }, baseResult: { minHeight: 59, paddingHorizontal: 12, flexDirection: 'row', alignItems: 'center', gap: 9 }, baseResultBorder: { borderTopWidth: 1, borderColor: C.line }, baseResultIcon: { width: 35, height: 35, alignItems: 'center', justifyContent: 'center', borderRadius: 11, backgroundColor: '#E5F0ED' }, baseResultCopy: { flex: 1 }, baseResultCity: { color: C.ink, fontSize: 11, fontWeight: '900' }, baseResultMeta: { marginTop: 2, color: C.ink40, fontSize: 8 }, baseEmpty: { minHeight: 92, alignItems: 'center', justifyContent: 'center' }, baseEmptyTitle: { marginBottom: 3, color: C.ink, fontSize: 11, fontWeight: '800' }, locationPrivacy: { marginTop: 12, padding: 12, flexDirection: 'row', alignItems: 'flex-start', gap: 8, borderRadius: 13, backgroundColor: '#E5F0ED' }, locationPrivacyText: { flex: 1, color: C.ink70, fontSize: 9, lineHeight: 14 }, reviewCover: { overflow: 'hidden', borderRadius: 20 }, reviewCard: { marginTop: 12, overflow: 'hidden', borderRadius: 18, borderWidth: 1, borderColor: C.line, backgroundColor: C.surface }, reviewRow: { minHeight: 82, paddingHorizontal: 13, paddingVertical: 14, flexDirection: 'row', alignItems: 'center', gap: 10 }, reviewBorder: { borderTopWidth: 1, borderColor: C.line }, reviewIcon: { width: 39, height: 39, alignItems: 'center', justifyContent: 'center', borderRadius: 12, backgroundColor: '#E5F0ED' }, reviewCopy: { flex: 1 }, reviewLabel: { color: C.ink40, fontSize: 7, fontWeight: '900', letterSpacing: .7 }, reviewValue: { marginTop: 2, color: C.ink, fontSize: 11, fontWeight: '900' }, reviewMeta: { marginTop: 3, color: C.ink40, fontSize: 8, lineHeight: 12 }, reviewEdit: { padding: 6, color: C.teal, fontSize: 9, fontWeight: '900' }, wizardActions: { marginTop: 22, flexDirection: 'row', gap: 9 }, wizardBack: { width: 92, minHeight: 53, alignItems: 'center', justifyContent: 'center', borderRadius: 14, borderWidth: 1, borderColor: C.line, backgroundColor: C.surface }, wizardBackText: { color: C.ink70, fontSize: 11, fontWeight: '800' }, wizardPrimary: { flex: 1 },
   formPhoto: { marginBottom: 20, padding: 10, borderRadius: 20, backgroundColor: '#E5F0ED' }, formCoverPressable: { overflow: 'hidden', borderRadius: 15 }, previewCoverContent: { position: 'relative', flex: 1 }, previewCameraCover: { position: 'absolute', top: 11, right: 11, width: 28, height: 28, alignItems: 'center', justifyContent: 'center', borderRadius: 14, backgroundColor: 'rgba(8,24,22,0.52)' }, previewCoverBottom: { position: 'absolute', left: 13, right: 13, bottom: 13, flexDirection: 'row', alignItems: 'center', gap: 10 }, previewCrestWrapper: { position: 'relative' }, previewCrestCamera: { position: 'absolute', bottom: -4, right: -4, width: 20, height: 20, alignItems: 'center', justifyContent: 'center', borderRadius: 10, borderWidth: 2, borderColor: '#E5F0ED', backgroundColor: C.optic }, previewCoverText: { flex: 1 }, previewCoverTitle: { color: C.surface, fontSize: 18, fontWeight: '900' }, previewCoverHint: { marginTop: 2, color: 'rgba(255,255,255,.76)', fontSize: 8 }, coverChoiceRow: { paddingHorizontal: 4, paddingTop: 11, paddingBottom: 2, flexDirection: 'row', alignItems: 'center', gap: 8 }, coverChoiceActions: { alignItems: 'flex-end', gap: 4 }, formPhotoCopy: { flex: 1 }, formPhotoTitle: { color: C.ink, fontSize: 13, fontWeight: '800' }, photoActionRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 7, paddingHorizontal: 4, paddingBottom: 6 }, photoButton: { paddingHorizontal: 11, paddingVertical: 7, borderRadius: 9, backgroundColor: C.surface }, photoButtonText: { color: C.teal, fontSize: 9, fontWeight: '800' }, gradientButton: { paddingHorizontal: 4, paddingVertical: 4 }, gradientButtonText: { color: C.ink40, fontSize: 8, fontWeight: '700' }, formField: { marginBottom: 15 }, formLabel: { marginBottom: 7, color: C.ink70, fontSize: 9, fontWeight: '800', letterSpacing: .8 }, formInput: { minHeight: 50, paddingHorizontal: 14, borderRadius: 13, borderWidth: 1, borderColor: C.line, color: C.ink, backgroundColor: C.surface, fontSize: 12 }, formTextarea: { minHeight: 100, paddingTop: 13, textAlignVertical: 'top' }, levelOptions: { marginBottom: 17, flexDirection: 'row', gap: 7 }, levelOption: { minHeight: 38, flex: 1, alignItems: 'center', justifyContent: 'center', borderRadius: 10, borderWidth: 1, borderColor: C.line, backgroundColor: C.surface }, levelOptionActive: { borderColor: C.ink, backgroundColor: C.ink }, levelOptionText: { color: C.ink70, fontSize: 8, fontWeight: '800' }, levelOptionTextActive: { color: C.surface }, visibilityOptions: { marginBottom: 17, flexDirection: 'row', gap: 8 }, visibilityOption: { minHeight: 82, flex: 1, padding: 11, flexDirection: 'row', alignItems: 'flex-start', gap: 8, borderRadius: 12, borderWidth: 1, borderColor: C.line, backgroundColor: C.surface }, visibilityOptionActive: { borderColor: C.ink, backgroundColor: C.ink }, visibilityCopy: { flex: 1 }, visibilityTitle: { color: C.ink, fontSize: 10, fontWeight: '900' }, visibilityTitleActive: { color: C.surface }, visibilityHelp: { marginTop: 4, color: C.ink40, fontSize: 8, lineHeight: 12 }, visibilityHelpActive: { color: 'rgba(255,255,255,.65)' }, formNotice: { marginBottom: 16, padding: 12, flexDirection: 'row', alignItems: 'center', gap: 8, borderRadius: 12, backgroundColor: '#E5F0ED' }, formNoticeText: { flex: 1, color: C.ink70, fontSize: 9, lineHeight: 14 }, saveButton: { minHeight: 53, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 7, borderRadius: 14, backgroundColor: C.optic }, saveButtonDisabled: { opacity: .62 },
   inviteProgress: { padding: 14, flexDirection: 'row', alignItems: 'center', gap: 10, borderRadius: 16, backgroundColor: '#E5F0ED' }, inviteProgressIcon: { width: 43, height: 43, borderRadius: 13, alignItems: 'center', justifyContent: 'center', backgroundColor: C.surface }, inviteProgressTitle: { color: C.ink, fontSize: 12, fontWeight: '900' }, invitePrivacy: { marginTop: 12, color: C.ink40, fontSize: 9, lineHeight: 14 }, searchingText: { paddingVertical: 24, color: C.ink40, textAlign: 'center', fontSize: 10 }, playerResults: { marginTop: 12, overflow: 'hidden', borderRadius: 16, borderWidth: 1, borderColor: C.line, backgroundColor: C.surface }, playerResult: { minHeight: 70, marginHorizontal: 13, flexDirection: 'row', alignItems: 'center', gap: 10 }, invitePlayerButton: { minHeight: 37, paddingHorizontal: 10, flexDirection: 'row', alignItems: 'center', gap: 5, borderRadius: 10, backgroundColor: C.optic }, invitePlayerButtonSent: { borderWidth: 1, borderColor: '#BFD8D2', backgroundColor: '#E5F0ED' }, invitePlayerText: { color: C.ink, fontSize: 9, fontWeight: '900' }, invitePlayerTextSent: { color: C.teal }, invitationCard: { marginBottom: 12, padding: 15, borderRadius: 20, borderBottomLeftRadius: 9, borderBottomRightRadius: 9, borderWidth: 1, borderColor: '#BFD8D2', backgroundColor: C.surface, ...shadow }, invitationEyebrow: { marginBottom: 3, color: C.teal, fontSize: 7, fontWeight: '900', letterSpacing: .7 }, invitationMeta: { marginTop: 13, paddingTop: 11, flexDirection: 'row', alignItems: 'center', gap: 4, borderTopWidth: 1, borderColor: C.line }, invitationExpiry: { marginTop: 5, color: C.ink40, fontSize: 8 },
-  chatScreen: { flex: 1 }, chatHeader: { paddingHorizontal: 16, paddingTop: 8, paddingBottom: 10 }, onlineRow: { marginTop: 2, flexDirection: 'row', alignItems: 'center', gap: 4 }, onlineDot: { width: 6, height: 6, borderRadius: 3, backgroundColor: C.teal }, chatStatus: { color: C.ink40, fontSize: 8 }, chatRule: { height: 1, backgroundColor: C.line }, chatMessages: { flex: 1 }, chatContent: { flexGrow: 1, paddingHorizontal: 14, paddingTop: 12, paddingBottom: 16 }, chatTapArea: { flexGrow: 1 }, loadEarlierButton: { minHeight: 34, marginBottom: 12, alignSelf: 'center', paddingHorizontal: 14, alignItems: 'center', justifyContent: 'center', borderRadius: 17, backgroundColor: '#E5F0ED' }, loadEarlierText: { color: C.teal, fontSize: 9, fontWeight: '800' }, chatDay: { marginBottom: 13, color: C.ink40, textAlign: 'center', fontSize: 7, fontWeight: '900', letterSpacing: .8 }, memberJoinedNotice: { marginVertical: 10, alignSelf: 'center', maxWidth: '90%', paddingHorizontal: 12, paddingVertical: 6, flexDirection: 'row', alignItems: 'center', gap: 6, borderRadius: 14, backgroundColor: '#E5F0ED' }, memberJoinedText: { flexShrink: 1, color: C.teal, fontSize: 10, fontWeight: '800' }, memberJoinedTime: { color: C.ink40, fontSize: 8 }, messageRow: { marginTop: 12, flexDirection: 'row' }, messageRowMine: { justifyContent: 'flex-end' }, messageGrouped: { marginTop: 4 }, messageRowActive: { zIndex: 2 }, chatAvatar: { width: 31, height: 31, borderRadius: 16, alignItems: 'center', justifyContent: 'center' }, chatAvatarSpacer: { width: 31 }, messageBlock: { maxWidth: '90%', alignItems: 'flex-start' }, messageBlockMine: { alignItems: 'flex-end' }, sender: { marginLeft: 4, marginBottom: 3, color: C.ink40, fontSize: 8, fontWeight: '800' }, bubble: { flexShrink: 1, paddingHorizontal: 12, paddingVertical: 9, borderRadius: 15, borderBottomLeftRadius: 4, backgroundColor: C.surface, borderWidth: 1, borderColor: C.line }, bubbleMine: { borderBottomLeftRadius: 15, borderBottomRightRadius: 4, borderColor: C.teal, backgroundColor: C.teal }, deletedBubble: { borderColor: C.line, backgroundColor: C.paper }, deletedMessageRow: { flexDirection: 'row', alignItems: 'center', gap: 5 }, deletedMessageText: { color: C.ink40, fontSize: 10, fontStyle: 'italic' }, bubbleText: { color: C.ink, fontSize: 11, lineHeight: 16 }, bubbleTextMine: { color: C.surface }, messageTime: { marginTop: 3, marginLeft: 4, color: C.ink40, fontSize: 7 }, messageTimeMine: { marginLeft: 0, marginRight: 4 }, reactionSummary: { marginTop: -3, marginLeft: 5, flexDirection: 'row', flexWrap: 'wrap', gap: 3 }, reactionSummaryMine: { marginLeft: 0, marginRight: 5, justifyContent: 'flex-end' }, reactionChip: { minHeight: 24, paddingHorizontal: 6, flexDirection: 'row', alignItems: 'center', gap: 3, borderRadius: 12, borderWidth: 1, borderColor: C.line, backgroundColor: C.surface }, reactionChipMine: { borderColor: C.teal, backgroundColor: '#E5F0ED' }, reactionEmoji: { fontSize: 11 }, reactionCount: { color: C.ink70, fontSize: 8, fontWeight: '800' }, messageActions: { marginTop: 6, padding: 7, maxWidth: 290, borderRadius: 13, borderWidth: 1, borderColor: C.line, backgroundColor: C.surface, ...shadow }, messageActionsMine: { alignItems: 'flex-end' }, reactionPicker: { flexDirection: 'row', gap: 2 }, reactionOption: { width: 34, height: 32, alignItems: 'center', justifyContent: 'center', borderRadius: 10, backgroundColor: C.paper }, reactionOptionText: { fontSize: 16 }, messageActionButtons: { marginTop: 6, flexDirection: 'row', gap: 5 }, messageActionButton: { minHeight: 31, paddingHorizontal: 8, flexDirection: 'row', alignItems: 'center', gap: 4, borderRadius: 9, backgroundColor: C.paper }, messageActionText: { color: C.ink70, fontSize: 8, fontWeight: '800' }, editingBanner: { paddingHorizontal: 14, paddingVertical: 8, flexDirection: 'row', alignItems: 'center', gap: 9, borderTopWidth: 1, borderColor: C.line, backgroundColor: '#E5F0ED' }, editingCopy: { flex: 1 }, editingTitle: { color: C.teal, fontSize: 8, fontWeight: '900' }, editingPreview: { marginTop: 2, color: C.ink70, fontSize: 9 }, composer: { paddingHorizontal: 12, paddingTop: 9, paddingBottom: 9, flexDirection: 'row', alignItems: 'flex-end', gap: 8, borderTopWidth: 1, borderColor: C.line, backgroundColor: C.surface }, addAttachment: { width: 40, height: 40, borderRadius: 20, alignItems: 'center', justifyContent: 'center', backgroundColor: '#E5F0ED' }, composerInput: { minHeight: 43, flex: 1, paddingLeft: 13, paddingRight: 4, flexDirection: 'row', alignItems: 'center', borderRadius: 22, backgroundColor: C.paper }, chatInput: { flex: 1, maxHeight: 92, paddingVertical: 10, color: C.ink, fontSize: 11 }, sendButton: { width: 35, height: 35, borderRadius: 18, alignItems: 'center', justifyContent: 'center', backgroundColor: C.optic }, sendDisabled: { opacity: .35 },
+  chatScreen: { flex: 1 }, chatHeader: { paddingHorizontal: 16, paddingTop: 8, paddingBottom: 10 }, onlineRow: { marginTop: 2, flexDirection: 'row', alignItems: 'center', gap: 4 }, onlineDot: { width: 6, height: 6, borderRadius: 3, backgroundColor: C.teal }, chatStatus: { color: C.ink40, fontSize: 8 }, chatRule: { height: 1, backgroundColor: C.line }, chatMessages: { flex: 1 }, chatContent: { flexGrow: 1, paddingHorizontal: 14, paddingTop: 12, paddingBottom: 16 }, chatTapArea: { flexGrow: 1 }, loadEarlierButton: { minHeight: 34, marginBottom: 12, alignSelf: 'center', paddingHorizontal: 14, alignItems: 'center', justifyContent: 'center', borderRadius: 17, backgroundColor: '#E5F0ED' }, loadEarlierText: { color: C.teal, fontSize: 9, fontWeight: '800' }, chatDay: { marginBottom: 13, color: C.ink40, textAlign: 'center', fontSize: 7, fontWeight: '900', letterSpacing: .8 }, memberJoinedNotice: { marginVertical: 10, alignSelf: 'center', maxWidth: '90%', paddingHorizontal: 12, paddingVertical: 6, flexDirection: 'row', alignItems: 'center', gap: 6, borderRadius: 14, backgroundColor: '#E5F0ED' }, memberJoinedText: { flexShrink: 1, color: C.teal, fontSize: 10, fontWeight: '800' }, memberJoinedTime: { color: C.ink40, fontSize: 8 }, messageRow: { marginTop: 12, flexDirection: 'row' }, messageRowMine: { justifyContent: 'flex-end' }, messageGrouped: { marginTop: 4 }, messageRowActive: { zIndex: 2 }, chatAvatar: { width: 31, height: 31, borderRadius: 16, alignItems: 'center', justifyContent: 'center' }, chatAvatarSpacer: { width: 31 }, messageBlock: { maxWidth: '90%', alignItems: 'flex-start' }, messageBlockMine: { alignItems: 'flex-end' }, sender: { marginLeft: 4, marginBottom: 3, color: C.ink40, fontSize: 8, fontWeight: '800' }, bubble: { flexShrink: 1, paddingHorizontal: 12, paddingVertical: 9, borderRadius: 15, borderBottomLeftRadius: 4, backgroundColor: C.surface, borderWidth: 1, borderColor: C.line }, bubbleMine: { borderBottomLeftRadius: 15, borderBottomRightRadius: 4, borderColor: C.teal, backgroundColor: C.teal }, deletedBubble: { borderColor: C.line, backgroundColor: C.paper }, deletedMessageRow: { flexDirection: 'row', alignItems: 'center', gap: 5 }, deletedMessageText: { color: C.ink40, fontSize: 10, fontStyle: 'italic' }, bubbleText: { color: C.ink, fontSize: 11, lineHeight: 16 }, bubbleTextMine: { color: C.surface }, messageTime: { marginTop: 3, marginLeft: 4, color: C.ink40, fontSize: 7 }, messageTimeMine: { marginLeft: 0, marginRight: 4 }, reactionSummary: { marginTop: -3, marginLeft: 5, flexDirection: 'row', flexWrap: 'wrap', gap: 3 }, reactionSummaryMine: { marginLeft: 0, marginRight: 5, justifyContent: 'flex-end' }, reactionChip: { minHeight: 24, paddingHorizontal: 6, flexDirection: 'row', alignItems: 'center', gap: 3, borderRadius: 12, borderWidth: 1, borderColor: C.line, backgroundColor: C.surface }, reactionChipMine: { borderColor: C.teal, backgroundColor: '#E5F0ED' }, reactionEmoji: { fontSize: 11 }, reactionCount: { color: C.ink70, fontSize: 8, fontWeight: '800' }, messageActions: { marginTop: 6, padding: 7, maxWidth: 290, borderRadius: 13, borderWidth: 1, borderColor: C.line, backgroundColor: C.surface, ...shadow }, messageActionsMine: { alignItems: 'flex-end' }, reactionPicker: { flexDirection: 'row', gap: 2 }, reactionOption: { width: 34, height: 32, alignItems: 'center', justifyContent: 'center', borderRadius: 10, backgroundColor: C.paper }, reactionOptionText: { fontSize: 16 }, messageActionButtons: { marginTop: 6, flexDirection: 'row', gap: 5 }, messageActionButton: { minHeight: 31, paddingHorizontal: 8, flexDirection: 'row', alignItems: 'center', gap: 4, borderRadius: 9, backgroundColor: C.paper }, messageActionText: { color: C.ink70, fontSize: 8, fontWeight: '800' }, editingBanner: { paddingHorizontal: 14, paddingVertical: 8, flexDirection: 'row', alignItems: 'center', gap: 9, borderTopWidth: 1, borderColor: C.line, backgroundColor: '#E5F0ED' }, editingCopy: { flex: 1 }, editingTitle: { color: C.teal, fontSize: 8, fontWeight: '900' }, editingPreview: { marginTop: 2, color: C.ink70, fontSize: 9 }, composer: { paddingHorizontal: 12, paddingTop: 9, paddingBottom: 9, flexDirection: 'row', alignItems: 'flex-end', gap: 4, borderTopWidth: 1, borderColor: C.line, backgroundColor: C.surface }, composerVoice: { flex: 1 }, composerInput: { minHeight: 43, flex: 1, paddingLeft: 13, paddingRight: 4, flexDirection: 'row', alignItems: 'center', borderRadius: 22, backgroundColor: C.paper }, chatInput: { flex: 1, maxHeight: 92, paddingVertical: 10, color: C.ink, fontSize: 11 }, sendButton: { width: 35, height: 35, borderRadius: 18, alignItems: 'center', justifyContent: 'center', backgroundColor: C.optic }, sendDisabled: { opacity: .35 },
   highlightedMessageBubble: { borderWidth: 2, borderColor: C.optic },
   chatPinnedBanner: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: 20, paddingBottom: 12 },
   chatPinnedBannerCopy: { marginLeft: 10, flex: 1 },
