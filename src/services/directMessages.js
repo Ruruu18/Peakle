@@ -15,10 +15,12 @@ const reactionsSchemaMissing = (error) => ['42P01', 'PGRST200', 'PGRST205'].incl
 // 42703: a newer column (unsend or media) has not reached this project yet.
 const columnMissing = (error) => ['42703', 'PGRST204', 'PGRST200'].includes(error?.code);
 const deleteSchemaMissing = (error) => ['42P01', '42703', 'PGRST202', 'PGRST205'].includes(error?.code);
-// Newest first: replies (202609270004) build on media (202609260007), which
-// builds on unsend (202609260006).
+// Newest first: replies (202609270009) build on media (202609260007), which
+// builds on unsend (202609260006). The reply embed goes through the
+// reply_to_id column: PostgREST rejects the table!constraint hint for this
+// self-reference (PGRST200), which silently dropped every quote.
 const MEDIA_COLUMNS = ', deleted_at, media_path, media_type, media_mime, media_name, media_duration_ms';
-const REPLY_COLUMNS = ', reply:direct_messages!direct_messages_reply_to_id_fkey(id, sender_id, body, media_type, deleted_at, profiles!direct_messages_sender_id_fkey(display_name))';
+const REPLY_COLUMNS = ', reply:reply_to_id(id, sender_id, body, media_type, deleted_at, profiles!direct_messages_sender_id_fkey(display_name))';
 const MESSAGE_COLUMN_LEVELS = ['', ', deleted_at', MEDIA_COLUMNS, `${MEDIA_COLUMNS}${REPLY_COLUMNS}`];
 
 // Tries the newest message shape first and drops only the part the project

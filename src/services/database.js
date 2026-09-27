@@ -898,8 +898,9 @@ export async function removeTeamMember(teamId, userId) {
 
 const TEAM_MESSAGE_SELECT = '*, profiles!team_messages_sender_id_fkey(display_name, avatar_url), team_message_reactions(emoji, user_id), team_message_pins(pinned_by, pinned_at)';
 // The message a reply quotes, loaded with it so the quote shows even when the
-// original is outside the loaded page.
-const TEAM_MESSAGE_REPLY_SELECT = `${TEAM_MESSAGE_SELECT}, reply:team_messages!team_messages_reply_to_id_fkey(id, sender_id, body, media_type, image_url, deleted_at, profiles!team_messages_sender_id_fkey(display_name))`;
+// original is outside the loaded page. Embed through the reply_to_id column:
+// PostgREST rejects the table!constraint hint for this self-reference (PGRST200).
+const TEAM_MESSAGE_REPLY_SELECT = `${TEAM_MESSAGE_SELECT}, reply:reply_to_id(id, sender_id, body, media_type, image_url, deleted_at, profiles!team_messages_sender_id_fkey(display_name))`;
 // Until the replies migration is applied the embed fails before the request
 // runs; drop it for the rest of the session instead of breaking the chat.
 let teamRepliesAvailable = true;
