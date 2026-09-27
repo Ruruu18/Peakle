@@ -1,3 +1,4 @@
+import './web/polyfills';
 import '@expo/metro-runtime';
 import { registerRootComponent } from 'expo';
 import { Alert } from 'react-native';

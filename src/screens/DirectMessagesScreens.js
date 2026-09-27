@@ -86,6 +86,8 @@ import {
 import { createReactionTracker, toggleOwnReaction } from '../utils/reactions';
 import { webLongPress } from '../utils/webLongPress';
 import useStableHandlers from '../hooks/useStableHandlers';
+import { useChatDraft } from '../hooks/useChatDraft';
+import { setForegroundInterval } from '../lib/foregroundInterval';
 
 const LIGHT_C = {
   ink: '#0E2321',
@@ -694,7 +696,7 @@ export function InboxScreen({ navigation }) {
   useFocusEffect(useCallback(() => {
     if (!PRIVATE_MESSAGES_ENABLED || !user?.id) return undefined;
     const userId = user.id;
-    const timer = setInterval(() => {
+    const stopPolling = setForegroundInterval(() => {
       listFollowingPlayers().then((following) => {
         if (activeUserIdRef.current !== userId) return;
         setInbox((current) => {
@@ -704,7 +706,7 @@ export function InboxScreen({ navigation }) {
         });
       }, () => {});
     }, 60 * 1000);
-    return () => clearInterval(timer);
+    return stopPolling;
   }, [user?.id]));
   useEffect(() => {
     if (!PRIVATE_MESSAGES_ENABLED || !supabase || !user?.id) return undefined;
@@ -1188,7 +1190,7 @@ const RECEIPTS = {
   delivered: { icon: null, label: 'Delivered' },
 };
 function MessageReceipt({ receipt, peer, colors }) {
-  if (receipt === 'seen') return <View accessibilityLabel={`Seen by ${peer?.name || 'player'}`} style={styles.directSeenReceipt}><ProfilePhoto photo={peer?.avatar} name={peer?.name} size={17} /><Icon name="checkmark-done" size={13} color={colors.teal} /><Text style={[styles.directSeenText, { color: colors.ink40 }]}>Seen</Text></View>;
+  if (receipt === 'seen') return <View accessibilityLabel={`Seen by ${peer?.name || 'player'}`} style={styles.directSeenReceipt}><ProfilePhoto photo={peer?.avatar} name={peer?.name} size={17} /><Text style={[styles.directSeenText, { color: colors.ink40 }]}>Seen</Text></View>;
   const { icon, label } = RECEIPTS[receipt];
   const tint = receipt === 'failed' ? colors.brick : colors.ink40;
   return <View accessibilityLiveRegion="polite" accessibilityLabel={label} style={styles.directSeenReceipt}>{icon ? <Icon name={icon} size={13} color={tint} /> : null}<Text style={[styles.directSeenText, { color: tint }]}>{label}</Text></View>;
@@ -1252,7 +1254,7 @@ function DirectChatConversation({ route, navigation }) {
   const [conversation, setConversation] = useState(null);
   const [peer, setPeer] = useState(routePlayer);
   const [messages, setMessages] = useState([]);
-  const [draft, setDraft] = useState('');
+  const [draft, setDraft] = useChatDraft(user?.id && peer?.id ? `dm:${user.id}:${peer.id}` : null);
   // Attachment buttons show until the player starts typing, then fold into a
   // chevron that brings them back (like Messenger).
   // closed: "+" · open: camera, gallery, mic · minimized: ">" after the
@@ -1312,6 +1314,16 @@ function DirectChatConversation({ route, navigation }) {
   const [timeMessageId, setTimeMessageId] = useState(null);
   const [profileCardOpen, setProfileCardOpen] = useState(false);
   const scrollRef = useRef(null);
+  // Follow new messages only while the player is at the bottom, so reading
+  // older ones is not interrupted, and jump there without animating the first
+  // time (animating through a long thread stutters on Android).
+  const nearBottomRef = useRef(true);
+  const scrolledOnceRef = useRef(false);
+  const scrollToLatest = useCallback((force = false) => {
+    if (!force && !nearBottomRef.current) return;
+    scrollRef.current?.scrollToEnd({ animated: scrolledOnceRef.current });
+    scrolledOnceRef.current = true;
+  }, []);
   const conversationLoadingRef = useRef(false);
   const channelRef = useRef(null);
   const reactionTracker = useRef(createReactionTracker()).current;
@@ -1396,10 +1408,10 @@ function DirectChatConversation({ route, navigation }) {
   useFocusEffect(useCallback(() => {
     refreshMessagePermission();
     if (!awaitingRelationship) return undefined;
-    const timer = setInterval(refreshMessagePermission, 15000);
+    const stopPolling = setForegroundInterval(refreshMessagePermission, 15000);
     // The peer confirming 18+ or following back pings their status topic.
     const unsubscribe = subscribePlayerStatus(routePlayer?.id, refreshMessagePermission);
-    return () => { clearInterval(timer); unsubscribe(); };
+    return () => { stopPolling(); unsubscribe(); };
   }, [awaitingRelationship, refreshMessagePermission, routePlayer?.id]));
   const sendTyping = useCallback((isTyping) => {
     if (!conversationId || conversation?.status !== 'accepted' || !channelRef.current) return;
@@ -1468,10 +1480,11 @@ function DirectChatConversation({ route, navigation }) {
     };
   }, [conversationId, reactionTracker, refreshConversation, safetyStatus?.eligible, upsertMessage, user?.id]);
   useEffect(() => () => stopTyping(), [stopTyping]);
+  const latestIsMine = Boolean(messages[messages.length - 1]?.mine);
   useEffect(() => {
-    const frame = requestAnimationFrame(() => scrollRef.current?.scrollToEnd({ animated: true }));
+    const frame = requestAnimationFrame(() => scrollToLatest(latestIsMine));
     return () => cancelAnimationFrame(frame);
-  }, [messages.length, remoteTyping]);
+  }, [latestIsMine, messages.length, remoteTyping, scrollToLatest]);
 
   // Texts show in the thread straight away with "Sending…" and swap to the
   // saved message when it lands; only photos, videos and voice show progress.
@@ -1506,8 +1519,8 @@ function DirectChatConversation({ route, navigation }) {
     let active = true;
     const load = () => getDirectPeerActivity(conversationId).then((activity) => { if (active) setPeerActivity(activity); });
     load();
-    const timer = setInterval(load, 20 * 1000);
-    return () => { active = false; clearInterval(timer); };
+    const stopPolling = setForegroundInterval(load, 20 * 1000);
+    return () => { active = false; stopPolling(); };
   }, [accepted, conversationId, messages.length]);
   const send = () => {
     const clean = draft.trim();
@@ -1858,6 +1871,7 @@ function DirectChatConversation({ route, navigation }) {
     afterSheetCloses(() => {
       const offset = messageOffsets.current[message.id];
       if (offset == null) return;
+      nearBottomRef.current = false;
       scrollRef.current?.scrollTo({ y: Math.max(0, messageAreaY.current + offset - 120), animated: true });
       setHighlightedMessageId(message.id);
       setTimeout(() => setHighlightedMessageId((current) => (current === message.id ? null : current)), 2200);
@@ -1882,7 +1896,7 @@ function DirectChatConversation({ route, navigation }) {
       {!safetyStatus?.eligible && !loading ? <ChatSafetyGate status={safetyStatus} busy={safetyBusy} onConfirm={confirmSafety} colors={colors} /> : loading ? <ChatLoadingSkeleton colors={colors} /> : relationshipLocked ? <MessageRelationshipGate peer={peer} permission={messagePermission} busy={following} onFollow={followPeer} colors={colors} /> : (
         <KeyboardAvoidingView style={styles.chatBody} behavior={Platform.OS === 'ios' ? 'padding' : undefined} keyboardVerticalOffset={8}>
           <View style={[styles.encryptionBanner, { backgroundColor: isDark ? colors.surface : '#E5F0ED', borderColor: colors.line }]}><Icon name="lock-closed-outline" size={14} color={colors.teal} /><Text style={[styles.encryptionText, { color: colors.ink70 }]}>Only you and {peer?.name || 'this player'} can view this conversation.</Text></View>
-          <ScrollView ref={scrollRef} style={styles.messages} contentContainerStyle={styles.messageContent} keyboardShouldPersistTaps="handled" onContentSizeChange={() => scrollRef.current?.scrollToEnd({ animated: true })}>
+          <ScrollView ref={scrollRef} style={styles.messages} contentContainerStyle={styles.messageContent} keyboardShouldPersistTaps="handled" scrollEventThrottle={64} onScroll={({ nativeEvent }) => { nearBottomRef.current = nativeEvent.contentSize.height - nativeEvent.layoutMeasurement.height - nativeEvent.contentOffset.y < 120; }} onContentSizeChange={() => scrollToLatest()}>
             {!messages.length ? <View style={styles.emptyChat}><ProfilePhoto photo={peer?.avatar} name={peer?.name} size={70} /><Text style={[styles.emptyChatTitle, { color: colors.ink }]}>Message {peer?.name || 'this player'}</Text><Text style={[styles.emptyText, { color: colors.ink40 }]}>You can message because you are teammates, mutual followers, or matched on a play request. Keep personal and sensitive information private.</Text></View> : null}
             <View style={styles.messageTapArea} onLayout={(event) => { messageAreaY.current = event.nativeEvent.layout.y; }}>
             {messages.map((message, index) => {

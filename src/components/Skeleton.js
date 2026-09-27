@@ -79,7 +79,59 @@ export function TeamListSkeleton({ cards = 2 }) {
   );
 }
 
+// "People you may know" cards on Home: photo, name, reason and follow button.
+export function PlayerCardsSkeleton({ cards = 3, label = 'Finding players for you' }) {
+  const pulse = useSkeletonPulse();
+  const colors = useSkeletonColors();
+  return (
+    <View accessible accessibilityRole="progressbar" accessibilityLabel={label} style={styles.cardRow}>
+      {Array.from({ length: cards }, (_, index) => (
+        <View key={index} style={[styles.playerCard, { backgroundColor: colors.surface, borderColor: colors.line }]}>
+          <SkeletonBlock pulse={pulse} color={colors.line} style={styles.playerPhoto} />
+          <SkeletonBlock pulse={pulse} color={colors.line} style={styles.playerName} />
+          <SkeletonBlock pulse={pulse} color={colors.line} style={styles.playerReason} />
+          <SkeletonBlock pulse={pulse} color={colors.line} style={styles.playerButton} />
+        </View>
+      ))}
+    </View>
+  );
+}
+
+// Activity cards on Home: title, time and place, then the join row.
+export function ActivityCardsSkeleton({ cards = 2, label = 'Finding activities near you' }) {
+  const pulse = useSkeletonPulse();
+  const colors = useSkeletonColors();
+  return (
+    <View accessible accessibilityRole="progressbar" accessibilityLabel={label} style={styles.cardRow}>
+      {Array.from({ length: cards }, (_, index) => (
+        <View key={index} style={[styles.activityCard, { backgroundColor: colors.surface, borderColor: colors.line }]}>
+          <SkeletonBlock pulse={pulse} color={colors.line} style={styles.activityBadge} />
+          <SkeletonBlock pulse={pulse} color={colors.line} style={styles.activityTitle} />
+          <SkeletonBlock pulse={pulse} color={colors.line} style={styles.activityMeta} />
+          <View style={styles.activityFooter}>
+            <SkeletonBlock pulse={pulse} color={colors.line} style={styles.activityAvatars} />
+            <SkeletonBlock pulse={pulse} color={colors.line} style={styles.activityButton} />
+          </View>
+        </View>
+      ))}
+    </View>
+  );
+}
+
 const styles = StyleSheet.create({
+  cardRow: { flexDirection: 'row', gap: 12, overflow: 'hidden' },
+  playerCard: { width: 190, minHeight: 225, padding: 15, alignItems: 'center', borderWidth: 1, borderRadius: 22, borderBottomLeftRadius: 9, borderBottomRightRadius: 9 },
+  playerPhoto: { width: 58, height: 58, marginTop: 14, borderRadius: 29 },
+  playerName: { width: 110, height: 14, marginTop: 14, borderRadius: 7 },
+  playerReason: { width: 80, height: 9, marginTop: 9 },
+  playerButton: { alignSelf: 'stretch', height: 38, marginTop: 'auto', borderRadius: 12 },
+  activityCard: { width: 280, minHeight: 150, padding: 16, borderWidth: 1, borderRadius: 24 },
+  activityBadge: { width: 70, height: 18, borderRadius: 9 },
+  activityTitle: { width: '75%', height: 16, marginTop: 14, borderRadius: 8 },
+  activityMeta: { width: '55%', height: 10, marginTop: 10 },
+  activityFooter: { marginTop: 'auto', paddingTop: 16, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
+  activityAvatars: { width: 64, height: 24, borderRadius: 12 },
+  activityButton: { width: 72, height: 32, borderRadius: 11 },
   block: { borderRadius: 999 },
   messages: { paddingTop: 8 },
   messageRow: { marginTop: 12, flexDirection: 'row', alignItems: 'flex-end', gap: 7 },

@@ -2,6 +2,7 @@ import 'react-native-url-polyfill/auto';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { AppState, Platform } from 'react-native';
 import { createClient, processLock } from '@supabase/supabase-js';
+import { createResilientFetch } from './resilientFetch';
 
 export const SUPABASE_URL = process.env.EXPO_PUBLIC_SUPABASE_URL || 'https://melbfzfuxrviybblipua.supabase.co';
 export const SUPABASE_ANON_KEY = process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY;
@@ -16,6 +17,7 @@ export const supabase = isSupabaseConfigured
         detectSessionInUrl: false,
         ...(Platform.OS === 'web' ? { flowType: 'pkce' } : { lock: processLock }),
       },
+      global: { fetch: createResilientFetch() },
     })
   : null;
 
@@ -23,8 +25,24 @@ export const supabase = isSupabaseConfigured
 // while the app is active. Register this once, alongside the singleton client.
 if (supabase && Platform.OS !== 'web') {
   AppState.addEventListener('change', (state) => {
-    if (state === 'active') supabase.auth.startAutoRefresh();
-    else supabase.auth.stopAutoRefresh();
+    if (state === 'active') {
+      supabase.auth.startAutoRefresh();
+      reconnectRealtime();
+    } else supabase.auth.stopAutoRefresh();
+  });
+}
+
+// Mobile data often drops the live connection while the app is in the
+// background or the signal changes. Reconnect straight away instead of waiting
+// for the next heartbeat to notice, so live chats and scores resume at once.
+function reconnectRealtime() {
+  if (!supabase?.realtime || supabase.realtime.isConnected()) return;
+  try { supabase.realtime.connect(); } catch {}
+}
+if (supabase && Platform.OS === 'web' && typeof window !== 'undefined') {
+  window.addEventListener('online', reconnectRealtime);
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'visible') reconnectRealtime();
   });
 }
 

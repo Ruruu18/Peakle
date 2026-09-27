@@ -41,6 +41,8 @@ import ScrollView from '../components/FocusResetScrollView';
 import useResponsiveWidth from '../hooks/useResponsiveWidth';
 import { webLongPress } from '../utils/webLongPress';
 import useStableHandlers from '../hooks/useStableHandlers';
+import { useChatDraft } from '../hooks/useChatDraft';
+import { setForegroundInterval } from '../lib/foregroundInterval';
 import { DirectMediaContent, saveDirectMedia, VoiceRecorderBar } from '../components/DirectMessageMedia';
 import ChatCamera from '../components/ChatCamera';
 import { ChatGallerySheet, prepareGalleryItems } from '../components/ChatGallery';
@@ -686,7 +688,6 @@ const ChatMessage = React.memo(function ChatMessage({ message, grouped, highligh
 });
 
 function TeamChat({ team, messages, loading, readStates, currentUser, typing, liveMatch, hasEarlier, loadingEarlier, focusMessageId, onFocusHandled, onLoadEarlier, onBack, onSend, onEdit, onDelete, onUnsend, onReact, onPin, onReport, onBlock, onModerate, onTypingChange, onWatchLive, onInfo, onMessageMember, onJumpToMessage, onSendMedia }) {
-  const [draft, setDraft] = useState('');
   // Attachment buttons work like private chats: "+" opens camera, gallery, and
   // mic, which fold into ">" once the player starts typing.
   const [trayMode, setTrayMode] = useState('closed');
@@ -705,6 +706,7 @@ function TeamChat({ team, messages, loading, readStates, currentUser, typing, li
     return () => clearTimeout(timer);
   }, []);
   const [editingMessage, setEditingMessage] = useState(null);
+  const [draft, setDraft] = useChatDraft(currentUser?.id && team?.id ? `team:${currentUser.id}:${team.id}` : null, { paused: Boolean(editingMessage) });
   // Swipe (or "Reply" in the menu) quotes a message in the next one sent.
   const [replyTarget, setReplyTarget] = useState(null);
   // @mentions: where the cursor is, and who was picked from the list.
@@ -812,8 +814,8 @@ function TeamChat({ team, messages, loading, readStates, currentUser, typing, li
     let active = true;
     const load = () => getTeamChatLastActive(team.id).then((at) => { if (active) setTeamLastActive(at); });
     load();
-    const timer = setInterval(load, 20 * 1000);
-    return () => { active = false; clearInterval(timer); };
+    const stopPolling = setForegroundInterval(load, 20 * 1000);
+    return () => { active = false; stopPolling(); };
   }, [team.id, messages.length]);
   const latestMineDelivered = Boolean(latestMine && !latestMine.deliveryState && teamLastActive && new Date(teamLastActive) >= new Date(latestMine.createdAt));
   const selectedMessage = messages.find((message) => message.id === selectedMessageId) || null;
@@ -1899,9 +1901,9 @@ export default function TeamScreen({ navigation, route }) {
         if (manageableTeamIds.includes(changedTeamId)) loadTeamData().catch(() => {});
       })
       .subscribe();
-    const fallbackTimer = setInterval(refresh, 15000);
+    const stopFallbackPolling = setForegroundInterval(refresh, 15000);
     return () => {
-      clearInterval(fallbackTimer);
+      stopFallbackPolling();
       supabase.removeChannel(channel);
     };
   }, [loadTeamData, manageableTeamKey, refreshJoinRequests, user?.id]);
@@ -2250,10 +2252,10 @@ export default function TeamScreen({ navigation, route }) {
         setChatTeam(null);
       }
     }).catch(() => {});
-    const timer = setInterval(verify, 30000);
+    const stopPolling = setForegroundInterval(verify, 30000);
     return () => {
       active = false;
-      clearInterval(timer);
+      stopPolling();
     };
   }, [changeChatTyping, chatTeam]);
   const loadEarlierMessages = async () => {

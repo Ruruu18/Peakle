@@ -19,6 +19,8 @@ import { useAuth } from '../context/AuthContext';
 import { DARK_CONTENT_COLORS, useTheme } from '../context/ThemeContext';
 import { supabase } from '../lib/supabase';
 import { createMobileStyleSheet } from '../utils/mobileStyles';
+import { useChatDraft } from '../hooks/useChatDraft';
+import { ChatMessagesSkeleton } from '../components/Skeleton';
 import {
   getCommunityMessage,
   getOrCreateCommunityChat,
@@ -78,11 +80,12 @@ export function CommunityChatBody({ eventKind, eventId, initialTitle = null, onC
   const { user } = useAuth();
   const [chat, setChat] = useState(initialTitle ? { title: initialTitle } : null);
   const [messages, setMessages] = useState([]);
-  const [draft, setDraft] = useState('');
+  const [draft, setDraft] = useChatDraft(user?.id && eventKind && eventId ? `community:${user.id}:${eventKind}:${eventId}` : null);
   const [loading, setLoading] = useState(true);
   const [sending, setSending] = useState(false);
   const [announceMode, setAnnounceMode] = useState(false);
   const [error, setError] = useState('');
+  const [loadAttempt, setLoadAttempt] = useState(0);
   const scrollRef = useRef(null);
   const scrollFrameRef = useRef(null);
   const stickToBottomRef = useRef(true);
@@ -116,7 +119,8 @@ export function CommunityChatBody({ eventKind, eventId, initialTitle = null, onC
         const rows = await listCommunityMessages(details.conversationId);
         if (cancelled) return;
         setMessages(rows);
-        await markCommunityConversationRead(details.conversationId);
+        // Loaded messages stay visible even if marking them read fails.
+        markCommunityConversationRead(details.conversationId).catch(() => {});
       } catch (loadError) {
         if (!cancelled) setError(loadError.message || 'This chat could not be opened.');
       } finally {
@@ -124,7 +128,7 @@ export function CommunityChatBody({ eventKind, eventId, initialTitle = null, onC
       }
     })();
     return () => { cancelled = true; };
-  }, [eventKind, eventId]);
+  }, [eventKind, eventId, loadAttempt]);
 
   useEffect(() => {
     if (!supabase || !chat?.conversationId || !user?.id) return undefined;
@@ -184,11 +188,15 @@ export function CommunityChatBody({ eventKind, eventId, initialTitle = null, onC
       <View style={[s.rule, { backgroundColor: colors.line }]} />
 
       {loading ? (
-        <View style={s.loading}><ActivityIndicator color={colors.teal} /></View>
+        <View style={s.skeleton}><ChatMessagesSkeleton /></View>
       ) : error ? (
         <View style={s.loading}>
           <Icon name="cloud-offline-outline" size={26} color={colors.ink40} />
           <Text style={[s.errorText, { color: colors.ink40 }]}>{error}</Text>
+          <Pressable accessibilityRole="button" onPress={() => setLoadAttempt((value) => value + 1)} style={({ pressed }) => [s.retryButton, { borderColor: colors.line, backgroundColor: colors.surface }, pressed && { opacity: 0.7 }]}>
+            <Icon name="refresh" size={15} color={colors.teal} />
+            <Text style={[s.retryText, { color: colors.teal }]}>Try again</Text>
+          </Pressable>
         </View>
       ) : (
         <KeyboardAvoidingView style={s.flex} behavior={Platform.OS === 'ios' ? 'padding' : undefined} keyboardVerticalOffset={8}>
@@ -271,6 +279,9 @@ const s = createMobileStyleSheet({
   rule: { height: 1 },
   loading: { flex: 1, alignItems: 'center', justifyContent: 'center', gap: 10, paddingHorizontal: 30 },
   errorText: { fontSize: 11, fontWeight: '700', textAlign: 'center' },
+  skeleton: { flex: 1, paddingHorizontal: 16 },
+  retryButton: { minHeight: 40, paddingHorizontal: 16, flexDirection: 'row', alignItems: 'center', gap: 6, borderWidth: 1, borderRadius: 12 },
+  retryText: { fontSize: 11, fontWeight: '900' },
   messageContent: { paddingHorizontal: 16, paddingVertical: 14, gap: 10 },
   emptyState: { paddingVertical: 26, alignItems: 'center', gap: 8 },
   emptyIcon: { width: 52, height: 52, alignItems: 'center', justifyContent: 'center', borderRadius: 18 },

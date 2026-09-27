@@ -38,6 +38,7 @@ import { COURT_BOOKING_ENABLED, ORGANIZER_EVENTS_ENABLED } from '../config/featu
 import { dismissPlayerSuggestion, followPlayer, listPlayerSuggestions } from '../services/directMessages';
 import { ACCOUNT_MENU_NAV, useAccountMenu } from '../components/AccountMenu';
 import { dropShadow, noShadow } from '../utils/shadow';
+import { ActivityCardsSkeleton, PlayerCardsSkeleton } from '../components/Skeleton';
 
 const C = {
   ink: '#0E2321', paper: '#F3F5EF', surface: '#FFFFFF', optic: '#D6E94A',
@@ -852,7 +853,7 @@ export default function HomeScreen() {
         right={<Pressable accessibilityRole="button" accessibilityLabel="See all public activities" onPress={() => (COURT_BOOKING_ENABLED ? navigation.navigate('Activities') : navigation.navigate('Schedule', { openView: 'discover', openViewToken: Date.now() }))} style={styles.openPlayMore}><Text style={styles.openPlayMoreText}>More</Text><Icon name="arrow-forward" size={14} color={C.ink} /></Pressable>}
       />
       {activitiesLoading && !activityPreview.length
-        ? <View style={[styles.openPlayLoadingCard, isDark && darkStyles.card]}><ActivityIndicator color={C.teal} /><Text style={[styles.openPlayLoadingText, isDark && darkStyles.mutedText]}>Finding activities near you…</Text></View>
+        ? <ActivityCardsSkeleton />
         : activityPreview.length
           ? <ScrollView {...webLayout('home-cards')} horizontal={activityPreview.length > 1} showsHorizontalScrollIndicator={false} contentContainerStyle={[styles.openPlayScroll, activityPreview.length === 1 && styles.openPlayScrollSingle]}>
               {activityPreview.map((activity) => <PublicActivityCard key={activity.id} activity={activity} userLocation={userLocation} wide={tablet} single={activityPreview.length === 1} onPress={() => openActivity(activity)} />)}
@@ -864,7 +865,7 @@ export default function HomeScreen() {
     <View style={styles.section}>
       <SectionTitle eyebrow="FIND YOUR PEOPLE" title="People you may know" />
       {suggestionsLoading && !visibleSuggestedPlayers.length ? (
-        <View style={[styles.suggestionsLoadingCard, isDark && darkStyles.card]}><ActivityIndicator color={C.teal} /><Text style={[styles.openPlayLoadingText, isDark && darkStyles.mutedText]}>Finding players for you…</Text></View>
+        <PlayerCardsSkeleton />
       ) : visibleSuggestedPlayers.length ? (
         <ScrollView {...webLayout('home-cards')} horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.suggestionsScroll}>
           {visibleSuggestedPlayers.map((player) => <SuggestedPlayerCard key={player.id} player={player} wide={tablet} busy={followingPlayerId === player.id} onFollow={requestSuggestedFollow} onDismiss={dismissSuggestedPlayer} onPress={() => navigation.navigate('PublicProfile', { player })} />)}
@@ -964,8 +965,6 @@ const styles = createMobileStyleSheet({
   homeOpenPlayTop: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }, homeOpenPlayVerified: { minHeight: 25, paddingHorizontal: 8, flexDirection: 'row', alignItems: 'center', gap: 4, borderRadius: 13, backgroundColor: '#E5F0ED' }, homeOpenPlayVerifiedText: { color: C.teal, fontSize: 6, fontWeight: '900', letterSpacing: .45 }, homeOpenPlayFee: { color: C.ink, fontSize: 11, fontWeight: '900' },
   homeOpenPlayName: { marginTop: 10, color: C.ink, fontSize: 15, lineHeight: 19, fontWeight: '900' }, homeOpenPlayVenue: { marginTop: 3, color: C.teal, fontSize: 8, fontWeight: '800' }, homeOpenPlayMeta: { marginTop: 9, flexDirection: 'row', alignItems: 'center', gap: 6 }, homeOpenPlayMetaText: { flex: 1, color: C.ink70, fontSize: 8 },
   homeOpenPlayFoot: { marginTop: 9, paddingTop: 9, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', borderTopWidth: 1, borderColor: C.line }, homeOpenPlayDistance: { color: C.ink40, fontSize: 8, fontWeight: '800' }, homeOpenPlaySpots: { minHeight: 23, paddingHorizontal: 8, justifyContent: 'center', borderRadius: 12, backgroundColor: C.optic }, homeOpenPlaySpotsText: { color: C.ink, fontSize: 6, fontWeight: '900' }, homeOpenPlayWaitlist: { backgroundColor: '#F7EAE6' }, homeOpenPlayWaitlistText: { color: C.brick },
-  openPlayLoadingCard: { minHeight: 150, alignItems: 'center', justifyContent: 'center', borderWidth: 1, borderColor: C.line, borderRadius: 24, backgroundColor: C.surface }, openPlayLoadingText: { marginTop: 9, color: C.ink40, fontSize: 9, fontWeight: '800' },
-  suggestionsLoadingCard: { minHeight: 196, alignItems: 'center', justifyContent: 'center', borderWidth: 1, borderColor: C.line, borderRadius: 24, backgroundColor: C.surface },
   suggestionsScroll: { paddingRight: 20, gap: 12 },
   suggestedPlayerCard: { width: 190, minHeight: 225, padding: 15, borderWidth: 1, borderColor: C.line, borderRadius: 22, borderBottomLeftRadius: 9, borderBottomRightRadius: 9, backgroundColor: C.surface, ...shadow },
   suggestedPlayerCardWide: { width: 210 },

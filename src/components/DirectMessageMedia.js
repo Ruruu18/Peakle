@@ -24,6 +24,22 @@ import { webLongPress } from '../utils/webLongPress';
 
 export const MAX_VOICE_MS = 2 * 60 * 1000;
 const WAVE_BARS = 28;
+// Browsers record in their own format: Chrome and Firefox make WebM or Ogg,
+// Safari makes MP4. Read the real type from the recording so it is uploaded
+// and played back as what it is. Phones always record M4A.
+const WEB_VOICE_EXTENSIONS = { 'audio/webm': 'webm', 'audio/ogg': 'ogg', 'audio/mp4': 'm4a', 'audio/x-m4a': 'm4a', 'audio/aac': 'aac', 'audio/mpeg': 'mp3', 'video/webm': 'webm', 'video/mp4': 'm4a' };
+async function recordedVoiceFormat(uri) {
+  if (Platform.OS !== 'web') return { mimeType: undefined, extension: 'm4a' };
+  let type = '';
+  try {
+    type = (await (await fetch(uri)).blob()).type || '';
+  } catch {}
+  const base = type.split(';')[0].trim().toLowerCase();
+  const extension = WEB_VOICE_EXTENSIONS[base];
+  if (!extension) return { mimeType: 'audio/webm', extension: 'webm' };
+  return { mimeType: base.startsWith('video/') ? base.replace('video/', 'audio/') : base, extension };
+}
+
 const RECORDING_OPTIONS = { ...RecordingPresets.HIGH_QUALITY, numberOfChannels: 1, isMeteringEnabled: true };
 
 export const formatClock = (ms) => {
@@ -405,11 +421,12 @@ export function VoiceRecorderBar({ colors, onCancel, onSend }) {
       onCancel();
       return;
     }
+    const { mimeType, extension } = await recordedVoiceFormat(recorder.uri);
     onSend({
       uri: recorder.uri,
       duration: recordedMs,
-      mimeType: Platform.OS === 'web' ? 'audio/webm' : undefined,
-      fileName: `voice-message.${Platform.OS === 'web' ? 'webm' : 'm4a'}`,
+      mimeType,
+      fileName: `voice-message.${extension}`,
     });
   };
 
