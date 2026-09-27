@@ -35,6 +35,11 @@ const bestPictureSize = (sizes = []) => {
   const area = (size) => size.split('x').map(Number).reduce((a, b) => a * b, 1) || 0;
   return sizes.filter((size) => /^\d+x\d+$/.test(size)).sort((a, b) => area(b) - area(a))[0];
 };
+// Holding the shutter must not start a text selection or the browser's
+// long-press menu (images, "Copy", "Search"), which also cancels the hold.
+const WEB_NO_SELECT = IS_WEB ? { userSelect: 'none', WebkitUserSelect: 'none', WebkitTouchCallout: 'none', WebkitTapHighlightColor: 'transparent' } : null;
+const WEB_NO_GESTURES = IS_WEB ? { touchAction: 'none' } : null;
+const blockWebMenu = IS_WEB ? { onContextMenu: (event) => event.preventDefault() } : null;
 const formatSeconds = (seconds) => `${Math.floor(seconds / 60)}:${String(Math.floor(seconds % 60)).padStart(2, '0')}`;
 const wait = (ms) => new Promise((resolve) => { setTimeout(resolve, ms); });
 
@@ -210,7 +215,7 @@ export default function ChatCamera({ visible, onClose, onCapture, onLibrary, onS
 
   return (
     <Modal visible={visible} animationType="slide" presentationStyle="fullScreen" statusBarTranslucent onRequestClose={captured ? retake : close}>
-      <View style={styles.backdrop}>
+      <View style={[styles.backdrop, WEB_NO_SELECT]} {...blockWebMenu}>
         <View style={[styles.screen, IS_WEB && styles.screenWeb, { paddingTop: insets.top + 8, paddingBottom: insets.bottom + 12 }]}>
           <View style={styles.preview}>
             {captured ? (
@@ -270,7 +275,7 @@ export default function ChatCamera({ visible, onClose, onCapture, onLibrary, onS
               {recording ? (
                 <View style={styles.timerPill}>
                   <View style={styles.timerDot} />
-                  <Text style={styles.timerText}>{formatSeconds(elapsed)} / {formatSeconds(MAX_CAMERA_VIDEO_SECONDS)}</Text>
+                  <Text selectable={false} style={styles.timerText}>{formatSeconds(elapsed)} / {formatSeconds(MAX_CAMERA_VIDEO_SECONDS)}</Text>
                 </View>
               ) : !captured ? (
                 <View style={styles.topCenter}>
@@ -305,7 +310,8 @@ export default function ChatCamera({ visible, onClose, onCapture, onLibrary, onS
                   onLongPress={startRecording}
                   onPressOut={stopRecording}
                   delayLongPress={HOLD_DELAY_MS}
-                  style={styles.shutter}
+                  {...blockWebMenu}
+                  style={[styles.shutter, WEB_NO_SELECT, WEB_NO_GESTURES]}
                 >
                   <Svg width={SHUTTER_SIZE} height={SHUTTER_SIZE} style={StyleSheet.absoluteFill}>
                     <Circle cx={SHUTTER_SIZE / 2} cy={SHUTTER_SIZE / 2} r={RING_RADIUS} stroke="rgba(255,255,255,.55)" strokeWidth={RING_STROKE} fill="none" />
@@ -342,7 +348,7 @@ export default function ChatCamera({ visible, onClose, onCapture, onLibrary, onS
               </Pressable>
             </View>
           ) : (
-            <Text style={styles.hint}>{recording ? 'Release to stop' : 'Tap for photo, hold for video'}</Text>
+            <Text selectable={false} style={styles.hint}>{recording ? 'Release to stop' : 'Tap for photo, hold for video'}</Text>
           )}
         </View>
         {screenFlash ? <View style={[styles.screenFlash, { pointerEvents: 'none' }]} /> : null}
