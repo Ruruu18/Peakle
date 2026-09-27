@@ -24,6 +24,7 @@ import {
   searchDirectMessageCandidates,
   followPlayer,
   unfollowPlayer,
+  dismissPlayerSuggestion,
   listPlayerSuggestions,
   respondFollowRequest,
   sendDirectMessage,
@@ -1175,5 +1176,27 @@ describe('reportDirectMessage', () => {
   it('propagates an RPC error', async () => {
     requireSupabase.mockReturnValue({ rpc: jest.fn(async () => ({ data: null, error: new Error('nope') })) });
     await expect(reportDirectMessage('m1', 'spam')).rejects.toThrow('nope');
+  });
+});
+
+describe('dismissPlayerSuggestion', () => {
+  it('asks the server to stop suggesting the player', async () => {
+    const client = { rpc: jest.fn(async () => ({ data: null, error: null })) };
+    requireSupabase.mockReturnValue(client);
+    await dismissPlayerSuggestion('p1');
+    expect(client.rpc).toHaveBeenCalledWith('dismiss_player_suggestion', { p_player_id: 'p1' });
+  });
+
+  it('does nothing without a player id', async () => {
+    const client = { rpc: jest.fn() };
+    requireSupabase.mockReturnValue(client);
+    await dismissPlayerSuggestion(null);
+    expect(client.rpc).not.toHaveBeenCalled();
+  });
+
+  it('surfaces server errors', async () => {
+    const client = { rpc: jest.fn(async () => ({ data: null, error: new Error('nope') })) };
+    requireSupabase.mockReturnValue(client);
+    await expect(dismissPlayerSuggestion('p1')).rejects.toThrow('nope');
   });
 });

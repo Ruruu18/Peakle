@@ -681,6 +681,15 @@ export async function listPlayerSuggestions(limit = 8) {
   });
 }
 
+export async function dismissPlayerSuggestion(playerId) {
+  if (!playerId) return;
+  if (DEMO_MODE) return;
+  const { error } = await requireSupabase().rpc('dismiss_player_suggestion', {
+    p_player_id: playerId,
+  });
+  if (error) throw error;
+}
+
 export async function respondFollowRequest(requesterId, accept) {
   if (!requesterId) throw new Error('This follow request is unavailable.');
   const { data, error } = await requireSupabase().rpc('respond_follow_request', {

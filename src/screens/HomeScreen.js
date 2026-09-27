@@ -35,7 +35,7 @@ import { skillCategoryForRating } from '../utils/skillCategories';
 import { listDiscoverablePlayerActivities } from '../services/playerActivities';
 import { formatTime, isPlayerScheduledEntry, listScheduledGames, nextOnMyCalendar, scheduleEntryFromActivity } from '../services/schedule';
 import { COURT_BOOKING_ENABLED, ORGANIZER_EVENTS_ENABLED } from '../config/features';
-import { followPlayer, listPlayerSuggestions } from '../services/directMessages';
+import { dismissPlayerSuggestion, followPlayer, listPlayerSuggestions } from '../services/directMessages';
 import { ACCOUNT_MENU_NAV, useAccountMenu } from '../components/AccountMenu';
 import { dropShadow, noShadow } from '../utils/shadow';
 
@@ -451,11 +451,20 @@ function BottomNav({ onNavigate }) {
   );
 }
 
-function SuggestedPlayerCard({ player, onFollow, onPress, busy, wide }) {
+function SuggestedPlayerCard({ player, onFollow, onDismiss, onPress, busy, wide }) {
   const { isDark } = useTheme();
   const requested = player.followRequestPending;
   return (
     <Pressable onPress={onPress} style={({ pressed }) => [styles.suggestedPlayerCard, wide && styles.suggestedPlayerCardWide, isDark && darkStyles.card, pressed && { opacity: 0.9 }]}>
+      <Pressable
+        accessibilityRole="button"
+        accessibilityLabel={`Remove ${player.name} from suggestions`}
+        hitSlop={8}
+        onPress={() => onDismiss(player)}
+        style={({ pressed }) => [styles.suggestedDismissButton, pressed && styles.pressed]}
+      >
+        <Icon name="close" size={14} color={isDark ? 'rgba(243,245,239,0.72)' : C.ink40} />
+      </Pressable>
       {player.mutuals > 0 && <Text style={[styles.suggestedPlayerMutuals, isDark && darkStyles.mutedText]}>{player.mutuals} mutuals</Text>}
       <View style={styles.suggestedPlayerTop}>
         <ProfilePhoto photo={player.avatar} name={player.name} size={58} />
@@ -755,6 +764,12 @@ export default function HomeScreen() {
       setFollowingPlayerId(null);
     }
   };
+  const dismissSuggestedPlayer = (player) => {
+    if (!player?.id) return;
+    // Hide right away; the server remembers it so the player isn't suggested again.
+    setSuggestedPlayers((current) => current.filter((item) => item.id !== player.id));
+    dismissPlayerSuggestion(player.id).catch(() => {});
+  };
   const nearbyCourts = useMemo(() => venues.map((court) => {
     const distanceKm = distanceInKm(userLocation, court);
     return {
@@ -852,7 +867,7 @@ export default function HomeScreen() {
         <View style={[styles.suggestionsLoadingCard, isDark && darkStyles.card]}><ActivityIndicator color={C.teal} /><Text style={[styles.openPlayLoadingText, isDark && darkStyles.mutedText]}>Finding players for you…</Text></View>
       ) : visibleSuggestedPlayers.length ? (
         <ScrollView {...webLayout('home-cards')} horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.suggestionsScroll}>
-          {visibleSuggestedPlayers.map((player) => <SuggestedPlayerCard key={player.id} player={player} wide={tablet} busy={followingPlayerId === player.id} onFollow={requestSuggestedFollow} onPress={() => navigation.navigate('PublicProfile', { player })} />)}
+          {visibleSuggestedPlayers.map((player) => <SuggestedPlayerCard key={player.id} player={player} wide={tablet} busy={followingPlayerId === player.id} onFollow={requestSuggestedFollow} onDismiss={dismissSuggestedPlayer} onPress={() => navigation.navigate('PublicProfile', { player })} />)}
         </ScrollView>
       ) : (
         <View style={[styles.emptyDataCard, isDark && darkStyles.card]}><Icon name="people-outline" size={25} color={C.teal} /><Text style={[styles.emptyDataTitle, isDark && darkStyles.text]}>You’re all caught up</Text><Text style={[styles.emptyDataText, isDark && darkStyles.mutedText]}>New player suggestions will appear here as the Peakle community grows.</Text></View>
@@ -955,6 +970,7 @@ const styles = createMobileStyleSheet({
   suggestedPlayerCard: { width: 190, minHeight: 225, padding: 15, borderWidth: 1, borderColor: C.line, borderRadius: 22, borderBottomLeftRadius: 9, borderBottomRightRadius: 9, backgroundColor: C.surface, ...shadow },
   suggestedPlayerCardWide: { width: 210 },
   suggestedPlayerTop: { alignItems: 'center' },
+  suggestedDismissButton: { position: 'absolute', top: 8, right: 8, zIndex: 1, width: 26, height: 26, alignItems: 'center', justifyContent: 'center', borderRadius: 13 },
   suggestedPlayerMutuals: { textAlign: 'center', marginBottom: 10, color: C.ink40, fontSize: 9, fontWeight: '800' },
   suggestedPlayerFollowers: { textAlign: 'center', marginTop: 10, color: C.ink40, fontSize: 9, fontWeight: '700' },
   suggestedPlayerFollowersStrong: { color: C.ink, fontWeight: '900' },
