@@ -99,7 +99,7 @@ function YourStanding({ player, formatLabel, areaLabel, palette, wide, featured 
         <View style={[styles.featuredStats, { borderColor: palette.line }]}>
           {stats.map(({ label, value }) => (
             <View key={label} style={styles.featuredStat}>
-              <Text style={[styles.personalStatValue, { color: palette.ink }]}>{value}</Text>
+              <Text numberOfLines={1} style={[styles.personalStatValue, { color: palette.ink }]}>{value}</Text>
               <Text style={[styles.personalStatLabel, { color: palette.muted }]}>{label}</Text>
             </View>
           ))}
@@ -181,7 +181,7 @@ function StandingRow({ player, currentUserId, palette, wide }) {
         <Text style={[styles.matchesColumn, styles.tableNumber, { color: palette.muted }]}>{player.verifiedMatches}</Text>
         <Text style={[styles.recordColumn, styles.tableNumber, { color: palette.ink }]}>{player.wins}–{player.losses}</Text>
       </> : null}
-      <Text style={[styles.ratingColumn, styles.standingRating, { color: palette.ink }]}>{player.rating.toFixed(3)}</Text>
+      <Text numberOfLines={1} style={[styles.ratingColumn, styles.standingRating, { color: palette.ink }]}>{player.rating.toFixed(3)}</Text>
     </View>
   );
 }
@@ -529,7 +529,7 @@ const styles = StyleSheet.create({
   featuredRank: { fontSize: 54, lineHeight: 60, fontWeight: '600', letterSpacing: -2.5, fontVariant: ['tabular-nums'] },
   featuredRankLabel: { fontSize: 11, lineHeight: 16 },
   featuredStats: { flexDirection: 'row', borderTopWidth: 1, paddingTop: 20, gap: 8 },
-  featuredStat: { flex: 1, gap: 5 },
+  featuredStat: { flexGrow: 1, flexShrink: 1, flexBasis: 'auto', gap: 5 },
   personalCard: { padding: 16, borderWidth: 1, borderRadius: 12 },
   personalCardWide: { padding: 22, flexDirection: 'row', alignItems: 'center', flexWrap: 'wrap', columnGap: 24 },
   personalIdentity: { flexDirection: 'row', alignItems: 'center', gap: 12 },
@@ -563,7 +563,7 @@ const styles = StyleSheet.create({
   playerColumn: { flex: 1, minWidth: 0, flexDirection: 'row', alignItems: 'center', gap: 10 },
   matchesColumn: { width: 76, textAlign: 'right' },
   recordColumn: { width: 86, textAlign: 'right' },
-  ratingColumn: { width: 58, textAlign: 'right' },
+  ratingColumn: { width: 76, textAlign: 'right' },
   ratingHeading: { flexDirection: 'row', alignItems: 'center', justifyContent: 'flex-end', gap: 3 },
   standingRow: { minHeight: 76, paddingHorizontal: 12, paddingVertical: 14, flexDirection: 'row', alignItems: 'center', gap: 10, borderTopWidth: StyleSheet.hairlineWidth },
   standingRowWide: { paddingHorizontal: 20, gap: 16 },

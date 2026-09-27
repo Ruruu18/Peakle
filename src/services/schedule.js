@@ -89,24 +89,60 @@ async function currentUserId(client) {
   return data?.session?.user?.id || null;
 }
 
-// Games I host or was invited to (not ones I declined), plus open games anyone can join.
+// Fetch personal activities independently so public discovery cannot crowd
+// them out. Page through the personal calendar; discovery stays bounded.
 export async function listScheduledGames({ from, to }) {
   if (DEMO_MODE) return [];
   const client = requireSupabase();
   const userId = await currentUserId(client);
-  const query = (fields) => client
-    .from('scheduled_games')
-    .select(`${fields},scheduled_game_players(${ROSTER_FIELDS})`)
-    .gte('ends_at', from)
-    .lt('starts_at', to)
-    .order('starts_at')
-    .limit(200);
-  let { data, error } = await query(GAME_FIELDS + COORDINATE_FIELDS);
-  if (schemaMissing(error)) ({ data, error } = await query(GAME_FIELDS));
-  if (error) throw error;
-  return (data || [])
+  if (!userId) return [];
+  const fields = (coordinates = true) => `${GAME_FIELDS}${coordinates ? COORDINATE_FIELDS : ''},scheduled_game_players(${ROSTER_FIELDS})`;
+  const read = async (build) => {
+    let result = await build(fields());
+    if (['42703', 'PGRST204'].includes(result.error?.code)) result = await build(fields(false));
+    if (result.error) throw result.error;
+    return result.data || [];
+  };
+  const loadPages = async (build) => {
+    const rows = [];
+    const pageSize = 100;
+    for (let offset = 0; ; offset += pageSize) {
+      const data = await read((selection) => build(selection).order('starts_at').order('id').range(offset, offset + pageSize - 1));
+      rows.push(...data);
+      if (data.length < pageSize) return rows;
+    }
+  };
+  const loadMine = async () => {
+    try {
+      return await loadPages((selection) => client.rpc('list_my_scheduled_games', { p_from: from, p_to: to }).select(selection));
+    } catch (error) {
+      if (!['PGRST202', '42883'].includes(error?.code)) throw error;
+      // During a rolling database deploy, use separately filtered table
+      // queries. Never fall back to the shared discovery limit for My schedule.
+      const [hosted, joined] = await Promise.all([
+        loadPages((selection) => client.from('scheduled_games').select(selection)
+          .eq('host_id', userId).gte('ends_at', from).lt('starts_at', to)),
+        loadPages((selection) => client.from('scheduled_games')
+          .select(`${selection},my_registration:scheduled_game_players!inner(user_id)`)
+          .eq('my_registration.user_id', userId).neq('host_id', userId)
+          .gte('ends_at', from).lt('starts_at', to)),
+      ]);
+      return [...hosted, ...joined];
+    }
+  };
+  const [mine, discovery] = await Promise.all([
+    loadMine(),
+    read((selection) => client.from('scheduled_games').select(selection)
+      .eq('visibility', 'open').eq('status', 'scheduled')
+      .gte('ends_at', from).lt('starts_at', to)
+      .order('starts_at').order('id').limit(200)),
+  ]);
+  const rows = new Map(discovery.map((row) => [row.id, row]));
+  mine.forEach((row) => rows.set(row.id, row));
+  return [...rows.values()]
     .map((row) => mapGame(row, userId))
-    .filter((game) => game.status === 'scheduled' || game.myStatus);
+    .filter((game) => game.status === 'scheduled' || game.myStatus)
+    .sort((a, b) => new Date(a.startsAt) - new Date(b.startsAt) || a.id.localeCompare(b.id));
 }
 
 export async function listScheduleEvents() {
@@ -137,6 +173,9 @@ export async function createScheduledActivity({ kind = 'game', title, startsAt, 
   if (!Object.hasOwn(SCHEDULE_ACTIVITY_TYPES, kind)) throw new Error('Choose an activity type.');
   const start = new Date(startsAt);
   const end = new Date(start.getTime() + durationMinutes * 60000);
+  if (!Number.isFinite(start.getTime()) || !Number.isFinite(end.getTime()) || durationMinutes <= 0 || durationMinutes > 12 * 60) {
+    throw new Error('Choose a valid start time and a duration of at most 12 hours.');
+  }
   const capacity = kind === 'game' ? (matchType === 'singles' ? 2 : 4) : requestedCapacity;
   if (!Number.isInteger(capacity) || capacity < 2 || capacity > 16) throw new Error('Choose a player limit from 2 to 16.');
   const client = requireSupabase();
@@ -173,15 +212,18 @@ async function courtCoordinates(court) {
   if (latitude != null && longitude != null) return { latitude, longitude };
   const query = [court?.name, court?.area].map(cleanCourtText).filter(Boolean).join(', ');
   if (!query) return null;
+  let timeout;
   try {
     const results = await Promise.race([
       geocode(query),
-      new Promise((resolve) => { setTimeout(() => resolve([]), GEOCODE_TIMEOUT_MS); }),
+      new Promise((resolve) => { timeout = setTimeout(() => resolve([]), GEOCODE_TIMEOUT_MS); }),
     ]);
     const [first] = results || [];
     return first && Number.isFinite(first.latitude) && Number.isFinite(first.longitude) ? { latitude: first.latitude, longitude: first.longitude } : null;
   } catch (_) {
     return null;
+  } finally {
+    clearTimeout(timeout);
   }
 }
 

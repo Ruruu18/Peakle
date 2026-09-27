@@ -30,6 +30,7 @@ const LAST_SIGN_IN_METHOD_KEY = '@peakle/last-selected-sign-in-method';
 const REMEMBERED_EMAIL_KEY = '@peakle/remembered-email';
 const ONBOARDING_SAVE_TIMEOUT_MS = 15000;
 const AUTH_STARTUP_TIMEOUT_MS = 8000;
+const MINIMUM_SIGN_OUT_MS = 650;
 // Serializes activity check-ins across provider remounts; see the heartbeat effect.
 let activityQueue = Promise.resolve();
 const userCacheKey = (userId) => `@peakle/cache/auth-user/${userId}`;
@@ -183,7 +184,9 @@ function readableSignUpError(error) {
 
 export function AuthProvider({ children }) {
   const authGeneration = useRef(0);
+  const signOutInProgress = useRef(false);
   const [user, setUser] = useState(null);
+  const [signingOut, setSigningOut] = useState(false);
   const [googleHandoff, setGoogleHandoff] = useState(null);
   const [hydrated, setHydrated] = useState(false);
   const [pendingVerificationEmail, setPendingVerificationEmail] = useState('');
@@ -690,17 +693,28 @@ export function AuthProvider({ children }) {
   };
 
   const signOut = async () => {
-    const client = requireSupabase();
-    if (user?.id) {
-      await Promise.all([
-        client.from('player_presence').update({ availability: 'offline', updated_at: new Date().toISOString() }).eq('user_id', user.id).then(() => {}, () => {}),
-        client.rpc('touch_player_activity', { p_active: false }).then(() => {}, () => {}),
-        disablePushToken(user.id).catch(() => {}),
-      ]);
+    if (signOutInProgress.current) return;
+    signOutInProgress.current = true;
+    setSigningOut(true);
+    // Keep the animation visible even when the session clears immediately.
+    const minimumVisible = new Promise((resolve) => setTimeout(resolve, MINIMUM_SIGN_OUT_MS));
+    try {
+      const client = requireSupabase();
+      if (user?.id) {
+        await Promise.all([
+          client.from('player_presence').update({ availability: 'offline', updated_at: new Date().toISOString() }).eq('user_id', user.id).then(() => {}, () => {}),
+          client.rpc('touch_player_activity', { p_active: false }).then(() => {}, () => {}),
+          disablePushToken(user.id).catch(() => {}),
+        ]);
+      }
+      const { error } = await client.auth.signOut();
+      if (error) throw error;
+      setUser(null);
+    } finally {
+      await minimumVisible;
+      signOutInProgress.current = false;
+      setSigningOut(false);
     }
-    const { error } = await client.auth.signOut();
-    if (error) throw error;
-    setUser(null);
   };
 
   const deleteAccount = async () => {
@@ -727,6 +741,7 @@ export function AuthProvider({ children }) {
 
   const value = useMemo(() => (DEMO_MODE ? {
     user: DEMO_USER,
+    signingOut: false,
     hydrated: true,
     configured: true,
     pendingVerificationEmail: '',
@@ -752,6 +767,7 @@ export function AuthProvider({ children }) {
     deleteAccount: async () => { throw new Error('Account deletion is unavailable in demo mode.'); },
   } : {
     user,
+    signingOut,
     hydrated,
     configured: isSupabaseConfigured,
     pendingVerificationEmail,
@@ -775,7 +791,7 @@ export function AuthProvider({ children }) {
     updateProfile,
     signOut,
     deleteAccount,
-  }), [user, hydrated, pendingVerificationEmail, passwordRecovery, authLinkError, lastSignInMethod, rememberedEmail]);
+  }), [user, signingOut, hydrated, pendingVerificationEmail, passwordRecovery, authLinkError, lastSignInMethod, rememberedEmail]);
   return (
     <AuthContext.Provider value={value}>
       {children}

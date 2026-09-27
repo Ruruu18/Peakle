@@ -18,7 +18,10 @@
     "test:web": "node scripts/player-web-qa.mjs",
     "verify:web-host": "node scripts/verify-player-web-host.mjs",
     "test:account-bans": "node supabase/tests/account-bans.mjs",
-    "test:play-anywhere": "node supabase/tests/play-anywhere.mjs"
+    "test:play-anywhere": "node supabase/tests/play-anywhere.mjs",
+    "test:activity-safety": "node supabase/tests/activity-creation-safety.mjs",
+    "test:player-suggestions": "node supabase/tests/player-suggestions.mjs",
+    "test:follows": "node supabase/tests/instagram-follows.mjs"
   },
   "jest": {
     "preset": "jest-expo",

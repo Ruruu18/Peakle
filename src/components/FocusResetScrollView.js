@@ -19,7 +19,8 @@ const FocusResetScrollView = forwardRef(function FocusResetScrollView(props, for
       scrollRef.current?.scrollTo({ x: 0, y: 0, animated: false });
     });
 
-    if (!DEMO_MODE) return () => cancelAnimationFrame(frame);
+    // Only the page scroll drifts; card carousels stay on their first card.
+    if (!DEMO_MODE || props.horizontal) return () => cancelAnimationFrame(frame);
 
     const timers = [];
     const loop = () => {
@@ -39,7 +40,7 @@ const FocusResetScrollView = forwardRef(function FocusResetScrollView(props, for
       cancelAnimationFrame(frame);
       timers.forEach(clearTimeout);
     };
-  }, []));
+  }, [props.horizontal]));
 
   return <ScrollView ref={scrollRef} {...props} />;
 });

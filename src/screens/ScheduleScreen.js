@@ -509,6 +509,7 @@ function NewActivitySheet({ visible, initialDay, todayKey, onClose, onCreated })
   const [courtsOpen, setCourtsOpen] = useState(false);
   const [recentCourts, setRecentCourts] = useState([]);
   const [saving, setSaving] = useState(false);
+  const savingRef = useRef(false);
   const [error, setError] = useState('');
 
   useEffect(() => {
@@ -532,7 +533,8 @@ function NewActivitySheet({ visible, initialDay, todayKey, onClose, onCreated })
     : `${KINDS[kind].name}${court ? ` at ${court.name}` : ''}`).slice(0, 80);
 
   const submit = async () => {
-    if (!slot || !court) return;
+    if (!slot || !court || savingRef.current) return;
+    savingRef.current = true;
     setSaving(true);
     setError('');
     try {
@@ -542,6 +544,7 @@ function NewActivitySheet({ visible, initialDay, todayKey, onClose, onCreated })
     } catch (createError) {
       setError(createError.message || 'The activity could not be scheduled. Try again.');
     } finally {
+      savingRef.current = false;
       setSaving(false);
     }
   };

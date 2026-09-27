@@ -538,10 +538,10 @@ export default function HomeScreen() {
   const greeting = greetingFor(now);
   const { setOpen: setAccountMenuOpen } = useAccountMenu();
   const notices = useMemo(() => operationNotifications.map(presentNotification), [operationNotifications]);
-  // Players who accepted our follow request now follow each other with us, so
-  // they no longer belong in "People you may know".
+  // Players who accepted our follow request are now followed, so they no longer
+  // belong in "People you may know". New followers stay: they are follow-back suggestions.
   const acceptedFollowKey = useMemo(() => operationNotifications
-    .filter((notice) => notice.kind === 'follow_accepted' && notice.data?.playerId)
+    .filter((notice) => notice.kind === 'follow_accepted' && notice.data?.event !== 'new_follower' && notice.data?.playerId)
     .map((notice) => notice.data.playerId)
     .sort()
     .join(','), [operationNotifications]);
@@ -870,7 +870,7 @@ export default function HomeScreen() {
           {visibleSuggestedPlayers.map((player) => <SuggestedPlayerCard key={player.id} player={player} wide={tablet} busy={followingPlayerId === player.id} onFollow={requestSuggestedFollow} onDismiss={dismissSuggestedPlayer} onPress={() => navigation.navigate('PublicProfile', { player })} />)}
         </ScrollView>
       ) : (
-        <View style={[styles.emptyDataCard, isDark && darkStyles.card]}><Icon name="people-outline" size={25} color={C.teal} /><Text style={[styles.emptyDataTitle, isDark && darkStyles.text]}>You’re all caught up</Text><Text style={[styles.emptyDataText, isDark && darkStyles.mutedText]}>New player suggestions will appear here as the Peakle community grows.</Text></View>
+        <View style={[styles.emptyDataCard, isDark && darkStyles.card]}><Icon name="people-outline" size={25} color={C.teal} /><Text style={[styles.emptyDataTitle, isDark && darkStyles.text]}>You’re all caught up</Text><Text style={[styles.emptyDataText, isDark && darkStyles.mutedText]}>Players with mutual connections or in your home area will appear here.</Text></View>
       )}
     </View>
   );
@@ -938,7 +938,7 @@ export default function HomeScreen() {
         <KitchenLine style={[styles.headerLine, compactHeader && styles.headerLineCompact]} />
         {tablet ? <View {...webLayout('home')} style={styles.tabletGrid}><View style={styles.primaryColumn}>{schedule}{discovery}{peopleYouMayKnow}{COURT_BOOKING_ENABLED ? nearby : null}</View><View style={styles.secondaryColumn}>{gameOverview}{feed}</View></View> : <>{schedule}{discovery}{peopleYouMayKnow}{gameOverview}{COURT_BOOKING_ENABLED ? nearby : null}{feed}</>}
       </ScrollView>
-      <NotificationSheet visible={notifications} onClose={() => setNotifications(false)} items={notices} unreadCount={unreadCount} onRead={(id) => readNotification(id).catch((error) => Alert.alert('Notifications', error.message || 'This notification could not be marked as read.'))} onReadAll={() => readAllNotifications().catch((error) => Alert.alert('Notifications', error.message || 'Notifications could not be marked as read.'))} onDelete={removeNotification} onClearRead={clearNotifications} onFollowResponse={respondToFollow} onOpen={(item) => { if (!item.read_at && item.kind !== 'team_invite') readNotification(item.id).catch(() => {}); setNotifications(false); if (item.kind === 'community_announcement' && item.data?.eventKind && item.data?.eventId) navigation.navigate('CommunityChat', { eventKind: item.data.eventKind, eventId: item.data.eventId, ownerTab: 'Home' }); else if (item.data?.conversationId) navigation.navigate('DirectChat', { conversationId: item.data.conversationId, player: item.data?.playerId ? { id: item.data.playerId } : undefined, ownerTab: 'Team' }); else if (item.data?.teamId && item.kind?.startsWith('team_invite')) navigation.navigate('Team', { openInvitationTeamId: item.data.teamId, openInvitationToken: Date.now() }); else if (item.data?.gameId) navigation.navigate('Schedule', { openGameId: item.data.gameId, openGameToken: Date.now() }); else if (item.data?.sessionId) navigation.navigate('OpenPlayActivity', { token: Date.now(), sessionId: item.data.sessionId, direct: true, returnTo: 'Home' }); }} />
+      <NotificationSheet visible={notifications} onClose={() => setNotifications(false)} items={notices} unreadCount={unreadCount} onRead={(id) => readNotification(id).catch((error) => Alert.alert('Notifications', error.message || 'This notification could not be marked as read.'))} onReadAll={() => readAllNotifications().catch((error) => Alert.alert('Notifications', error.message || 'Notifications could not be marked as read.'))} onDelete={removeNotification} onClearRead={clearNotifications} onFollowResponse={respondToFollow} onOpen={(item) => { if (!item.read_at && item.kind !== 'team_invite') readNotification(item.id).catch(() => {}); setNotifications(false); if (item.kind === 'community_announcement' && item.data?.eventKind && item.data?.eventId) navigation.navigate('CommunityChat', { eventKind: item.data.eventKind, eventId: item.data.eventId, ownerTab: 'Home' }); else if (item.data?.conversationId) navigation.navigate('DirectChat', { conversationId: item.data.conversationId, player: item.data?.playerId ? { id: item.data.playerId } : undefined, ownerTab: 'Team' }); else if (item.data?.teamId && item.kind?.startsWith('team_invite')) navigation.navigate('Team', { openInvitationTeamId: item.data.teamId, openInvitationToken: Date.now() }); else if (item.data?.teamId && item.kind === 'team_mention') navigation.navigate('Team', { openChatTeamId: item.data.teamId, openChatToken: Date.now() }); else if (item.data?.gameId) navigation.navigate('Schedule', { openGameId: item.data.gameId, openGameToken: Date.now() }); else if (item.data?.sessionId) navigation.navigate('OpenPlayActivity', { token: Date.now(), sessionId: item.data.sessionId, direct: true, returnTo: 'Home' }); }} />
       <LocationPicker visible={locationOpen} onClose={() => setLocationOpen(false)} />
       {!!toast && <Animated.View style={[styles.toast, { opacity: toastAnim, transform: [{ translateY: toastAnim.interpolate({ inputRange: [0, 1], outputRange: [18, 0] }) }] }]}><Text style={styles.toastText}>{toast}</Text></Animated.View>}
     </SafeAreaView>

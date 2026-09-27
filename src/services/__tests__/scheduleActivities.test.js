@@ -8,6 +8,7 @@ import {
 jest.mock('../../lib/supabase', () => ({ requireSupabase: jest.fn() }));
 jest.mock('../../config/demoMode', () => ({ DEMO_MODE: false }));
 jest.mock('../playerActivities', () => ({ listDiscoverablePlayerActivities: jest.fn() }));
+jest.mock('../../utils/geocode', () => ({ geocode: jest.fn().mockResolvedValue([]) }));
 
 const details = {
   title: 'Community session', startsAt: '2026-10-01T09:00:00+08:00', durationMinutes: 90,
@@ -58,14 +59,63 @@ it('loads every player category into My schedule and preserves its origin', asyn
     starts_at: `2026-10-0${index + 1}T01:00:00.000Z`, ends_at: `2026-10-0${index + 1}T02:30:00.000Z`,
     scheduled_game_players: [{ user_id: 'host', status: 'going', profile: { display_name: 'Host' } }],
   }));
-  const query = { select: jest.fn().mockReturnThis(), gte: jest.fn().mockReturnThis(), lt: jest.fn().mockReturnThis(), order: jest.fn().mockReturnThis(), limit: jest.fn().mockResolvedValue({ data: rows, error: null }) };
-  requireSupabase.mockReturnValue({ auth: { getSession: jest.fn().mockResolvedValue({ data: { session: { user: { id: 'host' } } } }) }, from: jest.fn(() => query) });
+  const query = { select: jest.fn().mockReturnThis(), eq: jest.fn().mockReturnThis(), gte: jest.fn().mockReturnThis(), lt: jest.fn().mockReturnThis(), order: jest.fn().mockReturnThis(), limit: jest.fn().mockResolvedValue({ data: [], error: null }) };
+  const personal = { select: jest.fn().mockReturnThis(), order: jest.fn().mockReturnThis(), range: jest.fn().mockResolvedValue({ data: rows, error: null }) };
+  requireSupabase.mockReturnValue({ auth: { getSession: jest.fn().mockResolvedValue({ data: { session: { user: { id: 'host' } } } }) }, from: jest.fn(() => query), rpc: jest.fn(() => personal) });
   const entries = await listScheduledGames({ from: '2026-10-01', to: '2026-11-01' });
   expect(entries.map((entry) => entry.kind)).toEqual(['game', 'open_play', 'competition', 'program']);
   expect(entries.every(isPlayerScheduledEntry)).toBe(true);
   expect(entries.every(isOnMyCalendar)).toBe(true);
   expect(entries[2]).toMatchObject({ id: 'game:competition', typeLabel: 'Tournament', isHost: true });
   expect(nextOnMyCalendar(entries.slice(1), Date.parse('2026-10-01'))?.kind).toBe('open_play');
+});
+
+it('pages the personal calendar independently of a full discovery feed and merges shared entries once', async () => {
+  const row = (id, hostId = 'other') => ({ id, host_id: hostId, activity_kind: 'game', status: 'scheduled', capacity: 4, starts_at: '2026-10-01T01:00:00Z', ends_at: '2026-10-01T03:00:00Z' });
+  const publicRows = Array.from({ length: 200 }, (_, i) => row(`public-${i}`));
+  const firstPage = Array.from({ length: 100 }, (_, i) => row(`mine-${i}`, 'host'));
+  const lastPage = [row('last-personal-game', 'host'), publicRows[0]];
+  const personal = { select: jest.fn().mockReturnThis(), order: jest.fn().mockReturnThis(), range: jest.fn()
+    .mockResolvedValueOnce({ data: firstPage, error: null }).mockResolvedValueOnce({ data: lastPage, error: null }) };
+  const discovery = { select: jest.fn().mockReturnThis(), eq: jest.fn().mockReturnThis(), gte: jest.fn().mockReturnThis(), lt: jest.fn().mockReturnThis(), order: jest.fn().mockReturnThis(), limit: jest.fn().mockResolvedValue({ data: publicRows, error: null }) };
+  const myRpc = jest.fn(() => personal);
+  requireSupabase.mockReturnValue({ auth: { getSession: jest.fn().mockResolvedValue({ data: { session: { user: { id: 'host' } } } }) }, rpc: myRpc, from: jest.fn(() => discovery) });
+  const entries = await listScheduledGames({ from: '2026-10-01', to: '2026-11-01' });
+  expect(entries).toHaveLength(301);
+  expect(entries.some((entry) => entry.sourceId === 'last-personal-game')).toBe(true);
+  expect(personal.range.mock.calls).toEqual([[0, 99], [100, 199]]);
+  expect(myRpc).toHaveBeenCalledWith('list_my_scheduled_games', { p_from: '2026-10-01', p_to: '2026-11-01' });
+  expect(discovery.eq.mock.calls).toEqual([['visibility', 'open'], ['status', 'scheduled']]);
+});
+
+it('rejects invalid dates and durations without sending a request', async () => {
+  await expect(createScheduledActivity({ ...details, startsAt: 'invalid' })).rejects.toThrow('valid start time');
+  await expect(createScheduledActivity({ ...details, durationMinutes: 0 })).rejects.toThrow('duration');
+  await expect(createScheduledActivity({ ...details, durationMinutes: 721 })).rejects.toThrow('12 hours');
+  expect(rpc).not.toHaveBeenCalled();
+});
+
+it('keeps personal activities visible during a database rollout using filtered table queries', async () => {
+  const row = (id, hostId) => ({ id, host_id: hostId, status: 'scheduled', capacity: 4, starts_at: '2026-10-01T01:00:00Z', ends_at: '2026-10-01T03:00:00Z' });
+  const queries = [];
+  const from = jest.fn(() => {
+    const filters = {};
+    const query = {
+      select: jest.fn().mockReturnThis(), gte: jest.fn().mockReturnThis(), lt: jest.fn().mockReturnThis(), order: jest.fn().mockReturnThis(),
+      eq: jest.fn((key, value) => { filters[key] = value; return query; }), neq: jest.fn().mockReturnThis(),
+      limit: jest.fn().mockResolvedValue({ data: [], error: null }),
+      range: jest.fn(() => Promise.resolve({ data: [filters.host_id ? row('hosted', 'host') : row('invited', 'friend')], error: null })),
+    };
+    queries.push(query);
+    return query;
+  });
+  const unavailable = { select: jest.fn().mockReturnThis(), order: jest.fn().mockReturnThis(), range: jest.fn().mockResolvedValue({ data: null, error: { code: 'PGRST202' } }) };
+  requireSupabase.mockReturnValue({ auth: { getSession: jest.fn().mockResolvedValue({ data: { session: { user: { id: 'host' } } } }) }, rpc: jest.fn(() => unavailable), from });
+  const entries = await listScheduledGames({ from: '2026-10-01', to: '2026-11-01' });
+  expect(entries.map((entry) => entry.sourceId).sort()).toEqual(['hosted', 'invited']);
+  expect(queries[1].eq).toHaveBeenCalledWith('host_id', 'host');
+  expect(queries[2].eq).toHaveBeenCalledWith('my_registration.user_id', 'host');
+  expect(queries[2].select).toHaveBeenCalledWith(expect.stringContaining('my_registration:scheduled_game_players!inner(user_id)'));
 });
 
 it('keeps organizer registrations separate and honors declined player invitations', () => {

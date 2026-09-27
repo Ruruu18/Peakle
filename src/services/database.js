@@ -219,6 +219,9 @@ export async function listVenues({ signal } = {}) {
 
 export async function listManagedVenues() {
   const client = requireSupabase();
+  const { data: auth } = await client.auth.getSession();
+  const userId = auth?.session?.user?.id;
+  if (!userId) return [];
   const { data: adminAccess, error: adminError } = await client
     .from('platform_admins')
     .select('user_id')
@@ -237,6 +240,7 @@ export async function listManagedVenues() {
   const { data, error } = await requireSupabase()
     .from('venue_members')
     .select('role, venues(*, courts(*))')
+    .eq('user_id', userId)
     .order('created_at');
   if (error) throw error;
   return (data || [])
@@ -496,9 +500,11 @@ export async function deleteCourtBlackout(id) {
   if (error) throw error;
 }
 
-export async function loadActiveOpenPlay() {
+export async function loadActiveOpenPlay(sessionId = null) {
   const client = requireSupabase();
-  const { data: root, error } = await client.from('open_play_sessions').select('*').eq('status', 'active').order('updated_at', { ascending: false }).limit(1).maybeSingle();
+  let rootQuery = client.from('open_play_sessions').select('*').eq('status', 'active');
+  if (sessionId) rootQuery = rootQuery.eq('id', sessionId);
+  const { data: root, error } = await rootQuery.order('updated_at', { ascending: false }).limit(1).maybeSingle();
   if (error) throw error;
   if (!root) return null;
   const [playerResult, courtResult, matchResult, decisionResult] = await Promise.all([
@@ -593,12 +599,13 @@ export async function syncOpenPlay(session) {
     ...(session.maxConsecutiveGames != null ? { max_consecutive_games: session.maxConsecutiveGames } : {}),
     ...(session.restMinutes != null ? { rest_minutes: session.restMinutes } : {}),
   };
-  // Updating an owned session remains available after pass expiry so a live
-  // event can be recovered and completed. Only a genuinely new row reaches
-  // the entitlement-protected INSERT policy.
+  // Existing sessions can recover their live state. New sessions also pass
+  // the database's venue permission and creation-limit checks.
+  const updatePayload = { ...rootPayload };
+  delete updatePayload.organizer_id;
   const { data: existingRoot, error: updateRootError } = await client
     .from('open_play_sessions')
-    .update(rootPayload)
+    .update(updatePayload)
     .eq('id', session.id)
     .select('id')
     .maybeSingle();
@@ -607,7 +614,7 @@ export async function syncOpenPlay(session) {
     ? { error: null }
     : await client.from('open_play_sessions').insert(rootPayload);
   if (rootError?.code === '42501') {
-    throw new Error('An active Organizer Pass is required to create a new open-play session. Refresh your pass and try again.');
+    throw new Error('You need owner or manager access to this venue to publish open play.');
   }
   if (rootError) throw rootError;
   const queuePositions = new Map(session.queue.map((id, index) => [id, index]));
@@ -890,6 +897,22 @@ export async function removeTeamMember(teamId, userId) {
 }
 
 const TEAM_MESSAGE_SELECT = '*, profiles!team_messages_sender_id_fkey(display_name, avatar_url), team_message_reactions(emoji, user_id), team_message_pins(pinned_by, pinned_at)';
+// The message a reply quotes, loaded with it so the quote shows even when the
+// original is outside the loaded page.
+const TEAM_MESSAGE_REPLY_SELECT = `${TEAM_MESSAGE_SELECT}, reply:team_messages!team_messages_reply_to_id_fkey(id, sender_id, body, media_type, image_url, deleted_at, profiles!team_messages_sender_id_fkey(display_name))`;
+// Until the replies migration is applied the embed fails before the request
+// runs; drop it for the rest of the session instead of breaking the chat.
+let teamRepliesAvailable = true;
+const repliesSchemaMissing = (error) => ['PGRST200', 'PGRST204', '42703'].includes(error?.code)
+  || /reply_to_id|mentions|relationship/i.test(error?.message || '');
+async function withTeamReplies(run) {
+  if (teamRepliesAvailable) {
+    const result = await run(TEAM_MESSAGE_REPLY_SELECT, true);
+    if (!result.error || !repliesSchemaMissing(result.error)) return result;
+    teamRepliesAvailable = false;
+  }
+  return run(TEAM_MESSAGE_SELECT, false);
+}
 const CHAT_PAGE_SIZE = 40;
 
 async function addSignedChatMedia(client, rows) {
@@ -919,13 +942,15 @@ export async function listTeamMessages(teamId, { before = null, limit = CHAT_PAG
     };
   }
   const client = requireSupabase();
-  let query = client.from('team_messages').select(TEAM_MESSAGE_SELECT).eq('team_id', teamId).order('created_at', { ascending: false }).order('id', { ascending: false }).limit(limit + 1);
-  if (before?.createdAt && before?.id) {
-    query = query.or(`created_at.lt.${before.createdAt},and(created_at.eq.${before.createdAt},id.lt.${before.id})`);
-  } else if (before?.createdAt) {
-    query = query.lt('created_at', before.createdAt);
-  }
-  const { data, error } = await query;
+  const { data, error } = await withTeamReplies((select) => {
+    let query = client.from('team_messages').select(select).eq('team_id', teamId).order('created_at', { ascending: false }).order('id', { ascending: false }).limit(limit + 1);
+    if (before?.createdAt && before?.id) {
+      query = query.or(`created_at.lt.${before.createdAt},and(created_at.eq.${before.createdAt},id.lt.${before.id})`);
+    } else if (before?.createdAt) {
+      query = query.lt('created_at', before.createdAt);
+    }
+    return query;
+  });
   if (error) throw error;
   const page = data || [];
   const hasMore = page.length > limit;
@@ -941,7 +966,7 @@ export async function listTeamMessages(teamId, { before = null, limit = CHAT_PAG
 
 export async function getTeamMessage(messageId) {
   const client = requireSupabase();
-  const { data, error } = await client.from('team_messages').select(TEAM_MESSAGE_SELECT).eq('id', messageId).maybeSingle();
+  const { data, error } = await withTeamReplies((select) => client.from('team_messages').select(select).eq('id', messageId).maybeSingle());
   if (error) throw error;
   if (!data) return null;
   const { data: hidden, error: hiddenError } = await client.from('team_message_hides').select('message_id').eq('message_id', messageId).maybeSingle();
@@ -982,6 +1007,7 @@ export async function listTeamSharedMedia(teamId, limit = 120) {
 }
 
 export async function listTeamMessageReadStates(teamId) {
+  if (DEMO_MODE) return [];
   const { data, error } = await requireSupabase().from('team_message_reads').select('user_id, last_read_at, profiles(display_name, avatar_url)').eq('team_id', teamId);
   if (error) throw error;
   return data || [];
@@ -1002,6 +1028,7 @@ export async function listTeamConversationSummaries(teamIds) {
 }
 
 export async function markTeamConversationRead(teamId) {
+  if (DEMO_MODE) return;
   const { error } = await requireSupabase().rpc('mark_team_conversation_read', { p_team_id: teamId });
   if (error) throw error;
 }
@@ -1088,11 +1115,13 @@ export async function getTeamChatLastActive(teamId) {
   }
 }
 
-export async function sendTeamMessage(teamId, body, media = null) {
+// replyToId quotes an earlier message; mentions are the tagged members' ids
+// and mentionsEveryone is @everyone. The server keeps only valid ones.
+export async function sendTeamMessage(teamId, body, media = null, { replyToId = null, mentions = [], mentionsEveryone = false } = {}) {
   const client = requireSupabase();
   const { data: auth } = await client.auth.getUser();
   if (!auth.user) throw new Error('Sign in before sending a message.');
-  const { data, error } = await client.from('team_messages').insert({
+  const row = {
     team_id: teamId,
     sender_id: auth.user.id,
     body: body?.trim() || null,
@@ -1101,7 +1130,16 @@ export async function sendTeamMessage(teamId, body, media = null) {
     media_name: media?.name || null,
     media_mime: media?.mime || null,
     media_size: media?.size || null,
-  }).select(TEAM_MESSAGE_SELECT).single();
+  };
+  const links = {
+    ...(replyToId ? { reply_to_id: replyToId } : null),
+    ...(mentions?.length ? { mentions } : null),
+    ...(mentionsEveryone ? { mentions_everyone: true } : null),
+  };
+  const { data, error } = await withTeamReplies((select, withLinks) => client.from('team_messages')
+    .insert(withLinks ? { ...row, ...links } : row)
+    .select(select)
+    .single());
   if (error) throw error;
   return (await addSignedChatMedia(client, [data]))[0];
 }

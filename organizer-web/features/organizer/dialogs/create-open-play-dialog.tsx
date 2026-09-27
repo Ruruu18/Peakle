@@ -61,6 +61,7 @@ export function CreateOpenPlayDialog({ venue, userId, onClose, onCreated }: { ve
   const [includeOrganizer, setIncludeOrganizer] = useState(true);
   const [customizingRules, setCustomizingRules] = useState(false);
   const [busy, setBusy] = useState(false);
+  const publishingRef = useRef(false);
   const stepThreeEnteredAt = useRef(0);
   const activeCourts = useMemo(() => venue?.courts.filter((court) => court.active !== false) || [], [venue]);
   const { startsAt, endsAt } = useMemo(() => sessionTimes(date, startTime, endTime), [date, endTime, startTime]);
@@ -110,11 +111,13 @@ export function CreateOpenPlayDialog({ venue, userId, onClose, onCreated }: { ve
   const stepThreeValid = Number.isFinite(Number(fee)) && Number(fee) >= 0 && guestNames.length + (includeOrganizer ? 1 : 0) <= capacityNumber && Boolean(rules.trim() && cancellationPolicy.trim());
 
   const publish = async () => {
+    if (publishingRef.current) return;
     // A desktop double-click on "Continue to players" can land its second
     // click on the publish button that replaces it in the same position.
     if (Date.now() - stepThreeEnteredAt.current < 600) return;
     if (startsAt <= new Date()) { toast.error("Choose a start time in the future."); setStep(1); return; }
-    if (!venue || !stepOneValid || !stepTwoValid) return;
+    if (!venue || !stepOneValid || !stepTwoValid || !stepThreeValid) return;
+    publishingRef.current = true;
     setBusy(true);
     try {
       const client = requireSupabase();
@@ -128,19 +131,21 @@ export function CreateOpenPlayDialog({ venue, userId, onClose, onCreated }: { ve
       });
       if (error) throw error;
       const created = Array.isArray(data) ? data[0] : data;
-      if (created?.id && (includeOrganizer || guestNames.length)) {
+      if (!created?.id) throw new Error("The open play session could not be created.");
+      if (created.status !== "active") throw new Error("This session has already ended or been cancelled. Check your archived sessions.");
+      if (!created.live_started_at && (includeOrganizer || guestNames.length)) {
         const checkedInAt = new Date().toISOString();
         const rows = [
-          ...(includeOrganizer ? [{ id: crypto.randomUUID(), session_id: created.id, user_id: userId, guest_name: null }] : []),
-          ...guestNames.map((guestName) => ({ id: crypto.randomUUID(), session_id: created.id, user_id: null, guest_name: guestName })),
+          ...(includeOrganizer ? [{ id: `${created.id}-initial-host`, session_id: created.id, user_id: userId, guest_name: null }] : []),
+          ...guestNames.map((guestName, index) => ({ id: `${created.id}-initial-player-${index + 1}`, session_id: created.id, user_id: null, guest_name: guestName })),
         ].map((row, index) => ({ ...row, status: "waiting", registration_status: "approved", checked_in_at: checkedInAt, waiting_since: checkedInAt, queue_position: index, games_played: 0 }));
-        const { error: playerError } = await client.from("open_play_players").insert(rows);
+        const { error: playerError } = await client.from("open_play_players").upsert(rows, { onConflict: "id", ignoreDuplicates: true });
         if (playerError) toast.warning("Open play was published, but some pre-added players could not be checked in.");
       }
       toast.success("Open play published.");
       onCreated();
     } catch (reason) { toast.error(reason instanceof Error ? reason.message : "The open play session could not be created."); }
-    finally { setBusy(false); }
+    finally { publishingRef.current = false; setBusy(false); }
   };
 
   const titles = ["When and where?", "How should rotation work?", "Who can join?"];

@@ -9,6 +9,52 @@
 
 The first migration creates the normalized model, automatic user profiles, storage policies, and row-level security. Venues and courts are added by platform administrators rather than seeded with demo records.
 
+### Activity creation safeguards (27 September 2026)
+
+Apply `migrations/202609270005_activity_creation_safety.sql` **before deploying
+the updated player app**. It depends on the scheduled-activity coordinates and
+sharing migrations and the existing open-play migrations. The app now uses
+`list_my_scheduled_games` to page through personal activities independently of
+the 200-item public discovery feed. Applying this migration also protects older
+clients; no existing activities are removed. While that RPC is unavailable
+during rollout, the app uses separately filtered host and membership queries
+to keep personal activities visible.
+
+Player-created activities share a 30-second cooldown, a limit of 10 successful
+creations per rolling 24 hours, and a maximum of 20 upcoming hosted activities.
+Venue open play has a separate 30-second cooldown, 30 creations per rolling
+24 hours, and 100 upcoming sessions. Venue publication requires owner, manager,
+or platform-admin permission. Sessions must start within 180 days and last no
+more than 12 hours. Failed transactions consume no quota; cancellation and
+deletion do not reset it. Trusted service-role maintenance is exempt.
+Changing an organizer session's venue, organizer, or schedule requires a new
+session; completed or cancelled sessions cannot be reopened to bypass limits.
+
+An account lock serializes creation and exact retries return the original
+record without sending invitations again. A private ledger retains quota and
+retry records until the account is deleted, including records of deleted
+sessions. Direct session inserts and legacy RPCs also pass the database guard.
+These are application limits, not an infrastructure load-test guarantee.
+
+Run `npm run test:activity-safety` for isolated PostgreSQL checks of duplicate
+requests, quota expiry, cancellation/deletion, private calendars, ownership,
+legacy entry points, court conflicts, and rollback. No hosted credentials are
+used by the tests.
+
+### Relevant player suggestions (27 September 2026)
+
+Apply `migrations/202609270004_require_relevant_player_suggestions.sql` after the
+earlier migrations. Home's **People you may know** now requires a mutual
+connection or the same saved home city. Region and country must also match when
+both profiles provide them; legacy city-only values remain supported. Missing
+home areas do not match each other. Suggestions use the same mutual-connection
+definition as public profiles, and may return an empty list. Skill, photos,
+recent activity, teammates, and previous games do not bypass this requirement.
+
+The server fix covers existing clients once the migration is applied. Run
+`npm run test:player-suggestions` for isolated PostgreSQL regression checks;
+these tests do not access a hosted database.
+
 ### Enforced account bans (24 September 2026)
 
 Apply `migrations/202609240001_enforce_account_bans.sql` before deploying the

@@ -55,7 +55,7 @@ const linking = {
   } },
 };
 
-function LaunchScreen({ edition = 'player', fromEdition = null, overlay = false, status = 'GETTING THE COURT READY' }) {
+function LaunchScreen({ edition = 'player', fromEdition = null, overlay = false, status = 'GETTING THE COURT READY', accessibilityLabel = 'Peakle is starting' }) {
   const bounce = useRef(new Animated.Value(0)).current;
   const screenOpacity = useRef(new Animated.Value(overlay ? 0 : 1)).current;
   const initialEdition = useRef(fromEdition).current;
@@ -148,7 +148,7 @@ function LaunchScreen({ edition = 'player', fromEdition = null, overlay = false,
   const editionLabel = (value) => value === 'player' ? 'PRO' : '';
 
   return (
-    <Animated.View accessibilityLabel="Peakle is starting" accessibilityViewIsModal={overlay} style={[styles.launchScreen, overlay && styles.launchScreenOverlay, { opacity: screenOpacity }]}>
+    <Animated.View accessibilityLabel={accessibilityLabel} accessibilityViewIsModal={overlay} style={[styles.launchScreen, overlay && styles.launchScreenOverlay, { opacity: screenOpacity }]}>
       <View style={styles.launchBallStage}>
         <Animated.View style={[styles.launchBallShadow, shadowStyle]} />
         <Animated.View style={[styles.launchMotionTrails, trailStyle, { pointerEvents: 'none' }]}>
@@ -170,7 +170,7 @@ function LaunchScreen({ edition = 'player', fromEdition = null, overlay = false,
 }
 
 function Root() {
-  const { user, hydrated: authHydrated, passwordRecovery } = useAuth();
+  const { user, hydrated: authHydrated, passwordRecovery, signingOut } = useAuth();
   const { isDark } = useTheme();
   const navigationRef = useNavigationContainerRef();
   const [minimumLaunchElapsed, setMinimumLaunchElapsed] = useState(false);
@@ -210,7 +210,8 @@ function Root() {
       const opensFollowNotification = ['follow_request', 'follow_accepted'].includes(data.notificationKind)
         || Boolean(data.requesterId);
       const opensTeamInvitation = ['team_invite', 'team_invite_response'].includes(data.notificationKind) && Boolean(data.teamId);
-      if ((!opensConversation && !opensFollowNotification && !opensTeamInvitation) || responseId === handledNotificationResponse.current) return;
+      const opensTeamChat = data.notificationKind === 'team_mention' && Boolean(data.teamId);
+      if ((!opensConversation && !opensFollowNotification && !opensTeamInvitation && !opensTeamChat) || responseId === handledNotificationResponse.current) return;
       handledNotificationResponse.current = responseId;
       const open = () => {
         if (!navigationRef.isReady()) {
@@ -226,6 +227,8 @@ function Root() {
           });
         } else if (opensTeamInvitation) {
           navigationRef.navigate('Team', { openInvitationTeamId: data.teamId, openInvitationToken: Date.now() });
+        } else if (opensTeamChat) {
+          navigationRef.navigate('Team', { openChatTeamId: data.teamId, openChatToken: Date.now() });
         } else {
           navigationRef.navigate('Profile', { openNotificationsToken: Date.now() });
         }
@@ -249,6 +252,7 @@ function Root() {
   });
 
   if (!hasFinishedLaunch.current) { setWebTitle('Loading'); return <LaunchScreen edition={null} />; }
+  if (signingOut) { setWebTitle('Logging Out'); return <LaunchScreen edition={null} status="LOGGING OUT" accessibilityLabel="Logging out of Peakle" />; }
   if (passwordRecovery) { setWebTitle('Reset Password'); return <AuthFlowScreen key="password-recovery" initialScreen="reset-password" />; }
   if (!user) { setWebTitle('Sign In'); return <AuthFlowScreen key="login" initialScreen="login" />; }
   if (!user.onboardingCompleted) { setWebTitle('Get Started'); return <AuthFlowScreen key={`new-user-setup-${user.id}`} initialScreen="new-user-overview" />; }

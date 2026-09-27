@@ -20,7 +20,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useAuth } from '../context/AuthContext';
 import { useOpenPlaySession } from '../context/OpenPlaySessionContext';
 import { createDarkStyleSheet, DARK_CONTENT_COLORS, useTheme } from '../context/ThemeContext';
-import { getCourtAvailability, listVenues, syncOpenPlay, updateOpenPlayMatchScorer } from '../services/database';
+import { getCourtAvailability, listManagedVenues, loadActiveOpenPlay, verifiedPublishingVenues, syncOpenPlay, updateOpenPlayMatchScorer } from '../services/database';
 import { completeFairPlayMatch, createOpenPlaySession, listOrganizerOpenPlaySessions, recordFairPlayAssignment, recordOpenPlayRally, undoOpenPlayRally } from '../services/openPlayRegistration';
 import { buildFairPlayAssignment, estimateWaitMinutes, playersPerMatch, rankFairPlayQueue, rebalanceFairPlayQueue } from '../services/fairPlayEngine';
 import { useOperations } from '../context/OperationsContext';
@@ -162,6 +162,7 @@ function calendarDays(monthCursor) {
 function Setup({ organizerName, onBack, onStart }) {
   const insets = useSafeAreaInsets();
   const scrollRef = useRef(null);
+  const publishingRef = useRef(false);
   const defaults = useMemo(defaultSchedule, []);
   const [step, setStep] = useState(1);
   const [venues, setVenues] = useState([]);
@@ -258,7 +259,8 @@ function Setup({ organizerName, onBack, onStart }) {
       : '';
 
   useEffect(() => {
-    listVenues().then((rows) => {
+    listManagedVenues().then((managed) => {
+      const rows = verifiedPublishingVenues(managed).filter((venue) => ['owner', 'manager', 'admin'].includes(venue.role));
       setVenues(rows);
       if (rows[0]) setVenueId((current) => current || rows[0].id);
     }).catch((loadError) => setError(loadError.message || 'Verified venues could not be loaded.')).finally(() => setVenuesLoading(false));
@@ -386,7 +388,7 @@ function Setup({ organizerName, onBack, onStart }) {
   };
 
   const submit = async () => {
-    if (busy) return;
+    if (publishingRef.current) return;
     if (!scheduledStart || scheduledStart <= new Date()) {
       setStep(1);
       setError('Choose a start time that has not passed yet.');
@@ -394,6 +396,7 @@ function Setup({ organizerName, onBack, onStart }) {
       return;
     }
     if (!canStart) return;
+    publishingRef.current = true;
     setBusy(true); setError('');
     try {
       await onStart({
@@ -414,7 +417,7 @@ function Setup({ organizerName, onBack, onStart }) {
       setError(submitError.message || 'The session could not be published.');
       requestAnimationFrame(() => scrollRef.current?.scrollToEnd({ animated: true }));
     }
-    finally { setBusy(false); }
+    finally { publishingRef.current = false; setBusy(false); }
   };
 
   return (
@@ -432,7 +435,7 @@ function Setup({ organizerName, onBack, onStart }) {
         <TextInput accessibilityLabel="Session name" value={sessionName} onChangeText={setSessionName} maxLength={80} placeholder="Community open play" placeholderTextColor={C.ink40} style={styles.singleInput} />
 
         <Text style={styles.sectionLabel}>VERIFIED VENUE</Text>
-        {venuesLoading ? <View style={styles.venueLoading}><ActivityIndicator color={C.teal} /><Text style={styles.venueLoadingText}>Loading verified venues…</Text></View> : selectedVenue ? <Pressable accessibilityRole="button" accessibilityLabel={`Change venue, currently ${selectedVenue.name}`} onPress={() => setVenuePickerVisible(true)} style={styles.selectedVenueCard}><View style={styles.selectedVenueIcon}><Icon name="location" color={C.teal} /></View><View style={styles.flex}><Text numberOfLines={1} style={styles.selectedVenueName}>{selectedVenue.name}</Text><Text numberOfLines={1} style={styles.selectedVenueMeta}>{selectedVenue.area || selectedVenue.address || 'Verified Peakle venue'}</Text></View><View style={styles.changeVenuePill}><Text style={styles.changeVenueText}>CHANGE</Text><Icon name="chevron-forward" size={14} color={C.teal} /></View></Pressable> : venues.length ? <Pressable onPress={() => setVenuePickerVisible(true)} style={styles.venueLoading}><Icon name="search-outline" color={C.teal} /><Text style={styles.venueLoadingText}>Choose a verified venue</Text></Pressable> : <View style={styles.venueLoading}><Icon name="location-outline" color={C.ink40} /><Text style={styles.venueLoadingText}>No verified venue is available yet.</Text></View>}
+        {venuesLoading ? <View style={styles.venueLoading}><ActivityIndicator color={C.teal} /><Text style={styles.venueLoadingText}>Loading verified venues…</Text></View> : selectedVenue ? <Pressable accessibilityRole="button" accessibilityLabel={`Change venue, currently ${selectedVenue.name}`} onPress={() => setVenuePickerVisible(true)} style={styles.selectedVenueCard}><View style={styles.selectedVenueIcon}><Icon name="location" color={C.teal} /></View><View style={styles.flex}><Text numberOfLines={1} style={styles.selectedVenueName}>{selectedVenue.name}</Text><Text numberOfLines={1} style={styles.selectedVenueMeta}>{selectedVenue.area || selectedVenue.address || 'Verified Peakle venue'}</Text></View><View style={styles.changeVenuePill}><Text style={styles.changeVenueText}>CHANGE</Text><Icon name="chevron-forward" size={14} color={C.teal} /></View></Pressable> : venues.length ? <Pressable onPress={() => setVenuePickerVisible(true)} style={styles.venueLoading}><Icon name="search-outline" color={C.teal} /><Text style={styles.venueLoadingText}>Choose a verified venue</Text></Pressable> : <View style={styles.venueLoading}><Icon name="location-outline" color={C.ink40} /><Text style={styles.venueLoadingText}>You need owner or manager access to a verified venue.</Text></View>}
 
         <Text style={styles.sectionLabel}>DATE & TIME</Text>
         <View style={styles.scheduleCard}>
@@ -882,9 +885,19 @@ export default function OpenPlayScreen({ onExit }) {
   const updateCourt = (id, update) => setSession((current) => ({ ...current, courts: current.courts.map((court) => court.id === id ? update(court) : court) }));
   const startSession = async (details) => {
     const created = await createOpenPlaySession(details);
+    if (created.status !== 'active') throw new Error('This session has already ended or been cancelled. Check your past sessions.');
+    // A retry can return an existing session. Recover its roster and scores
+    // before constructing initial state, so publishing cannot reset live play.
+    const existing = await loadActiveOpenPlay(created.id);
+    if (!existing) throw new Error('This session is no longer active. Check your past sessions.');
+    if (created.live_started_at || existing.players.length || existing.completedMatches.length || existing.courts.some((court) => court.match)) {
+      setSession(existing);
+      setScreen('dashboard');
+      return;
+    }
     const { names } = details;
     const checkedInAt = new Date().toISOString();
-    const players = names.map((name) => ({ id: uid('player'), name, status: 'waiting', gamesPlayed: 0, consecutiveGames: 0, checkedInAt, waitingSince: checkedInAt, playPreference: 'either', priorityBoost: 0 }));
+    const players = names.map((name, index) => ({ id: `${created.id}-initial-player-${index + 1}`, name, status: 'waiting', gamesPlayed: 0, consecutiveGames: 0, checkedInAt, waitingSince: checkedInAt, playPreference: 'either', priorityBoost: 0 }));
     const courts = created.sessionCourts.map((court) => ({ id: court.id, number: court.court_number, venueCourtId: court.venue_court_id, name: court.venue_court?.name || null, matchFormat: court.match_format || details.courtFormats?.[court.court_number - 1] || details.matchFormat, match: null }));
     const nextSession = { id: created.id, name: created.name, code: created.session_code, venueId: created.venue_id, visibility: created.visibility, approvalMode: created.approval_mode, capacity: created.capacity, skillMin: created.skill_min, skillMax: created.skill_max, feeAmount: created.fee_amount, scheduledStart: created.scheduled_start, scheduledEnd: created.scheduled_end, rules: created.rules, cancellationPolicy: created.cancellation_policy, matchFormat: created.match_format || details.matchFormat, averageMatchMinutes: created.average_match_minutes || details.averageMatchMinutes, maxConsecutiveGames: created.max_consecutive_games ?? details.maxConsecutiveGames, restMinutes: created.rest_minutes ?? details.restMinutes, players, queue: players.map((player) => player.id), courts, completedMatches: [], assignmentHistory: [] };
     setSession(nextSession);

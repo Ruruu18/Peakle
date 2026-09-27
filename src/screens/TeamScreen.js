@@ -60,7 +60,9 @@ import { createMobileStyleSheet } from '../utils/mobileStyles';
 import { peekCachedData, readCachedData, withTimeout, writeCachedData } from '../lib/asyncData';
 import { teamScreenCacheKey } from '../lib/cacheKeys';
 import { TEAM_SKILL_LEVELS, skillCategoryForRating } from '../utils/skillCategories';
-import { isMuteActive, listDirectConversations, muteStatusLabel } from '../services/directMessages';
+import { isMuteActive, listDirectConversations, muteStatusLabel, normalizeReplyQuote } from '../services/directMessages';
+import { isSwipeActive, ReplyComposerBar, ReplyQuote, SwipeToReply } from '../components/ChatReply';
+import { collectMentions, findMentionQuery, insertMention, MentionSuggestions, MentionText } from '../components/ChatMentions';
 import { getFeatureVote, setFeatureVote } from '../services/featureInterest';
 import { speakScoreAnnouncement, stopScoreAnnouncement } from '../utils/scoreAccessibility';
 import { createReactionTracker, toggleOwnReaction } from '../utils/reactions';
@@ -183,6 +185,9 @@ const normalizeTeamMessage = (row, currentUserId) => ({
   moderatedAt: row.moderated_at,
   moderationReason: row.moderation_reason || null,
   reactions: row.team_message_reactions || [],
+  replyTo: normalizeReplyQuote(row.reply, currentUserId),
+  mentions: row.mentions || [],
+  mentionsEveryone: Boolean(row.mentions_everyone),
   time: new Date(row.created_at).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }),
 });
 
@@ -198,7 +203,7 @@ const upsertTeamMessage = (items, message) => {
 // The text saved alongside each attachment, so chat previews read naturally.
 const TEAM_MEDIA_LABELS = { image: 'Shared a photo', video: 'Shared a video', audio: 'Shared a voice message' };
 
-const optimisticTeamMessage = ({ teamId, currentUserId, text = null, image = null, video = null, audio = null, mediaType = null, mediaKind = null, deliveryState = 'sending' }) => {
+const optimisticTeamMessage = ({ teamId, currentUserId, text = null, image = null, video = null, audio = null, mediaType = null, mediaKind = null, deliveryState = 'sending', replyTo = null }) => {
   const createdAt = new Date().toISOString();
   return {
     id: `pending-${Crypto.randomUUID()}`,
@@ -213,6 +218,8 @@ const optimisticTeamMessage = ({ teamId, currentUserId, text = null, image = nul
     audio,
     mediaType,
     mediaKind,
+    replyTo,
+    mentions: [],
     createdAt,
     editedAt: null,
     deletedAt: null,
@@ -568,10 +575,11 @@ function ChatReportModal({ message, onClose, onSubmit }) {
   );
 }
 
-function MessageInteractionModal({ message, visible, canModerate, currentUserId, onClose, onReact, onPin, onEdit, onDelete, onUnsend, onReport, onBlock, onModerate }) {
+function MessageInteractionModal({ message, visible, canModerate, currentUserId, onClose, onReact, onReply, onPin, onEdit, onDelete, onUnsend, onReport, onBlock, onModerate }) {
   if (!message) return null;
   const visibleText = message.text && !/^Shared a (photo|video|GIF|sticker|voice message)$/i.test(message.text) ? message.text : null;
   const actions = [
+    onReply ? { key: 'reply', label: 'Reply', icon: 'arrow-undo-outline', onPress: () => onReply(message.id) } : null,
     canCopyText && visibleText ? { key: 'copy', label: 'Copy', icon: 'copy-outline', onPress: () => copyText(visibleText) } : null,
     { key: 'pin', label: message.pinned ? 'Unpin' : 'Pin', icon: message.pinned ? 'pin' : 'pin-outline', onPress: () => onPin(message.id) },
     message.mine && visibleText ? { key: 'edit', label: 'Edit', icon: 'create-outline', onPress: () => onEdit(message) } : null,
@@ -629,7 +637,7 @@ const NO_NICKNAMES = {};
 
 // Memoized so opening the reaction menu (or typing) doesn't re-render every bubble;
 // TeamChat passes stable handlers from useStableHandlers.
-const ChatMessage = React.memo(function ChatMessage({ message, grouped, highlighted, seenBy, showDeliveryStatus, delivered, currentUserId, peopleById, onMessageLayout, onOpenActions, onReact, onShowPeople, onPreview }) {
+const ChatMessage = React.memo(function ChatMessage({ message, grouped, highlighted, seenBy, showDeliveryStatus, delivered, currentUserId, peopleById, mentionNames, onMessageLayout, onOpenActions, onReact, onShowPeople, onPreview, onReply, onOpenReply }) {
   const enter = useRef(new Animated.Value(0)).current;
   useEffect(() => {
     Animated.timing(enter, { toValue: 1, duration: 190, easing: Easing.out(Easing.cubic), useNativeDriver: Platform.OS !== 'web' }).start();
@@ -644,6 +652,8 @@ const ChatMessage = React.memo(function ChatMessage({ message, grouped, highligh
   const visibleText = message.text && !/^Shared a (photo|video|GIF|sticker|voice message)$/i.test(message.text) ? message.text : null;
   const mediaOnly = hasMedia && !visibleText;
   const status = message.deliveryState === 'uploading' ? 'Uploading…' : message.deliveryState === 'sending' ? 'Sending…' : delivered ? 'Delivered' : 'Sent';
+  const mentionsMe = !message.mine && !message.deletedAt && (message.mentionsEveryone || message.mentions?.includes(currentUserId));
+  const canReply = !message.deletedAt && !message.deliveryState;
   return (
     <Animated.View onLayout={({ nativeEvent }) => onMessageLayout(message.id, nativeEvent.layout.y)} style={[styles.messageRow, message.mine && styles.messageRowMine, grouped && styles.messageGrouped, {
       opacity: enter,
@@ -651,17 +661,20 @@ const ChatMessage = React.memo(function ChatMessage({ message, grouped, highligh
     }]}>
       <View style={[styles.messageBlock, message.mine && styles.messageBlockMine]}>
         {!message.mine && !grouped && <Text style={[styles.sender, styles.messageIndent]}>{message.sender}</Text>}
+        {message.replyTo ? <View style={message.mine ? styles.replyQuoteMine : styles.messageIndent}><ReplyQuote reply={message.replyTo} mine={message.mine} colors={C} onPress={onOpenReply} /></View> : null}
+        <SwipeToReply enabled={canReply} onReply={() => onReply(message.id)} color={C.teal}>
         <View style={[styles.bubbleActionRow, message.mine && styles.bubbleActionRowMine]}>
           {!message.mine && !grouped && <ProfilePhoto photo={message.avatar} name={message.sender} size={31} style={styles.chatAvatar} />}
           {!message.mine && grouped && <View style={styles.chatAvatarSpacer} />}
-          <Pressable accessibilityHint="Tap or long press for reactions and message options." disabled={Boolean(message.deletedAt || message.deliveryState)} onPress={() => onOpenActions(message.id)} onLongPress={() => onOpenActions(message.id)} delayLongPress={240} {...webLongPress(!message.deletedAt && !message.deliveryState ? () => onOpenActions(message.id) : null)} style={[styles.bubble, unselectable, message.mine && styles.bubbleMine, mediaOnly && styles.mediaBubble, mediaOnly && message.mine && styles.mediaBubbleMine, message.deletedAt && styles.deletedBubble, highlighted && styles.highlightedMessageBubble]}>
+          <Pressable accessibilityHint="Tap or long press for reactions and message options." disabled={Boolean(message.deletedAt || message.deliveryState)} onPress={() => onOpenActions(message.id)} onLongPress={() => onOpenActions(message.id)} delayLongPress={240} {...webLongPress(!message.deletedAt && !message.deliveryState ? () => onOpenActions(message.id) : null)} style={[styles.bubble, unselectable, message.mine && styles.bubbleMine, mediaOnly && styles.mediaBubble, mediaOnly && message.mine && styles.mediaBubbleMine, message.deletedAt && styles.deletedBubble, mentionsMe && styles.bubbleMentioned, highlighted && styles.highlightedMessageBubble]}>
             {message.image && <PopImage uri={message.image} sticker={message.mediaKind === 'stickers'} style={[styles.chatAttachmentImage, message.mediaType === 'gif' && styles.chatAttachmentGif, mediaOnly && styles.chatAttachmentMediaOnly]} onPress={() => onPreview(message)} onLongPress={() => onOpenActions(message.id)} />}
             {message.video && <VideoAttachment uri={message.video} mediaOnly={mediaOnly} />}
             {message.audio && <DirectMediaContent message={{ id: message.id, mine: message.mine, mediaType: 'audio', mediaUrl: message.audio, uploading: message.deliveryState === 'uploading', uploadProgress: message.uploadProgress }} colors={C} />}
-            {message.deletedAt ? <View style={styles.deletedMessageRow}><Icon name="ban-outline" size={14} color={C.ink40} /><Text style={styles.deletedMessageText}>{message.moderatedAt ? 'Message removed by a moderator' : 'Message unsent'}</Text></View> : visibleText ? <Text selectable={false} style={[styles.bubbleText, unselectable, message.mine && styles.bubbleTextMine]}>{visibleText}</Text> : null}
+            {message.deletedAt ? <View style={styles.deletedMessageRow}><Icon name="ban-outline" size={14} color={C.ink40} /><Text style={styles.deletedMessageText}>{message.moderatedAt ? 'Message removed by a moderator' : 'Message unsent'}</Text></View> : visibleText ? <MentionText selectable={false} text={visibleText} names={mentionNames} style={[styles.bubbleText, unselectable, message.mine && styles.bubbleTextMine]} mentionStyle={message.mine ? styles.mentionTextMine : styles.mentionText} /> : null}
             {message.deliveryState && hasMedia && <View style={styles.mediaProgress}><ActivityIndicator size="small" color={C.surface} /></View>}
           </Pressable>
         </View>
+        </SwipeToReply>
         <View style={[styles.messageExtras, message.mine ? styles.messageExtrasMine : styles.messageIndent]}>
         {reactionGroups.length > 0 && <View style={[styles.reactionSummary, message.mine && styles.reactionSummaryMine]}>{reactionGroups.map((reaction) => <Pressable key={reaction.emoji} disabled={message.deletedAt} accessibilityLabel={`${reaction.emoji} from ${peopleSummary(reaction.people)}`} onPress={() => onShowPeople(`Reacted ${reaction.emoji}`, reaction.people)} style={[styles.reactionChip, reaction.people.some((person) => person.id === currentUserId) && styles.reactionChipMine]}><Text style={styles.reactionEmoji}>{reaction.emoji}</Text><Text style={styles.reactionCount}>{reaction.people.length}</Text></Pressable>)}</View>}
         <View style={[styles.messageMetaRow, message.mine && styles.messageMetaRowMine]}>{message.pinned && <View style={styles.pinnedMessageBadge}><Icon name="pin" size={9} color={C.teal} /><Text style={styles.pinnedMessageBadgeText}>PINNED</Text></View>}<Text style={[styles.messageTime, message.mine && styles.messageTimeMine]}>{message.time}{message.editedAt ? ' · Edited' : ''}{message.mine && showDeliveryStatus && !seenBy.length ? ` · ${status}` : ''}</Text></View>
@@ -692,6 +705,14 @@ function TeamChat({ team, messages, loading, readStates, currentUser, typing, li
     return () => clearTimeout(timer);
   }, []);
   const [editingMessage, setEditingMessage] = useState(null);
+  // Swipe (or "Reply" in the menu) quotes a message in the next one sent.
+  const [replyTarget, setReplyTarget] = useState(null);
+  // @mentions: where the cursor is, and who was picked from the list.
+  const [selection, setSelection] = useState(null);
+  // Set once after inserting a mention to put the cursor after it.
+  const [forcedSelection, setForcedSelection] = useState(null);
+  const pickedMentionsRef = useRef([]);
+  const inputRef = useRef(null);
   const [selectedMessageId, setSelectedMessageId] = useState(null);
   const [previewMessage, setPreviewMessage] = useState(null);
   const [peopleDetails, setPeopleDetails] = useState(null);
@@ -710,9 +731,18 @@ function TeamChat({ team, messages, loading, readStates, currentUser, typing, li
   const currentUserId = currentUser?.id;
   const pinnedMessages = useMemo(() => messages.filter((m) => m.pinned).sort((a, b) => new Date(b.pinnedAt || 0) - new Date(a.pinnedAt || 0)), [messages]);
   const latestPinned = pinnedMessages[0];
+  const startReply = (messageId) => {
+    const target = messages.find((message) => message.id === messageId);
+    if (!target || target.deletedAt) return;
+    setEditingMessage(null);
+    setReplyTarget(target);
+    requestAnimationFrame(() => inputRef.current?.focus());
+  };
   const rowHandlers = useStableHandlers({
     onMessageLayout: (messageId, y) => { messageLayoutsRef.current[messageId] = y; revealMessage(messageId, y); },
-    onOpenActions: (messageId) => openMessageActions(messageId),
+    onOpenActions: (messageId) => { if (!isSwipeActive()) openMessageActions(messageId); },
+    onReply: startReply,
+    onOpenReply: (messageId) => onJumpToMessage({ id: messageId }),
     onReact: (...args) => onReact(...args),
     onShowPeople: (title, people) => setPeopleDetails({ title, people }),
   });
@@ -733,6 +763,35 @@ function TeamChat({ team, messages, loading, readStates, currentUser, typing, li
     });
     return people;
   }, [currentUser?.name, currentUser?.picture, currentUserId, readStates, team.roster]);
+  // Teammates who can be @mentioned (not yourself), and every name to
+  // highlight in messages.
+  const mentionPeople = useMemo(() => (team.roster || [])
+    .filter((member) => member.id && member.id !== currentUserId && member.name)
+    .map((member) => ({ id: member.id, name: member.name, avatar: member.avatar || null })), [currentUserId, team.roster]);
+  const mentionNames = useMemo(() => Object.values(peopleById).map((person) => person.name).filter(Boolean), [peopleById]);
+  const mentionQuery = editingMessage ? null : findMentionQuery(draft, selection?.end ?? draft.length);
+  const pickMention = (person) => {
+    if (!mentionQuery) return;
+    const next = insertMention(draft, mentionQuery, person);
+    pickedMentionsRef.current = [...pickedMentionsRef.current.filter((item) => item.id !== person.id), person];
+    pendingCursorRef.current = next.cursor;
+    setDraft(next.text);
+  };
+  // Tapping a suggestion takes focus from the input, and refocusing puts the
+  // cursor at the start. Once the new text is in, put it after the mention.
+  const pendingCursorRef = useRef(null);
+  useEffect(() => {
+    const cursor = pendingCursorRef.current;
+    if (cursor == null) return;
+    pendingCursorRef.current = null;
+    const input = inputRef.current;
+    input?.focus();
+    setSelection({ start: cursor, end: cursor });
+    // The new text is already in the input here; waiting a frame would let
+    // the next keystrokes land first and then yank the cursor back.
+    if (Platform.OS === 'web') input?.setSelectionRange?.(cursor, cursor);
+    else setForcedSelection({ start: cursor, end: cursor });
+  }, [draft]);
   const seenByMessage = useMemo(() => {
     const receipts = {};
     const mine = messages.filter((message) => message.mine && !message.deliveryState);
@@ -827,10 +886,18 @@ function TeamChat({ team, messages, loading, readStates, currentUser, typing, li
     const clean = draft.trim();
     if (!clean) return;
     if (editingMessage) onEdit(editingMessage.id, clean);
-    else onSend(clean);
+    else onSend(clean, { replyTo: replyTarget, ...collectMentions(clean, pickedMentionsRef.current) });
     stopTyping();
     setDraft('');
     setEditingMessage(null);
+    setReplyTarget(null);
+    pickedMentionsRef.current = [];
+  };
+  // Photos, videos and voice notes sent while replying quote the message too.
+  const sendMediaReply = (asset, type) => {
+    const sent = onSendMedia(asset, type, { replyTo: replyTarget });
+    setReplyTarget(null);
+    return sent;
   };
   const lastMessageId = messages[messages.length - 1]?.id;
   useEffect(() => {
@@ -853,7 +920,7 @@ function TeamChat({ team, messages, loading, readStates, currentUser, typing, li
       if (result.canceled || !result.assets?.[0]) return;
       const asset = result.assets[0];
       const isVideo = asset.type === 'video' || asset.mimeType?.startsWith('video/');
-      onSendMedia(asset, isVideo ? 'video' : 'image');
+      sendMediaReply(asset, isVideo ? 'video' : 'image');
     } catch (error) {
       Alert.alert('Could not open media', error.message);
     }
@@ -867,7 +934,7 @@ function TeamChat({ team, messages, loading, readStates, currentUser, typing, li
   const sendGalleryItems = async (items) => {
     setCameraOpen(false);
     setGalleryOpen(false);
-    for (const { asset, type } of items) await onSendMedia(asset, type);
+    for (const [index, { asset, type }] of items.entries()) await (index === 0 ? sendMediaReply : onSendMedia)(asset, type);
   };
   const sendFromGallerySheet = async (items, hd) => {
     try {
@@ -878,7 +945,7 @@ function TeamChat({ team, messages, loading, readStates, currentUser, typing, li
   };
   const sendCameraCapture = (asset, type) => {
     setCameraOpen(false);
-    onSendMedia(asset, type);
+    sendMediaReply(asset, type);
   };
   // iOS drops a picker presented while the camera modal is still closing.
   const pickFromCamera = () => {
@@ -892,7 +959,7 @@ function TeamChat({ team, messages, loading, readStates, currentUser, typing, li
   };
   const sendVoice = (recording) => {
     setRecordingVoice(false);
-    onSendMedia(recording, 'audio');
+    sendMediaReply(recording, 'audio');
   };
   const confirmDelete = (message) => Alert.alert('Delete for you?', 'This message will disappear only from your account.', [
     { text: 'Cancel', style: 'cancel' },
@@ -948,23 +1015,26 @@ function TeamChat({ team, messages, loading, readStates, currentUser, typing, li
           if (message.kind === 'member_joined') return message.text ? <View key={message.id} accessibilityRole="text" style={styles.memberJoinedNotice}><Icon name="person-add-outline" size={13} color={C.teal} /><Text style={styles.memberJoinedText}>{message.mine ? 'You joined the club' : message.text}</Text><Text style={styles.memberJoinedTime}>{message.time}</Text></View> : null;
           const previous = messages[index - 1];
           const grouped = previous?.kind !== 'member_joined' && previous?.sender === message.sender && previous?.mine === message.mine;
-          return <ChatMessage key={message.id} message={message} grouped={grouped} highlighted={highlightedMessageId === message.id} seenBy={seenByMessage[message.id] || NO_PEOPLE} showDeliveryStatus={message.id === latestMineId} delivered={message.id === latestMineId && latestMineDelivered} currentUserId={currentUserId} peopleById={peopleById} onMessageLayout={rowHandlers.onMessageLayout} onOpenActions={rowHandlers.onOpenActions} onReact={rowHandlers.onReact} onShowPeople={rowHandlers.onShowPeople} onPreview={setPreviewMessage} />;
+          return <ChatMessage key={message.id} message={message} grouped={grouped} highlighted={highlightedMessageId === message.id} seenBy={seenByMessage[message.id] || NO_PEOPLE} showDeliveryStatus={message.id === latestMineId} delivered={message.id === latestMineId && latestMineDelivered} currentUserId={currentUserId} peopleById={peopleById} mentionNames={mentionNames} onMessageLayout={rowHandlers.onMessageLayout} onOpenActions={rowHandlers.onOpenActions} onReact={rowHandlers.onReact} onShowPeople={rowHandlers.onShowPeople} onPreview={setPreviewMessage} onReply={rowHandlers.onReply} onOpenReply={rowHandlers.onOpenReply} />;
         })}
         {typing?.length > 0 && <TypingBubble people={typing} />}
         </View>
       </ScrollView>
       {editingMessage && <View style={styles.editingBanner}><Icon name="create-outline" size={16} color={C.teal} /><View style={styles.editingCopy}><Text style={styles.editingTitle}>Editing message</Text><Text numberOfLines={1} style={styles.editingPreview}>{editingMessage.text}</Text></View><Pressable accessibilityLabel="Cancel editing" onPress={() => { stopTyping(); setEditingMessage(null); setDraft(''); }}><Icon name="close" color={C.ink40} /></Pressable></View>}
-      <View style={styles.composer}>{recordingVoice ? <View style={styles.composerVoice}><VoiceRecorderBar colors={C} onCancel={() => setRecordingVoice(false)} onSend={sendVoice} /></View> : <>{!editingMessage ? <ComposerAttachments mode={trayMode} colors={C} onOpen={() => setTrayMode('open')} onCamera={openCamera} onLibrary={openGallery} onVoice={startVoice} /> : null}<View style={styles.composerInput}><TextInput value={draft} onChangeText={changeDraft} onBlur={stopTyping} onFocus={minimizeTray} onPressIn={minimizeTray} onSubmitEditing={send} returnKeyType="send" multiline maxLength={4000} placeholder={editingMessage ? 'Edit message' : trayMode === 'open' ? 'Message' : `Message ${team.name}`} placeholderTextColor={C.ink40} style={styles.chatInput} /><Pressable disabled={!draft.trim()} onPress={send} accessibilityLabel={editingMessage ? 'Save edited message' : 'Send message'} style={[styles.sendButton, !draft.trim() && styles.sendDisabled]}><Icon name={editingMessage ? 'checkmark' : 'arrow-up'} size={19} color="#0E2321" /></Pressable></View></>}</View>
+      {!editingMessage ? <ReplyComposerBar target={replyTarget} colors={C} onCancel={() => setReplyTarget(null)} /> : null}
+      {mentionQuery && !recordingVoice ? <MentionSuggestions people={mentionPeople} query={mentionQuery.query} colors={C} onPick={pickMention} /> : null}
+      <View style={styles.composer}>{recordingVoice ? <View style={styles.composerVoice}><VoiceRecorderBar colors={C} onCancel={() => setRecordingVoice(false)} onSend={sendVoice} /></View> : <>{!editingMessage ? <ComposerAttachments mode={trayMode} colors={C} onOpen={() => setTrayMode('open')} onCamera={openCamera} onLibrary={openGallery} onVoice={startVoice} /> : null}<View style={styles.composerInput}><TextInput ref={inputRef} value={draft} onChangeText={changeDraft} selection={forcedSelection || undefined} onSelectionChange={({ nativeEvent }) => { setSelection(nativeEvent.selection); if (forcedSelection) setForcedSelection(null); }} onBlur={stopTyping} onFocus={minimizeTray} onPressIn={minimizeTray} onSubmitEditing={send} returnKeyType="send" multiline maxLength={4000} placeholder={editingMessage ? 'Edit message' : replyTarget ? `Reply to ${replyTarget.mine ? 'yourself' : replyTarget.sender}` : trayMode === 'open' ? 'Message' : `Message ${team.name}`} placeholderTextColor={C.ink40} style={styles.chatInput} /><Pressable disabled={!draft.trim()} onPress={send} accessibilityLabel={editingMessage ? 'Save edited message' : 'Send message'} style={[styles.sendButton, !draft.trim() && styles.sendDisabled]}><Icon name={editingMessage ? 'checkmark' : 'arrow-up'} size={19} color="#0E2321" /></Pressable></View></>}</View>
       <ChatGallerySheet visible={galleryOpen} colors={C} isDark={C !== LIGHT_C} onClose={() => setGalleryOpen(false)} onSend={sendFromGallerySheet} />
       <MessageInteractionModal
         message={selectedMessage}
         visible={Boolean(selectedMessage && !selectedMessage.deletedAt && !selectedMessage.deliveryState)}
         onClose={() => setSelectedMessageId(null)}
         onReact={onReact}
+        onReply={startReply}
         onPin={onPin}
         canModerate={canReviewRequests(team)}
         currentUserId={currentUserId}
-        onEdit={(item) => { setEditingMessage(item); setDraft(item.text || ''); }}
+        onEdit={(item) => { setReplyTarget(null); setEditingMessage(item); setDraft(item.text || ''); }}
         onDelete={confirmDelete}
         onUnsend={confirmUnsend}
         onReport={setReportingMessage}
@@ -2285,13 +2355,14 @@ export default function TeamScreen({ navigation, route }) {
     const matchesFilter = filter === 'For you' || (filter === 'Nearby' && team.distanceKm != null && team.distanceKm <= 25) || (filter === 'My level' && (team.level === 'Open level' || playerLevel != null && team.level === playerLevel)) || (filter === 'Open spots' && team.members < team.capacity);
     return matchesSearch && matchesFilter;
   }).sort((a, b) => (a.distanceKm ?? Number.POSITIVE_INFINITY) - (b.distanceKm ?? Number.POSITIVE_INFINITY)), [availableTeams, filter, query, user?.skill, userLocation]);
-  const sendMessage = async (text) => {
+  // links: { replyTo, mentions, mentionsEveryone } from the composer.
+  const sendMessage = async (text, links = {}) => {
     if (!chatTeam) return;
     const teamId = chatTeam.id;
-    const optimistic = optimisticTeamMessage({ teamId, currentUserId: user?.id, text });
+    const optimistic = optimisticTeamMessage({ teamId, currentUserId: user?.id, text, replyTo: links.replyTo || null });
     setMessages((current) => ({ ...current, [teamId]: upsertTeamMessage(current[teamId] || [], optimistic) }));
     try {
-      const row = await sendTeamMessage(teamId, text);
+      const row = await sendTeamMessage(teamId, text, null, { replyToId: links.replyTo?.id || null, mentions: links.mentions || [], mentionsEveryone: Boolean(links.mentionsEveryone) });
       const message = normalizeTeamMessage(row, user?.id);
       setMessages((current) => ({ ...current, [teamId]: upsertTeamMessage((current[teamId] || []).filter((item) => item.id !== optimistic.id), message) }));
       setConversationSummaries((current) => ({ ...current, [teamId]: { ...(current[teamId] || {}), team_id: teamId, last_body: row.body, last_has_image: Boolean(row.image_url || row.media_path), last_created_at: row.created_at, last_sender_name: row.profiles?.display_name || 'You', unread_count: 0 } }));
@@ -2483,7 +2554,7 @@ export default function TeamScreen({ navigation, route }) {
       }
 
       if (!loaded.some((item) => item.id === message.id)) {
-        if (navigation.isFocused()) Alert.alert('Message unavailable', 'This pinned message may have been deleted or is no longer visible to you.');
+        if (navigation.isFocused()) Alert.alert('Message unavailable', 'This message may have been deleted or is no longer visible to you.');
         return;
       }
 
@@ -2509,7 +2580,7 @@ export default function TeamScreen({ navigation, route }) {
       : `Check out ${team.name} on Peakle. ${team.location} · Rating ${team.rating}.`,
   });
   // Shows the attachment right away, then swaps in the sent message.
-  const sendChatMedia = async (asset, type) => {
+  const sendChatMedia = async (asset, type, links = {}) => {
     if (!chatTeam || !asset?.uri) return;
     const teamId = chatTeam.id;
     const label = TEAM_MEDIA_LABELS[type];
@@ -2522,6 +2593,7 @@ export default function TeamScreen({ navigation, route }) {
       audio: type === 'audio' ? asset.uri : null,
       mediaType: type,
       deliveryState: 'uploading',
+      replyTo: links.replyTo || null,
     });
     const updateOptimistic = (changes) => setMessages((current) => ({ ...current, [teamId]: (current[teamId] || []).map((item) => item.id === optimistic.id ? { ...item, ...changes } : item) }));
     setMessages((current) => ({ ...current, [teamId]: upsertTeamMessage(current[teamId] || [], optimistic) }));
@@ -2537,7 +2609,7 @@ export default function TeamScreen({ navigation, route }) {
     try {
       uploaded = await uploadTeamChatMedia(teamId, asset, type, { onProgress });
       updateOptimistic({ deliveryState: 'sending' });
-      const row = await sendTeamMessage(teamId, label, uploaded);
+      const row = await sendTeamMessage(teamId, label, uploaded, { replyToId: links.replyTo?.id || null });
       const message = normalizeTeamMessage(row, user?.id);
       setMessages((current) => ({ ...current, [teamId]: upsertTeamMessage((current[teamId] || []).filter((item) => item.id !== optimistic.id), message) }));
       setConversationSummaries((current) => ({ ...current, [teamId]: { ...(current[teamId] || {}), team_id: teamId, last_body: row.body, last_has_image: true, last_created_at: row.created_at, last_sender_name: row.profiles?.display_name || 'You', unread_count: 0 } }));
@@ -2863,6 +2935,7 @@ const lightStyles = createMobileStyleSheet({
   wizardProgress: { marginBottom: 22, flexDirection: 'row' }, wizardStep: { position: 'relative', flex: 1, alignItems: 'center' }, wizardDot: { width: 27, height: 27, zIndex: 2, alignItems: 'center', justifyContent: 'center', borderRadius: 14, borderWidth: 1, borderColor: C.line, backgroundColor: C.surface }, wizardDotActive: { borderColor: C.optic, backgroundColor: C.optic }, wizardDotText: { color: C.ink40, fontSize: 8, fontWeight: '900' }, wizardDotTextActive: { color: C.ink }, wizardStepText: { maxWidth: 72, marginTop: 6, color: C.ink40, textAlign: 'center', fontSize: 7, fontWeight: '700' }, wizardStepTextActive: { color: C.ink, fontWeight: '900' }, wizardLine: { position: 'absolute', top: 13, left: '62%', right: '-38%', height: 1, backgroundColor: C.line }, wizardLineActive: { backgroundColor: C.optic }, stepIntro: { marginBottom: 18 }, stepTitle: { color: C.ink, fontSize: 23, lineHeight: 28, fontWeight: '900', letterSpacing: -.5 }, stepBody: { marginTop: 6, color: C.ink70, fontSize: 11, lineHeight: 17 }, selectedBaseCard: { minHeight: 82, marginBottom: 12, paddingHorizontal: 13, flexDirection: 'row', alignItems: 'center', gap: 11, borderRadius: 16, borderWidth: 1, borderColor: '#BFD8D2', backgroundColor: '#E5F0ED' }, selectedBaseIcon: { width: 44, height: 44, alignItems: 'center', justifyContent: 'center', borderRadius: 13, backgroundColor: C.surface }, selectedBaseCopy: { flex: 1 }, selectedBaseLabel: { color: C.teal, fontSize: 7, fontWeight: '900', letterSpacing: .7 }, selectedBaseCity: { marginTop: 2, color: C.ink, fontSize: 15, fontWeight: '900' }, selectedBaseMeta: { marginTop: 2, color: C.ink40, fontSize: 9 }, baseRequired: { minHeight: 48, marginBottom: 12, paddingHorizontal: 12, flexDirection: 'row', alignItems: 'center', gap: 7, borderRadius: 13, backgroundColor: '#F7EAE6' }, baseRequiredText: { flex: 1, color: C.brick, fontSize: 9, fontWeight: '700' }, useCurrentBase: { minHeight: 58, marginBottom: 18, paddingHorizontal: 13, flexDirection: 'row', alignItems: 'center', gap: 9, borderRadius: 14, backgroundColor: C.optic }, useCurrentBaseCopy: { flex: 1 }, useCurrentBaseTitle: { color: C.ink, fontSize: 10, fontWeight: '900' }, useCurrentBaseMeta: { marginTop: 2, color: C.ink70, fontSize: 8 }, baseSearch: { minHeight: 52, paddingHorizontal: 13, flexDirection: 'row', alignItems: 'center', gap: 8, borderRadius: 14, borderWidth: 1, borderColor: C.line, backgroundColor: C.surface }, baseSearchInput: { flex: 1, minHeight: 50, color: C.ink, fontSize: 12 }, baseResults: { marginTop: 9, overflow: 'hidden', borderRadius: 16, borderWidth: 1, borderColor: C.line, backgroundColor: C.surface }, baseResult: { minHeight: 59, paddingHorizontal: 12, flexDirection: 'row', alignItems: 'center', gap: 9 }, baseResultBorder: { borderTopWidth: 1, borderColor: C.line }, baseResultIcon: { width: 35, height: 35, alignItems: 'center', justifyContent: 'center', borderRadius: 11, backgroundColor: '#E5F0ED' }, baseResultCopy: { flex: 1 }, baseResultCity: { color: C.ink, fontSize: 11, fontWeight: '900' }, baseResultMeta: { marginTop: 2, color: C.ink40, fontSize: 8 }, baseEmpty: { minHeight: 92, alignItems: 'center', justifyContent: 'center' }, baseEmptyTitle: { marginBottom: 3, color: C.ink, fontSize: 11, fontWeight: '800' }, locationPrivacy: { marginTop: 12, padding: 12, flexDirection: 'row', alignItems: 'flex-start', gap: 8, borderRadius: 13, backgroundColor: '#E5F0ED' }, locationPrivacyText: { flex: 1, color: C.ink70, fontSize: 9, lineHeight: 14 }, reviewCover: { overflow: 'hidden', borderRadius: 20 }, reviewCard: { marginTop: 12, overflow: 'hidden', borderRadius: 18, borderWidth: 1, borderColor: C.line, backgroundColor: C.surface }, reviewRow: { minHeight: 82, paddingHorizontal: 13, paddingVertical: 14, flexDirection: 'row', alignItems: 'center', gap: 10 }, reviewBorder: { borderTopWidth: 1, borderColor: C.line }, reviewIcon: { width: 39, height: 39, alignItems: 'center', justifyContent: 'center', borderRadius: 12, backgroundColor: '#E5F0ED' }, reviewCopy: { flex: 1 }, reviewLabel: { color: C.ink40, fontSize: 7, fontWeight: '900', letterSpacing: .7 }, reviewValue: { marginTop: 2, color: C.ink, fontSize: 11, fontWeight: '900' }, reviewMeta: { marginTop: 3, color: C.ink40, fontSize: 8, lineHeight: 12 }, reviewEdit: { padding: 6, color: C.teal, fontSize: 9, fontWeight: '900' }, wizardActions: { marginTop: 22, flexDirection: 'row', gap: 9 }, wizardBack: { width: 92, minHeight: 53, alignItems: 'center', justifyContent: 'center', borderRadius: 14, borderWidth: 1, borderColor: C.line, backgroundColor: C.surface }, wizardBackText: { color: C.ink70, fontSize: 11, fontWeight: '800' }, wizardPrimary: { flex: 1 },
   formPhoto: { marginBottom: 20, padding: 10, borderRadius: 20, backgroundColor: '#E5F0ED' }, formCoverPressable: { overflow: 'hidden', borderRadius: 15 }, previewCoverContent: { position: 'relative', flex: 1 }, previewCameraCover: { position: 'absolute', top: 11, right: 11, width: 28, height: 28, alignItems: 'center', justifyContent: 'center', borderRadius: 14, backgroundColor: 'rgba(8,24,22,0.52)' }, previewCoverBottom: { position: 'absolute', left: 13, right: 13, bottom: 13, flexDirection: 'row', alignItems: 'center', gap: 10 }, previewCrestWrapper: { position: 'relative' }, previewCrestCamera: { position: 'absolute', bottom: -4, right: -4, width: 20, height: 20, alignItems: 'center', justifyContent: 'center', borderRadius: 10, borderWidth: 2, borderColor: '#E5F0ED', backgroundColor: C.optic }, previewCoverText: { flex: 1 }, previewCoverTitle: { color: C.surface, fontSize: 18, fontWeight: '900' }, previewCoverHint: { marginTop: 2, color: 'rgba(255,255,255,.76)', fontSize: 8 }, coverChoiceRow: { paddingHorizontal: 4, paddingTop: 11, paddingBottom: 2, flexDirection: 'row', alignItems: 'center', gap: 8 }, coverChoiceActions: { alignItems: 'flex-end', gap: 4 }, formPhotoCopy: { flex: 1 }, formPhotoTitle: { color: C.ink, fontSize: 13, fontWeight: '800' }, photoActionRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 7, paddingHorizontal: 4, paddingBottom: 6 }, photoButton: { paddingHorizontal: 11, paddingVertical: 7, borderRadius: 9, backgroundColor: C.surface }, photoButtonText: { color: C.teal, fontSize: 9, fontWeight: '800' }, gradientButton: { paddingHorizontal: 4, paddingVertical: 4 }, gradientButtonText: { color: C.ink40, fontSize: 8, fontWeight: '700' }, formField: { marginBottom: 15 }, formLabel: { marginBottom: 7, color: C.ink70, fontSize: 9, fontWeight: '800', letterSpacing: .8 }, formInput: { minHeight: 50, paddingHorizontal: 14, borderRadius: 13, borderWidth: 1, borderColor: C.line, color: C.ink, backgroundColor: C.surface, fontSize: 12 }, formTextarea: { minHeight: 100, paddingTop: 13, textAlignVertical: 'top' }, levelOptions: { marginBottom: 17, flexDirection: 'row', gap: 7 }, levelOption: { minHeight: 38, flex: 1, alignItems: 'center', justifyContent: 'center', borderRadius: 10, borderWidth: 1, borderColor: C.line, backgroundColor: C.surface }, levelOptionActive: { borderColor: C.ink, backgroundColor: C.ink }, levelOptionText: { color: C.ink70, fontSize: 8, fontWeight: '800' }, levelOptionTextActive: { color: C.surface }, visibilityOptions: { marginBottom: 17, flexDirection: 'row', gap: 8 }, visibilityOption: { minHeight: 82, flex: 1, padding: 11, flexDirection: 'row', alignItems: 'flex-start', gap: 8, borderRadius: 12, borderWidth: 1, borderColor: C.line, backgroundColor: C.surface }, visibilityOptionActive: { borderColor: C.ink, backgroundColor: C.ink }, visibilityCopy: { flex: 1 }, visibilityTitle: { color: C.ink, fontSize: 10, fontWeight: '900' }, visibilityTitleActive: { color: C.surface }, visibilityHelp: { marginTop: 4, color: C.ink40, fontSize: 8, lineHeight: 12 }, visibilityHelpActive: { color: 'rgba(255,255,255,.65)' }, formNotice: { marginBottom: 16, padding: 12, flexDirection: 'row', alignItems: 'center', gap: 8, borderRadius: 12, backgroundColor: '#E5F0ED' }, formNoticeText: { flex: 1, color: C.ink70, fontSize: 9, lineHeight: 14 }, saveButton: { minHeight: 53, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 7, borderRadius: 14, backgroundColor: C.optic }, saveButtonDisabled: { opacity: .62 },
   inviteProgress: { padding: 14, flexDirection: 'row', alignItems: 'center', gap: 10, borderRadius: 16, backgroundColor: '#E5F0ED' }, inviteProgressIcon: { width: 43, height: 43, borderRadius: 13, alignItems: 'center', justifyContent: 'center', backgroundColor: C.surface }, inviteProgressTitle: { color: C.ink, fontSize: 12, fontWeight: '900' }, invitePrivacy: { marginTop: 12, color: C.ink40, fontSize: 9, lineHeight: 14 }, searchingText: { paddingVertical: 24, color: C.ink40, textAlign: 'center', fontSize: 10 }, playerResults: { marginTop: 12, overflow: 'hidden', borderRadius: 16, borderWidth: 1, borderColor: C.line, backgroundColor: C.surface }, playerResult: { minHeight: 70, marginHorizontal: 13, flexDirection: 'row', alignItems: 'center', gap: 10 }, invitePlayerButton: { minHeight: 37, paddingHorizontal: 10, flexDirection: 'row', alignItems: 'center', gap: 5, borderRadius: 10, backgroundColor: C.optic }, invitePlayerButtonSent: { borderWidth: 1, borderColor: '#BFD8D2', backgroundColor: '#E5F0ED' }, invitePlayerText: { color: C.ink, fontSize: 9, fontWeight: '900' }, invitePlayerTextSent: { color: C.teal }, invitationCard: { marginBottom: 12, padding: 15, borderRadius: 20, borderBottomLeftRadius: 9, borderBottomRightRadius: 9, borderWidth: 1, borderColor: '#BFD8D2', backgroundColor: C.surface, ...shadow }, invitationEyebrow: { marginBottom: 3, color: C.teal, fontSize: 7, fontWeight: '900', letterSpacing: .7 }, invitationMeta: { marginTop: 13, paddingTop: 11, flexDirection: 'row', alignItems: 'center', gap: 4, borderTopWidth: 1, borderColor: C.line }, invitationExpiry: { marginTop: 5, color: C.ink40, fontSize: 8 },
+  replyQuoteMine: { alignSelf: 'flex-end' }, mentionText: { color: C.teal, fontWeight: '800' }, mentionTextMine: { color: C.optic, fontWeight: '800' }, bubbleMentioned: { borderColor: C.optic, borderWidth: 1.5, backgroundColor: '#FAFCE9' },
   chatScreen: { flex: 1 }, chatHeader: { paddingHorizontal: 16, paddingTop: 8, paddingBottom: 10 }, onlineRow: { marginTop: 2, flexDirection: 'row', alignItems: 'center', gap: 4 }, onlineDot: { width: 6, height: 6, borderRadius: 3, backgroundColor: C.teal }, chatStatus: { color: C.ink40, fontSize: 8 }, chatRule: { height: 1, backgroundColor: C.line }, chatMessages: { flex: 1 }, chatContent: { flexGrow: 1, paddingHorizontal: 14, paddingTop: 12, paddingBottom: 16 }, chatTapArea: { flexGrow: 1 }, loadEarlierButton: { minHeight: 34, marginBottom: 12, alignSelf: 'center', paddingHorizontal: 14, alignItems: 'center', justifyContent: 'center', borderRadius: 17, backgroundColor: '#E5F0ED' }, loadEarlierText: { color: C.teal, fontSize: 9, fontWeight: '800' }, chatDay: { marginBottom: 13, color: C.ink40, textAlign: 'center', fontSize: 7, fontWeight: '900', letterSpacing: .8 }, memberJoinedNotice: { marginVertical: 10, alignSelf: 'center', maxWidth: '90%', paddingHorizontal: 12, paddingVertical: 6, flexDirection: 'row', alignItems: 'center', gap: 6, borderRadius: 14, backgroundColor: '#E5F0ED' }, memberJoinedText: { flexShrink: 1, color: C.teal, fontSize: 10, fontWeight: '800' }, memberJoinedTime: { color: C.ink40, fontSize: 8 }, messageRow: { marginTop: 12, flexDirection: 'row' }, messageRowMine: { justifyContent: 'flex-end' }, messageGrouped: { marginTop: 4 }, messageRowActive: { zIndex: 2 }, chatAvatar: { width: 31, height: 31, borderRadius: 16, alignItems: 'center', justifyContent: 'center' }, chatAvatarSpacer: { width: 31 }, messageBlock: { maxWidth: '90%', alignItems: 'flex-start' }, messageBlockMine: { alignItems: 'flex-end' }, sender: { marginLeft: 4, marginBottom: 3, color: C.ink40, fontSize: 8, fontWeight: '800' }, bubble: { flexShrink: 1, paddingHorizontal: 12, paddingVertical: 9, borderRadius: 15, borderBottomLeftRadius: 4, backgroundColor: C.surface, borderWidth: 1, borderColor: C.line }, bubbleMine: { borderBottomLeftRadius: 15, borderBottomRightRadius: 4, borderColor: C.teal, backgroundColor: C.teal }, deletedBubble: { borderColor: C.line, backgroundColor: C.paper }, deletedMessageRow: { flexDirection: 'row', alignItems: 'center', gap: 5 }, deletedMessageText: { color: C.ink40, fontSize: 10, fontStyle: 'italic' }, bubbleText: { color: C.ink, fontSize: 11, lineHeight: 16 }, bubbleTextMine: { color: C.surface }, messageTime: { marginTop: 3, marginLeft: 4, color: C.ink40, fontSize: 7 }, messageTimeMine: { marginLeft: 0, marginRight: 4 }, reactionSummary: { marginTop: -3, marginLeft: 5, flexDirection: 'row', flexWrap: 'wrap', gap: 3 }, reactionSummaryMine: { marginLeft: 0, marginRight: 5, justifyContent: 'flex-end' }, reactionChip: { minHeight: 24, paddingHorizontal: 6, flexDirection: 'row', alignItems: 'center', gap: 3, borderRadius: 12, borderWidth: 1, borderColor: C.line, backgroundColor: C.surface }, reactionChipMine: { borderColor: C.teal, backgroundColor: '#E5F0ED' }, reactionEmoji: { fontSize: 11 }, reactionCount: { color: C.ink70, fontSize: 8, fontWeight: '800' }, messageActions: { marginTop: 6, padding: 7, maxWidth: 290, borderRadius: 13, borderWidth: 1, borderColor: C.line, backgroundColor: C.surface, ...shadow }, messageActionsMine: { alignItems: 'flex-end' }, reactionPicker: { flexDirection: 'row', gap: 2 }, reactionOption: { width: 34, height: 32, alignItems: 'center', justifyContent: 'center', borderRadius: 10, backgroundColor: C.paper }, reactionOptionText: { fontSize: 16 }, messageActionButtons: { marginTop: 6, flexDirection: 'row', gap: 5 }, messageActionButton: { minHeight: 31, paddingHorizontal: 8, flexDirection: 'row', alignItems: 'center', gap: 4, borderRadius: 9, backgroundColor: C.paper }, messageActionText: { color: C.ink70, fontSize: 8, fontWeight: '800' }, editingBanner: { paddingHorizontal: 14, paddingVertical: 8, flexDirection: 'row', alignItems: 'center', gap: 9, borderTopWidth: 1, borderColor: C.line, backgroundColor: '#E5F0ED' }, editingCopy: { flex: 1 }, editingTitle: { color: C.teal, fontSize: 8, fontWeight: '900' }, editingPreview: { marginTop: 2, color: C.ink70, fontSize: 9 }, composer: { paddingHorizontal: 12, paddingTop: 9, paddingBottom: 9, flexDirection: 'row', alignItems: 'flex-end', gap: 4, borderTopWidth: 1, borderColor: C.line, backgroundColor: C.surface }, composerVoice: { flex: 1 }, composerInput: { minHeight: 43, flex: 1, paddingLeft: 13, paddingRight: 4, flexDirection: 'row', alignItems: 'center', borderRadius: 22, backgroundColor: C.paper }, chatInput: { flex: 1, maxHeight: 92, paddingVertical: 10, color: C.ink, fontSize: 11 }, sendButton: { width: 35, height: 35, borderRadius: 18, alignItems: 'center', justifyContent: 'center', backgroundColor: C.optic }, sendDisabled: { opacity: .35 },
   highlightedMessageBubble: { borderWidth: 2, borderColor: C.optic },
   chatPinnedBanner: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: 20, paddingBottom: 12 },

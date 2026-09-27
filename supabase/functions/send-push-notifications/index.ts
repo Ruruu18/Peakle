@@ -53,7 +53,7 @@ Deno.serve(async (request) => {
   const preferencesByUser = new Map(
     (profiles || []).map((profile) => [profile.id, profile.notification_preferences || {}]),
   );
-  const messageKinds = new Set(['direct_message', 'direct_message_request', 'direct_message_accepted']);
+  const messageKinds = new Set(['direct_message', 'direct_message_request', 'direct_message_accepted', 'team_mention']);
   const mutedNotices = activeNotices.filter((notice) =>
     messageKinds.has(notice.kind)
       && preferencesByUser.get(notice.user_id)?.messages === false

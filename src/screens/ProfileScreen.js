@@ -399,8 +399,6 @@ function ProfileScreen({ navigation, route }) {
   const [joinedTeams, setJoinedTeams] = useState(() => initialSnapshot?.joinedTeams || []);
   const [followCounts, setFollowCounts] = useState(() => initialSnapshot?.followCounts || { followers: 0, following: 0 });
   const notices = useMemo(() => operationNotifications.map(presentNotification), [operationNotifications]);
-  // Cached counts from before friends existed only carry follower totals.
-  const friendCount = followCounts.friends ?? Math.min(followCounts.followers || 0, followCounts.following || 0);
 
   useEffect(() => {
     if (user) setPlayer({ name: user.name, location: user.location, avatar: user.picture, skill: user.skill, preference: user.preference, presenceStatus: user.presenceStatus || 'free' });
@@ -455,11 +453,7 @@ function ProfileScreen({ navigation, route }) {
     try {
       setFollowCounts(await getPlayerFollowCounts());
     } catch {
-      setFollowCounts((current) => ({
-        followers: current.followers + 1,
-        following: current.following + 1,
-        friends: (current.friends ?? Math.min(current.followers, current.following)) + 1,
-      }));
+      setFollowCounts((current) => ({ ...current, followers: current.followers + 1 }));
     }
   };
   useEffect(() => {
@@ -482,7 +476,7 @@ function ProfileScreen({ navigation, route }) {
       const [matchResult, teamResult, followResult] = await Promise.allSettled([
         withTimeout(listMyMatches(), 12000, 'Match history took too long to refresh.'),
         withTimeout(listTeams(), 12000, 'Teams took too long to refresh.'),
-        withTimeout(getPlayerFollowCounts(), 12000, 'Friend count took too long to refresh.'),
+        withTimeout(getPlayerFollowCounts(), 12000, 'Follower counts took too long to refresh.'),
       ]);
       if (!active) return;
       const nextMatches = matchResult.status === 'fulfilled' ? matchResult.value : cached?.recordedMatches || [];
@@ -572,7 +566,7 @@ function ProfileScreen({ navigation, route }) {
               <View style={[styles.squad, { marginTop: 0, flexShrink: 1 }]}><Icon name="people" size={12} color={C.teal} /><Text {...webLayout('profile-meta-label')} numberOfLines={1} style={styles.squadText}>{joinedTeams.length ? `${joinedTeams[0].name}${joinedTeams.length > 1 ? ` +${joinedTeams.length - 1}` : ''}` : 'No team joined'}</Text></View>
               <View style={[styles.location, { marginTop: 0, flexShrink: 1 }]}><Icon name="location-outline" size={13} color={C.ink40} /><Text {...webLayout('profile-meta-label')} numberOfLines={1} style={styles.locationText}>{player.location}</Text></View>
             </View>
-            <View style={[styles.socialStats, compactPhone && styles.socialStatsCompact]}><Pressable accessibilityRole="button" accessibilityLabel={`${friendCount} ${friendCount === 1 ? 'friend' : 'friends'}. Open friends list`} hitSlop={7} onPress={() => navigation.navigate('Connections', { openToken: Date.now() })} style={({ pressed }) => [styles.socialStat, pressed && styles.socialStatPressed]}><Text style={styles.socialValue}>{formatSocialCount(friendCount)}</Text><Text style={styles.socialLabel}>{friendCount === 1 ? 'Friend' : 'Friends'}</Text></Pressable></View>
+            <View style={[styles.socialStats, compactPhone && styles.socialStatsCompact]}>{[['Followers', followCounts.followers || 0], ['Following', followCounts.following || 0]].map(([label, count], index) => <React.Fragment key={label}>{index ? <View style={styles.socialDivider} /> : null}<Pressable accessibilityRole="button" accessibilityLabel={`${count} ${label.toLowerCase()}. Open ${label.toLowerCase()} list`} hitSlop={7} onPress={() => navigation.navigate('Connections', { initialTab: label, openToken: Date.now() })} style={({ pressed }) => [styles.socialStat, pressed && styles.socialStatPressed]}><Text style={styles.socialValue}>{formatSocialCount(count)}</Text><Text style={styles.socialLabel}>{label}</Text></Pressable></React.Fragment>)}</View>
           </View>
         </View>
         <OrganizerInvite onOpen={() => navigation.navigate('OrganizerPreview')} />

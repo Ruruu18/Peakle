@@ -13,10 +13,13 @@ const DIRECT_MESSAGE_SELECT_BASE = 'id, conversation_id, sender_id, body, create
 const DIRECT_MESSAGE_SELECT = `${DIRECT_MESSAGE_SELECT_BASE}, direct_message_reactions(emoji, user_id)`;
 const reactionsSchemaMissing = (error) => ['42P01', 'PGRST200', 'PGRST205'].includes(error?.code);
 // 42703: a newer column (unsend or media) has not reached this project yet.
-const columnMissing = (error) => ['42703', 'PGRST204'].includes(error?.code);
+const columnMissing = (error) => ['42703', 'PGRST204', 'PGRST200'].includes(error?.code);
 const deleteSchemaMissing = (error) => ['42P01', '42703', 'PGRST202', 'PGRST205'].includes(error?.code);
-// Newest first: media (202609260007) builds on unsend (202609260006).
-const MESSAGE_COLUMN_LEVELS = ['', ', deleted_at', ', deleted_at, media_path, media_type, media_mime, media_name, media_duration_ms'];
+// Newest first: replies (202609270004) build on media (202609260007), which
+// builds on unsend (202609260006).
+const MEDIA_COLUMNS = ', deleted_at, media_path, media_type, media_mime, media_name, media_duration_ms';
+const REPLY_COLUMNS = ', reply:direct_messages!direct_messages_reply_to_id_fkey(id, sender_id, body, media_type, deleted_at, profiles!direct_messages_sender_id_fkey(display_name))';
+const MESSAGE_COLUMN_LEVELS = ['', ', deleted_at', MEDIA_COLUMNS, `${MEDIA_COLUMNS}${REPLY_COLUMNS}`];
 
 // Tries the newest message shape first and drops only the part the project
 // is missing: newer columns, the reactions table, or both.
@@ -66,6 +69,19 @@ export function normalizeDirectConversation(row) {
   };
 }
 
+// The quoted message shown above a reply.
+export function normalizeReplyQuote(reply, currentUserId) {
+  if (!reply?.id) return null;
+  return {
+    id: reply.id,
+    senderId: reply.sender_id,
+    sender: reply.sender_id === currentUserId ? 'You' : reply.profiles?.display_name || 'Peakle player',
+    text: reply.deleted_at ? null : reply.body || null,
+    mediaType: reply.deleted_at ? null : reply.media_type || (reply.image_url ? 'image' : null),
+    deleted: Boolean(reply.deleted_at),
+  };
+}
+
 export function normalizeDirectMessage(row, currentUserId) {
   if (!row) return null;
   const name = row.profiles?.display_name || (row.sender_id === currentUserId ? 'You' : 'Peakle player');
@@ -82,6 +98,7 @@ export function normalizeDirectMessage(row, currentUserId) {
     mediaPath: row.deleted_at ? null : row.media_path || null,
     mediaUrl: row.deleted_at ? null : row.media_url || null,
     mediaDurationMs: row.deleted_at ? null : row.media_duration_ms ?? null,
+    replyTo: normalizeReplyQuote(row.reply, currentUserId),
     reactions: row.direct_message_reactions || [],
     createdAt: row.created_at,
     time: new Date(row.created_at).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }),
@@ -701,11 +718,17 @@ export async function respondFollowRequest(requesterId, accept) {
   return Boolean(data);
 }
 
-export async function sendDirectMessage(conversationId, body) {
-  const { data, error } = await requireSupabase().rpc('send_direct_message', {
+export async function sendDirectMessage(conversationId, body, { replyToId = null } = {}) {
+  const client = requireSupabase();
+  let { data, error } = await client.rpc(replyToId ? 'send_direct_reply' : 'send_direct_message', {
     p_conversation_id: conversationId,
     p_body: body.trim(),
+    ...(replyToId ? { p_reply_to_id: replyToId } : null),
   });
+  // Before the replies migration is applied, send it as a plain message.
+  if (error && replyToId && ['PGRST202', '42883'].includes(error.code)) {
+    ({ data, error } = await client.rpc('send_direct_message', { p_conversation_id: conversationId, p_body: body.trim() }));
+  }
   if (error) throw error;
   return getDirectMessage(data);
 }
@@ -755,11 +778,11 @@ export async function unsendDirectMessage(messageId, mediaPath = null) {
 
 // Uploads a picked photo or video, or a recorded voice message, into this
 // conversation's folder, then sends it. A failed send removes the upload so no orphaned file is left behind.
-export async function sendDirectMediaMessage(conversationId, asset, type, { onProgress } = {}) {
+export async function sendDirectMediaMessage(conversationId, asset, type, { onProgress, replyToId = null } = {}) {
   const client = requireSupabase();
   // Keep the ring below 100% until the message has been saved and loaded.
   const uploaded = await uploadChatMedia(DIRECT_MEDIA_BUCKET, (userId) => `${conversationId}/${userId}`, asset, type, 'Private', { onProgress: onProgress ? (value) => onProgress(value * 0.95) : undefined });
-  const { data, error } = await client.rpc('send_direct_media_message', {
+  const mediaArgs = {
     p_conversation_id: conversationId,
     p_media_path: uploaded.path,
     p_media_type: uploaded.type,
@@ -768,7 +791,12 @@ export async function sendDirectMediaMessage(conversationId, asset, type, { onPr
     p_media_name: uploaded.name,
     // Picker and recorder durations are both in milliseconds.
     p_media_duration_ms: Number.isFinite(asset.duration) ? Math.min(600000, Math.round(asset.duration)) : null,
-  });
+  };
+  let { data, error } = await client.rpc(replyToId ? 'send_direct_media_reply' : 'send_direct_media_message', replyToId ? { ...mediaArgs, p_reply_to_id: replyToId } : mediaArgs);
+  // Before the replies migration is applied, send it without the reply.
+  if (error && replyToId && ['PGRST202', '42883'].includes(error.code)) {
+    ({ data, error } = await client.rpc('send_direct_media_message', mediaArgs));
+  }
   if (error) {
     client.storage.from(DIRECT_MEDIA_BUCKET).remove([uploaded.path]).catch(() => {});
     if (['PGRST202', '42883'].includes(error.code)) throw new Error('Sending photos and videos is not available yet. Please try again after the next update.');

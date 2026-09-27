@@ -124,7 +124,7 @@ function Header({ eyebrow, title, action, onBack }) {
     <>
       <View style={styles.header}>
         {onBack ? <Pressable accessibilityRole="button" accessibilityLabel="Back to Play options" hitSlop={6} onPress={onBack} style={styles.headerBack}><Icon name="arrow-back" /></Pressable> : null}
-        <View style={styles.headerCopy}><Text numberOfLines={1} style={styles.eyebrow}>{eyebrow}</Text><Text accessibilityRole="header" numberOfLines={1} style={styles.h1}>{title}</Text></View>
+        <View style={styles.headerCopy}><Text numberOfLines={1} style={styles.eyebrow}>{eyebrow}</Text><Text accessibilityRole="header" numberOfLines={2} style={styles.h1}>{title}</Text></View>
         {action}
       </View>
       <KitchenLine style={styles.headerLine} />
@@ -216,7 +216,7 @@ function PlayerInput({ value, onChangeText, team, number, visible, editable = tr
           value={value}
           onChangeText={onChangeText}
           editable={editable}
-          placeholder={editable ? 'Tap to enter guest name' : 'Invite a player below'}
+          placeholder={editable ? 'Tap to enter guest name' : 'Open spot'}
           placeholderTextColor={C.ink40}
           autoCapitalize="words"
           autoCorrect={false}
@@ -224,9 +224,10 @@ function PlayerInput({ value, onChangeText, team, number, visible, editable = tr
           returnKeyType="next"
           maxLength={24}
           selectTextOnFocus
+          dataSet={editable ? undefined : { displayInput: 'lineup' }}
           style={styles.playerInput}
         />
-        <View style={styles.playerStatus}><Icon name={empty ? (editable ? 'create-outline' : 'person-add-outline') : 'checkmark-circle'} size={10} color={empty ? C.teal : C.ink40} /><Text numberOfLines={1} adjustsFontSizeToFit style={[styles.playerStatusText, empty && styles.playerStatusTextEmpty]}>{empty ? `PLAYER ${number} · ${editable ? 'TYPE A GUEST NAME' : 'INVITE BELOW'}` : `PLAYER ${number} · READY`}</Text></View>
+        <View style={styles.playerStatus}><Icon name={empty ? (editable ? 'create-outline' : 'person-add-outline') : 'checkmark-circle'} size={10} color={empty ? C.teal : C.ink40} /><Text numberOfLines={2} style={[styles.playerStatusText, empty && styles.playerStatusTextEmpty]}>{empty ? `PLAYER ${number} · ${editable ? 'TYPE A GUEST NAME' : 'INVITE BELOW'}` : `PLAYER ${number} · READY`}</Text></View>
       </View>
     </View>
   );
