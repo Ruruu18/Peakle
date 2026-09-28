@@ -924,11 +924,18 @@ function SetupScreen({ courts, courtsLoading, courtsError, onRefreshCourts, onBo
         <Text accessibilityLiveRegion="polite" style={[styles.setupGuideMessage, setupStage === 3 && canStart && styles.setupGuideMessageReady]}>{stageMessage}</Text>
       </View>}
 
-      {setupStage === 0 && !joinedInvite && <View style={styles.formPart}>
+      {/* Keep format within reach when Find players opens directly on step 2. */}
+      {setupStage <= 1 && !joinedInvite && <View style={styles.formPart} onLayout={(event) => {
+        nearbySectionY.current = event.nativeEvent.layout.y;
+        if (pendingNearbyScroll.current && setupStage === 1) requestAnimationFrame(scrollToNearbyPlayers);
+      }}>
       <SegmentedControl label="FORMAT" value={matchType} onChange={setMatchType} options={[
         { value: 'singles', label: 'Singles', icon: 'person-outline' },
         { value: 'doubles', label: 'Doubles', icon: 'people-outline' },
       ]} />
+      </View>}
+
+      {setupStage === 0 && !joinedInvite && <View style={styles.formPart}>
       <SegmentedControl label="PLAY TYPE" value={mode} onChange={setMode} options={[
         { value: 'casual', label: 'Casual', icon: 'happy-outline' },
         { value: 'ranked', label: 'Ranked', icon: 'podium-outline' },
@@ -963,7 +970,7 @@ function SetupScreen({ courts, courtsLoading, courtsError, onRefreshCourts, onBo
         <Pressable accessibilityRole="button" accessibilityLabel="Swap both sides" onPress={() => setPlayers(([first, second]) => [second, first])} style={({ pressed }) => [styles.swapSidesButton, pressed && styles.pressed]}><Icon name="swap-vertical" size={16} color={C.teal} /><Text style={styles.swapSidesText}>Swap sides</Text></Pressable>
       </View>
 
-      {access === 'public' && <View onLayout={(event) => { nearbySectionY.current = event.nativeEvent.layout.y; if (pendingNearbyScroll.current) requestAnimationFrame(scrollToNearbyPlayers); }}><NearbyLobby players={invitePlayers.filter((player) => !scorerInvites.some((invite) => invite.recipient_id === player.id && ['pending', 'accepted'].includes(invite.status)))} invited={invited} outgoingInvites={playerInvites} onToggle={toggleNearbyPlayer} onMessage={onMessagePlayer} full={trimmedPlayers.flat().every(Boolean)} visible={nearbyPresence.visible} loading={nearbyPresence.loading} error={nearbyPresence.error || rosterError} onVisibility={nearbyPresence.setDiscoveryVisible} /></View>}
+      {access === 'public' && <NearbyLobby players={invitePlayers.filter((player) => !scorerInvites.some((invite) => invite.recipient_id === player.id && ['pending', 'accepted'].includes(invite.status)))} invited={invited} outgoingInvites={playerInvites} onToggle={toggleNearbyPlayer} onMessage={onMessagePlayer} full={trimmedPlayers.flat().every(Boolean)} visible={nearbyPresence.visible} loading={nearbyPresence.loading} error={nearbyPresence.error || rosterError} onVisibility={nearbyPresence.setDiscoveryVisible} />}
       </View>}
 
       {setupStage === 2 && !joinedInvite && <View style={styles.formPart}>

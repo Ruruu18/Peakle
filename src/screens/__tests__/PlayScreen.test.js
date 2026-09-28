@@ -1,5 +1,5 @@
 import React from 'react';
-import { Alert, Text } from 'react-native';
+import { Alert, Text, TextInput } from 'react-native';
 import TestRenderer, { act } from 'react-test-renderer';
 import PlayScreen from '../PlayScreen';
 import { useAuth } from '../../context/AuthContext';
@@ -16,6 +16,7 @@ jest.mock('../../context/ThemeContext', () => ({
 }));
 jest.mock('../../services/database', () => ({
   loadUnfinishedMatch: jest.fn(async () => null), saveCompletedMatch: jest.fn(async () => ({ id: 'saved' })),
+  listTeams: jest.fn(async () => []),
 }));
 jest.mock('../../services/nearbyPlayers', () => ({ searchRegisteredPlayers: jest.fn() }));
 jest.mock('../../services/directMessages', () => ({ listFollowingPlayers: jest.fn(async () => []) }));
@@ -106,4 +107,39 @@ it('lets the scorer retry ending early after the shared close fails', async () =
   await press('End as final');
   expect(saveCompletedMatch).toHaveBeenCalledTimes(1);
   expect(hasText('Match recorded')).toBe(true);
+});
+
+it('lets Build a Four switch between singles and doubles directly on the players step', async () => {
+  nearby.sharedLiveMatch = null;
+  await act(async () => {
+    renderer = TestRenderer.create(<PlayScreen navigation={navigation} route={{ params: { nearbyPlayersToken: 1 } }} />);
+  });
+  const lineupInputs = () => renderer.root.findAllByType(TextInput).filter((node) => node.props.accessibilityLabel !== 'Search registered players');
+  expect(hasText('Continue to court')).toBe(true);
+  expect(lineupInputs()).toHaveLength(4);
+
+  await press('Singles');
+  expect(hasText('One player on each side')).toBe(true);
+  expect(hasText('Add 1 more player.')).toBe(true);
+  expect(lineupInputs()).toHaveLength(2);
+  expect(lineupInputs()[0].props.value).toBe('Player');
+  expect(hasText('Continue to court')).toBe(true);
+
+  await press('Doubles');
+  expect(hasText('Two players on each side')).toBe(true);
+  expect(lineupInputs()).toHaveLength(4);
+  expect(lineupInputs()[0].props.value).toBe('Player');
+});
+
+it('sends singles invitations after changing format from Build a Four', async () => {
+  nearby.sharedLiveMatch = null;
+  nearby.visible = true;
+  nearby.players = [{ id: 'opponent', name: 'Alex', rating: 3 }];
+  nearby.invite = jest.fn(async () => ({}));
+  await act(async () => {
+    renderer = TestRenderer.create(<PlayScreen navigation={navigation} route={{ params: { nearbyPlayersToken: 2 } }} />);
+  });
+  await press('Singles');
+  await press('Invite');
+  expect(nearby.invite).toHaveBeenCalledWith('opponent', expect.objectContaining({ matchType: 'singles' }));
 });
