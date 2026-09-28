@@ -9,6 +9,32 @@
 
 The first migration creates the normalized model, automatic user profiles, storage policies, and row-level security. Venues and courts are added by platform administrators rather than seeded with demo records.
 
+### Hosted open play rotation (28 September 2026)
+
+Apply `migrations/202609280001_hosted_open_play_rotation.sql` after the activity
+creation safeguards, **before deploying the updated player app**. A host can
+start their scheduled open play from the calendar (from 1 hour before it
+begins): they tick who is here and choose 1–8 courts. The activity becomes a
+venue-less open-play session linked by `scheduled_game_id`. Everyone going gets
+a place, and the players who are here join the queue in random order.
+
+Peakle then fills every open court automatically. It does this when the
+session starts, when a player checks in ("I'm here"), and when a player scorer
+records a result. Each court takes the next players in the queue. Doubles
+lineups are split to avoid repeat partners first, then to balance skill.
+Finished players rejoin the back of the queue. Results go to match history
+through the existing open-play scoring.
+
+Players can take a break and come back; the host can check players in or out.
+Ending the session, or cancelling the scheduled activity, cancels any unfinished
+match and keeps completed results. Hosts don't receive the per-court organizer
+alerts. Organizer publishing is unchanged: venue, permission and future-start
+rules still apply to every session without a `scheduled_game_id`.
+
+Run `npm run test:hosted-open-play` for isolated PostgreSQL checks. They apply
+the full migration history in PGlite, except the two push-dispatch Cron
+migrations, which need pg_cron and pg_net.
+
 ### Activity creation safeguards (27 September 2026)
 
 Apply `migrations/202609270005_activity_creation_safety.sql` **before deploying

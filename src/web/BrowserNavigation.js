@@ -25,6 +25,7 @@ const ROUTE_TITLES = {
   Inbox: 'Messages',
   DirectChat: 'Direct Chat',
   PublicProfile: 'Player Profile',
+  PlayerSearch: 'Search Players',
   Connections: 'Connections',
   Leaderboard: 'Leaderboard',
   CompetitionDivision: 'Competition Division',

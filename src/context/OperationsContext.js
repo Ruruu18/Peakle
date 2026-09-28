@@ -36,7 +36,12 @@ if (Platform.OS !== 'web') Notifications.setNotificationHandler({
   },
 });
 
+// Match invitations only last a minute; after that there is nothing to accept.
+const lapsedMatchInvite = (notice) => notice.kind === 'match_invite'
+  && Boolean(notice.data?.expiresAt)
+  && new Date(notice.data.expiresAt).getTime() <= Date.now();
 const visibleNotice = (notice) => notice.kind !== CHAT_MESSAGE_NOTIFICATION_KIND
+  && !lapsedMatchInvite(notice)
   && (PRIVATE_MESSAGES_ENABLED || (!notice.data?.conversationId && !String(notice.kind || '').startsWith('direct_message')));
 const byNewest = (a, b) => new Date(b.created_at) - new Date(a.created_at);
 
@@ -215,14 +220,19 @@ export function OperationsProvider({ children }) {
     setNotifications((current) => current.filter((notice) => notice.id !== notificationId));
     return accepted;
   }, []);
+  // The server deletes an answered invite's notice; drop it locally right away too.
+  const dismissMatchInviteNotice = useCallback((inviteId) => {
+    if (!inviteId) return;
+    setNotifications((current) => current.filter((notice) => !(notice.kind === 'match_invite' && notice.data?.inviteId === inviteId)));
+  }, []);
   const online = network.isConnected !== false && network.isInternetReachable !== false;
   const connectionState = !online ? 'offline' : realtime;
   const value = useMemo(() => ({
     connectionState, online, pendingOperations, reportRealtime, enqueueOperation, flush,
     notifications, unreadCount: notifications.filter((notice) => !notice.read_at).length,
     messageBanner, dismissMessageBanner,
-    refreshNotifications, readNotification, readAllNotifications, removeNotification, clearNotifications, respondFollowRequest, enablePushNotifications, disablePushNotifications,
-  }), [clearNotifications, connectionState, dismissMessageBanner, messageBanner, disablePushNotifications, enablePushNotifications, enqueueOperation, flush, notifications, online, pendingOperations, readAllNotifications, readNotification, refreshNotifications, removeNotification, reportRealtime, respondFollowRequest]);
+    refreshNotifications, readNotification, readAllNotifications, removeNotification, clearNotifications, respondFollowRequest, dismissMatchInviteNotice, enablePushNotifications, disablePushNotifications,
+  }), [clearNotifications, connectionState, dismissMatchInviteNotice, dismissMessageBanner, messageBanner, disablePushNotifications, enablePushNotifications, enqueueOperation, flush, notifications, online, pendingOperations, readAllNotifications, readNotification, refreshNotifications, removeNotification, reportRealtime, respondFollowRequest]);
   return <OperationsContext.Provider value={value}>{children}</OperationsContext.Provider>;
 }
 

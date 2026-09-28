@@ -25,6 +25,7 @@ import {
   MAX_GAME_MINUTES, MIN_GAME_MINUTES, maskClockInput, parseClockInput, parseHoursInput,
   getScheduledGameShareUrl, googleCalendarUrl, inviteToScheduledGame, isOnMyCalendar, openScheduledGameLink, scheduledGameShareMessage, setScheduledGameVisibility, isPlayerScheduledEntry, listScheduledGames, listScheduleEvents, monthGrid, playSetupFromGame, respondToScheduledGame, shiftDayKey, shiftMonthKey,
 } from '../services/schedule';
+import { getHostedOpenPlay, startHostedOpenPlay } from '../services/openPlayRegistration';
 import { dropShadow } from '../utils/shadow';
 
 const kindColor = (kind, isDark) => (KINDS[kind] || KINDS.game)[isDark ? 'darkColor' : 'color'];
@@ -127,7 +128,96 @@ function EntryCard({ entry, onPress, past }) {
   );
 }
 
-function EntrySheet({ entry, onClose, onChanged, onStart, onOpenEvent }) {
+// Player-hosted open play runs a live rotation: the host says who is here and
+// how many courts they have, then Peakle pairs players and fills every court.
+function HostedOpenPlayPanel({ game, onOpenRotation }) {
+  const { styles, palette } = usePalette();
+  const perCourt = game.matchType === 'singles' ? 2 : 4;
+  const [session, setSession] = useState(undefined);
+  const [setup, setSetup] = useState(false);
+  const [presentIds, setPresentIds] = useState([]);
+  const [courts, setCourts] = useState(1);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState('');
+  useEffect(() => {
+    let active = true;
+    setSession(undefined);
+    setSetup(false);
+    getHostedOpenPlay(game.sourceId)
+      .then((result) => { if (active) setSession(result); })
+      .catch(() => { if (active) setSession(null); });
+    return () => { active = false; };
+  }, [game.sourceId]);
+  if (session === undefined) return null;
+
+  if (session?.status === 'active') {
+    return (
+      <Pressable accessibilityRole="button" onPress={() => onOpenRotation(session.sessionId)} style={({ pressed }) => [styles.primary, pressed && styles.pressed]}>
+        <AppIcon name="people" size={16} color="#0E2321" /><Text style={styles.primaryText}>Open live rotation</Text>
+      </Pressable>
+    );
+  }
+  if (session) return <Text style={styles.helperText}>This open play has finished. Results are in each player’s match history.</Text>;
+
+  const now = Date.now();
+  const ended = new Date(game.endsAt).getTime() <= now;
+  if (ended) return null;
+  if (!game.isHost) return <Text style={styles.helperText}>When the host starts open play, Peakle pairs players and fills the courts automatically.</Text>;
+
+  const canStart = now >= new Date(game.startsAt).getTime() - START_WINDOW_MS;
+  if (!setup) {
+    const beginSetup = () => {
+      const everyone = game.going.map((player) => player.id);
+      setPresentIds(everyone);
+      setCourts(Math.min(8, Math.max(1, Math.floor(everyone.length / perCourt))));
+      setError('');
+      setSetup(true);
+    };
+    return (
+      <Pressable accessibilityRole="button" accessibilityState={{ disabled: !canStart }} disabled={!canStart} onPress={beginSetup} style={({ pressed }) => [styles.primary, !canStart && styles.disabled, pressed && styles.pressed]}>
+        <AppIcon name="play" size={16} color="#0E2321" /><Text style={styles.primaryText}>{canStart ? 'Start open play' : 'Start opens 1 hour before'}</Text>
+      </Pressable>
+    );
+  }
+
+  const togglePresent = (id) => setPresentIds((current) => current.includes(id) ? current.filter((item) => item !== id) : [...current, id]);
+  const start = async () => {
+    setBusy(true);
+    setError('');
+    try {
+      const sessionId = await startHostedOpenPlay({ gameId: game.sourceId, courtCount: courts, presentIds });
+      onOpenRotation(sessionId);
+    } catch (startError) {
+      setError(startError.message || 'Open play could not be started. Try again.');
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <View>
+      <Text style={styles.groupLabel}>WHO’S HERE?</Text>
+      {game.going.map((player) => {
+        const active = presentIds.includes(player.id);
+        return <Pressable key={player.id} accessibilityRole="checkbox" accessibilityState={{ checked: active }} aria-checked={active} onPress={() => togglePresent(player.id)} style={({ pressed }) => [styles.rosterRow, styles.pickRow, active && styles.pickRowActive, pressed && styles.pressed]}><ProfilePhoto photo={player.avatar} name={player.name} size={32} /><Text numberOfLines={1} style={[styles.rosterName, styles.flex]}>{player.name}{player.id === game.hostId ? ' · Host' : ''}</Text><AppIcon name={active ? 'checkmark-circle' : 'ellipse-outline'} size={21} color={active ? palette.teal : palette.ink40} /></Pressable>;
+      })}
+      <Text style={styles.helperText}>Players who arrive later tap “I’m here” to join the queue.</Text>
+      <Text style={styles.groupLabel}>COURTS</Text>
+      <View style={styles.durationStepper}>
+        <Pressable accessibilityRole="button" accessibilityLabel="One fewer court" disabled={courts <= 1} onPress={() => setCourts(courts - 1)} style={({ pressed }) => [styles.durationButton, courts <= 1 && styles.disabled, pressed && styles.pressed]}><AppIcon name="remove" size={18} color={palette.ink} /></Pressable>
+        <View style={styles.durationValue}><Text style={styles.durationValueText}>{courts} {courts === 1 ? 'court' : 'courts'}</Text><Text style={styles.durationValueSub}>{presentIds.length} here · {perCourt} per court</Text></View>
+        <Pressable accessibilityRole="button" accessibilityLabel="One more court" disabled={courts >= 8} onPress={() => setCourts(courts + 1)} style={({ pressed }) => [styles.durationButton, courts >= 8 && styles.disabled, pressed && styles.pressed]}><AppIcon name="add" size={18} color={palette.ink} /></Pressable>
+      </View>
+      <Text style={styles.helperText}>Peakle puts the next {perCourt} in the queue on each open court, mixes up partners and balances skill. Winners and losers rejoin the back of the queue.</Text>
+      {error ? <View style={styles.errorBox}><AppIcon name="alert-circle-outline" size={17} color={palette.brick} /><Text style={styles.errorText}>{error}</Text></View> : null}
+      <View style={[styles.actionRow, styles.hostedStartActions]}>
+        <Pressable accessibilityRole="button" disabled={busy} onPress={() => setSetup(false)} style={({ pressed }) => [styles.secondary, styles.flex, pressed && styles.pressed]}><Text style={styles.secondaryText}>Back</Text></Pressable>
+        <Pressable accessibilityRole="button" disabled={busy} onPress={start} style={({ pressed }) => [styles.primary, styles.flex, busy && styles.disabled, pressed && styles.pressed]}>{busy ? <ActivityIndicator color="#0E2321" /> : <><AppIcon name="play" size={16} color="#0E2321" /><Text style={styles.primaryText}>Start rotation</Text></>}</Pressable>
+      </View>
+    </View>
+  );
+}
+
+function EntrySheet({ entry, onClose, onChanged, onStart, onOpenEvent, onOpenRotation }) {
   const { styles, palette } = usePalette();
   const insets = useSafeAreaInsets();
   const [busy, setBusy] = useState('');
@@ -183,6 +273,7 @@ function EntrySheet({ entry, onClose, onChanged, onStart, onOpenEvent }) {
             {game && !cancelled && !ended && (game.isHost || game.visibility === 'open') ? <ShareActivityPanel game={game} onChanged={onChanged} /> : null}
             {error ? <View style={styles.errorBox}><AppIcon name="alert-circle-outline" size={17} color={palette.brick} /><Text style={styles.errorText}>{error}</Text></View> : null}
             <View style={styles.sheetActions}>
+              {game?.kind === 'open_play' && !cancelled ? <HostedOpenPlayPanel game={game} onOpenRotation={onOpenRotation} /> : null}
               {game && !cancelled && !ended ? <>
                 {game.kind === 'game' && (game.isHost || game.myStatus === 'going') ? <Pressable accessibilityRole="button" accessibilityState={{ disabled: !canStart }} disabled={!canStart} onPress={() => onStart(game)} style={({ pressed }) => [styles.primary, !canStart && styles.disabled, pressed && styles.pressed]}><AppIcon name="play" size={16} color="#0E2321" /><Text style={styles.primaryText}>{canStart ? 'Start match' : 'Start opens 1 hour before'}</Text></Pressable> : null}
                 {!game.isHost && game.myStatus === 'invited' ? <View style={styles.actionRow}>
@@ -729,6 +820,10 @@ export default function ScheduleScreen({ navigation, route }) {
     if (entry.kind === 'open_play') navigation.navigate('OpenPlayActivity', { token: Date.now(), sessionId: entry.sourceId, direct: true, returnTo: 'Schedule' });
     else navigation.navigate('ActivityDetails', { activity: entry.activity, returnTo: 'Schedule' });
   };
+  const openRotation = (sessionId) => {
+    setOpenEntryId(null);
+    navigation.navigate('OpenPlayActivity', { token: Date.now(), sessionId, direct: true, returnTo: 'Schedule' });
+  };
 
   const newGameButton = (
     <Pressable accessibilityRole="button" accessibilityLabel="Schedule a new activity" onPress={() => setNewGameDay(selectedKey < todayKey ? todayKey : selectedKey)} style={({ pressed }) => [styles.newButton, pressed && styles.pressed]}>
@@ -819,7 +914,7 @@ export default function ScheduleScreen({ navigation, route }) {
           </View>
         )}
       </ScrollView>
-      {openEntry ? <EntrySheet entry={openEntry} onClose={() => setOpenEntryId(null)} onChanged={() => load()} onStart={startGame} onOpenEvent={openEvent} /> : null}
+      {openEntry ? <EntrySheet entry={openEntry} onClose={() => setOpenEntryId(null)} onChanged={() => load()} onStart={startGame} onOpenEvent={openEvent} onOpenRotation={openRotation} /> : null}
       <NewActivitySheet visible={Boolean(newGameDay)} initialDay={newGameDay || todayKey} todayKey={todayKey} onClose={() => setNewGameDay(null)} onCreated={(key, kind, id) => { setNewGameDay(null); setView('mine'); setHiddenKinds((current) => current.filter((item) => item !== kind)); selectDay(key); if (key.startsWith(monthKey)) load(); if (id) setOpenEntryId(`game:${id}`); }} />
     </SafeAreaView>
   );
@@ -965,6 +1060,7 @@ const lightStyles = StyleSheet.create({
   spacer: { height: 8 },
   sheetActions: { marginTop: 18, gap: 8 },
   actionRow: { flexDirection: 'row', gap: 8 },
+  hostedStartActions: { marginTop: 16 },
   primary: { minHeight: 50, paddingHorizontal: 16, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 7, borderRadius: 14, backgroundColor: C.optic },
   primaryText: { color: '#0E2321', fontSize: 13, fontWeight: '900' },
   secondary: { minHeight: 48, paddingHorizontal: 14, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 7, borderRadius: 14, borderWidth: 1, borderColor: C.line, backgroundColor: C.surface },

@@ -65,6 +65,8 @@ let C = LIGHT_C;
 
 const emptyLineup = (currentUserName) => [[currentUserName || 'You', ''], ['', '']];
 const normalizedPlayerName = (name) => name?.trim().toLocaleLowerCase() || '';
+// Offer players the take-over after a minute without a scorer check-in (every ~20s).
+const SCORER_IDLE_MS = 60_000;
 const isScorerInvite = (invite) => invite?.match_payload?.role === 'scorer';
 
 function isConfirmedBooking(booking) {
@@ -1396,7 +1398,7 @@ function RallyBoxScore({ rallies }) {
   );
 }
 
-function LiveMatch({ match, sharedSession = null, currentUserId, onSyncSharedState, onHandoffScorer, onFinish }) {
+function LiveMatch({ match, sharedSession = null, currentUserId, onSyncSharedState, onHandoffScorer, onTakeOverScorer, onFinish }) {
   const initialSharedState = sharedSession?.state || match.sharedState || (match.reason === 'unfinished' ? match : {});
   const configuredFirstServerTeam = match.firstServer ?? 0;
   const configuredFirstServerPlayerIndex = Math.max(0, match.players[configuredFirstServerTeam].indexOf(match.firstServerPlayer));
@@ -1439,15 +1441,16 @@ function LiveMatch({ match, sharedSession = null, currentUserId, onSyncSharedSta
   const [shoutFeedback, setShoutFeedback] = useState(null);
   const [scorerMessage, setScorerMessage] = useState(initialSharedState.scorerMessage || (match.reason === 'unfinished' ? 'Match resumed from the saved score.' : `Match started — ${match.firstServerPlayer || teamName(match.players[match.firstServer ?? 0])} serves first.`));
   const finishedRef = useRef(false);
+  const [finishing, setFinishing] = useState(false);
   const { ballBounce, rallyTravel, bounceBall } = useRallyBallAnimation({ doubles: match.matchType === 'doubles', paused: paused || pointPause || Boolean(gameBreak) });
   const celebration = useRef(new Animated.Value(0)).current;
   const appliedSharedRevision = useRef(sharedSession?.revision || 0);
   const appliedPointEventId = useRef(initialSharedState.pointEvent?.id || null);
   const sharedSyncReady = useRef(false);
   const applyingSharedState = useRef(false);
-  const isShared = Boolean(sharedSession?.id);
-  const canScore = !isShared || sharedSession.scorer_id === currentUserId;
-  const isHost = Boolean(isShared && sharedSession.host_id === currentUserId);
+  const isShared = Boolean(match.sharedLiveMatchId || sharedSession?.id);
+  const canScore = !finishing && (!isShared || (['live', 'paused'].includes(sharedSession?.status) && sharedSession.scorer_id === currentUserId));
+  const isHost = Boolean(isShared && sharedSession?.host_id === currentUserId);
   const draft = useMatchDraft({
     enabled: !isShared && !DEMO_MODE, userId: currentUserId, match,
     state: { scores, games, gameScores, server, servingPlayerIndex, serviceNumber, evenSidePlayerIndexes, paused, rallyLog, gameDurations, gameBreak, matchStartedAt, gameStartedAt, scoringMethod, focusReturns, history: history.slice(-10) },
@@ -1578,7 +1581,7 @@ function LiveMatch({ match, sharedSession = null, currentUserId, onSyncSharedSta
   }, [playPointAnnouncement, sharedSession?.id, sharedSession?.revision]);
 
   useEffect(() => {
-    if (!isShared || !canScore || !onSyncSharedState) return undefined;
+    if (!isShared || !canScore || finishedRef.current || !onSyncSharedState) return undefined;
     if (!sharedSyncReady.current) {
       const readyTimer = setTimeout(() => { sharedSyncReady.current = true; }, 0);
       return () => clearTimeout(readyTimer);
@@ -1588,6 +1591,7 @@ function LiveMatch({ match, sharedSession = null, currentUserId, onSyncSharedSta
     const snapshot = JSON.stringify(nextState);
     if (snapshot === lastSharedSnapshot.current) return undefined;
     const syncTimer = setTimeout(() => {
+      if (finishedRef.current) return;
       lastSharedSnapshot.current = snapshot;
       onSyncSharedState(nextState).catch(() => { lastSharedSnapshot.current = ''; });
     }, 180);
@@ -1610,6 +1614,38 @@ function LiveMatch({ match, sharedSession = null, currentUserId, onSyncSharedSta
   const scoringLocked = paused || pointPause || Boolean(gameBreak) || !canScore;
   const undoLocked = paused || !canScore;
 
+  // The scorer's phone checks in every ~20s. Measure silence with this device's own
+  // clock from the last check-in we saw, so clock skew between phones can't offer the
+  // take-over early; the server still enforces its own 45 second rule.
+  const scorerCheckIn = `${sharedSession?.scorer_id || ''}:${sharedSession?.scorer_seen_at || ''}`;
+  const [scorerLastSeen, setScorerLastSeen] = useState(Date.now);
+  const [scorerIdleNow, setScorerIdleNow] = useState(Date.now);
+  const [takingOver, setTakingOver] = useState(false);
+  useEffect(() => { setScorerLastSeen(Date.now()); }, [scorerCheckIn]);
+  const watchingShared = isShared && !canScore && Boolean(onTakeOverScorer);
+  useEffect(() => {
+    if (!watchingShared) return undefined;
+    const timer = setInterval(() => setScorerIdleNow(Date.now()), 5000);
+    return () => clearInterval(timer);
+  }, [watchingShared]);
+  const scorerLeft = isShared && Array.isArray(sharedSession?.nearby_live_match_members) && !scorerMember;
+  const scorerIdle = watchingShared && (scorerLeft || scorerIdleNow - scorerLastSeen >= SCORER_IDLE_MS);
+
+  const takeOverScoring = () => {
+    if (!scorerIdle || takingOver) return;
+    Alert.alert(
+      'Take over scoring?',
+      `${liveMatch.scorer || 'The scorer'} ${scorerLeft ? 'left the match' : 'hasn’t been active for a minute'}. Scoring controls will move to this phone and everyone keeps the current score.`,
+      [
+        { text: 'Cancel', style: 'cancel' },
+        { text: 'Take over', onPress: async () => {
+          setTakingOver(true);
+          try { await onTakeOverScorer(); } finally { setTakingOver(false); }
+        } },
+      ],
+    );
+  };
+
   const openScorerHandoff = () => {
     if (!isHost || !onHandoffScorer) return;
     const members = sharedSession.nearby_live_match_members || [];
@@ -1629,11 +1665,20 @@ function LiveMatch({ match, sharedSession = null, currentUserId, onSyncSharedSta
   const finish = async (finalState, reason = 'completed') => {
     if (finishedRef.current) return;
     finishedRef.current = true;
+    setFinishing(true);
+    cancelPointAnnouncement();
     const endedAtTimestamp = finalState.endedAtTimestamp ?? Date.now();
     const finalElapsed = finalState.elapsed ?? Math.max(0, Math.floor((endedAtTimestamp - matchStartedAt) / 1000));
     const finalGameElapsed = finalState.gameElapsed ?? Math.max(0, Math.floor((endedAtTimestamp - gameStartedAt) / 1000));
-    const savedDraftId = await draft.settle();
-    onFinish({ ...match, ...(savedDraftId ? { savedMatchId: savedDraftId } : {}), scoringMethod, ...finalState, rallyLog: finalState.rallyLog || rallyLog, gameDurations: finalState.gameDurations || gameDurations, gameElapsed: finalGameElapsed, elapsed: finalElapsed, matchStartedAt, endedAtTimestamp, reason, focusReturns });
+    try {
+      const savedDraftId = await draft.settle();
+      const closed = await onFinish({ ...match, ...(savedDraftId ? { savedMatchId: savedDraftId } : {}), scoringMethod, ...finalState, rallyLog: finalState.rallyLog || rallyLog, gameDurations: finalState.gameDurations || gameDurations, gameElapsed: finalGameElapsed, elapsed: finalElapsed, matchStartedAt, endedAtTimestamp, reason, focusReturns });
+      if (closed !== false) return;
+    } catch (error) {
+      Alert.alert('Couldn’t end match', error.message || 'Check your connection and try again.');
+    }
+    finishedRef.current = false;
+    setFinishing(false);
   };
 
   const runPointCelebration = (announcement, onComplete) => {
@@ -1958,6 +2003,7 @@ function LiveMatch({ match, sharedSession = null, currentUserId, onSyncSharedSta
       </View>
 
       {!canScore && <View style={styles.scorerWatchBanner}><Icon name="eye-outline" color={C.teal} /><View style={styles.flex}><Text style={styles.scorerWatchTitle}>Watching live score</Text><Text style={styles.scorerWatchText}>{liveMatch.scorer} has the scoring controls. Score changes and rally announcements appear here automatically.</Text></View><Pressable accessibilityRole="switch" accessibilityState={{ checked: watcherVoice }} accessibilityLabel="Speak the score on this phone" onPress={toggleWatcherVoice} style={({ pressed }) => [styles.watchVoiceButton, watcherVoice && styles.watchVoiceButtonOn, pressed && styles.pressed]}><Icon name={watcherVoice ? 'volume-high-outline' : 'volume-mute-outline'} size={15} color={watcherVoice ? '#0E2321' : C.teal} /><Text style={[styles.watchVoiceText, watcherVoice && styles.watchVoiceTextOn]}>{watcherVoice ? 'VOICE ON' : 'VOICE OFF'}</Text></Pressable></View>}
+      {scorerIdle && <Pressable accessibilityRole="button" accessibilityLabel="Take over scoring" disabled={takingOver} onPress={takeOverScoring} style={({ pressed }) => [styles.takeOverBanner, pressed && styles.pressed]}><Icon name="hand-left-outline" size={18} color="#0E2321" /><View style={styles.flex}><Text style={styles.takeOverTitle}>{takingOver ? 'Taking over…' : 'Take over scoring'}</Text><Text style={styles.takeOverText}>{liveMatch.scorer || 'The scorer'} {scorerLeft ? 'left the match' : 'hasn’t been active for a minute'}. Tap to keep the score going from this phone.</Text></View><Icon name="chevron-forward" size={16} color="#0E2321" /></Pressable>}
       {paused && <View style={styles.pausedBanner}><Icon name="pause-circle" color={C.teal} /><Text style={styles.pausedText}>Match paused — scoring is locked.</Text></View>}
 
       <View {...webLayout('live-grid')}>
@@ -2023,7 +2069,7 @@ function LiveMatch({ match, sharedSession = null, currentUserId, onSyncSharedSta
       <MatchBoxScore match={match} games={games} scores={scores} gameScores={gameScores} elapsed={elapsed} gameElapsed={gameElapsed} gameDurations={gameDurations} gameBreak={gameBreak} />
       <RallyBoxScore rallies={rallyLog} />
 
-      {(canScore || isHost) && <Pressable onPress={() => setShowEnd(true)} style={({ pressed }) => [styles.endLink, pressed && styles.pressed]}><Icon name="flag-outline" size={17} color={C.brick} /><Text style={styles.endLinkText}>End match early</Text></Pressable>}
+      {(canScore || isHost || finishing) && <Pressable disabled={finishing} onPress={() => setShowEnd(true)} style={({ pressed }) => [styles.endLink, pressed && styles.pressed]}><Icon name="flag-outline" size={17} color={C.brick} /><Text style={styles.endLinkText}>{finishing ? 'Ending match…' : 'End match early'}</Text></Pressable>}
       <ConfirmEndModal visible={showEnd} onCancel={() => setShowEnd(false)} onConfirm={endEarly} onSaveUnfinished={saveUnfinished} />
       <ServerSelectionModal visible={manualServeTeam !== null} teamName={manualServeTeam !== null ? teamName(match.players[manualServeTeam]) : ''} players={manualServeTeam !== null ? match.players[manualServeTeam] : []} onCancel={() => setManualServeTeam(null)} onSelect={(playerIndex, selectedServiceNumber) => { applyServeCorrection(manualServeTeam, playerIndex, selectedServiceNumber, 'Manual correction'); setManualServeTeam(null); }} />
     </ScrollView>
@@ -2411,6 +2457,16 @@ export default function PlayScreen({ route, navigation }) {
     }
   }, [nearbyPresence.handoffSharedScorer, nearbyPresence.sharedLiveMatch?.id]);
 
+  const takeOverSharedScorer = useCallback(async () => {
+    const session = nearbyPresence.sharedLiveMatch;
+    if (!session?.id) return;
+    try {
+      await nearbyPresence.takeOverSharedScorer(session.id);
+    } catch (error) {
+      Alert.alert('Couldn’t take over scoring', error.message || 'Check your connection and try again.');
+    }
+  }, [nearbyPresence.takeOverSharedScorer, nearbyPresence.sharedLiveMatch?.id]);
+
   const recordCompletedResult = async (completedResult) => {
     if (!user?.id || completedResult.reason === 'unfinished') return completedResult;
     setResultSaveState('saving');
@@ -2432,10 +2488,17 @@ export default function PlayScreen({ route, navigation }) {
   };
 
   const finishMatch = async (finishedResult) => {
-    const sharedSession = match?.sharedLiveMatchId && nearbyPresence.sharedLiveMatch?.id === match.sharedLiveMatchId
+    let sharedSession = match?.sharedLiveMatchId && nearbyPresence.sharedLiveMatch?.id === match.sharedLiveMatchId
       ? nearbyPresence.sharedLiveMatch
       : null;
-    if (sharedSession?.id && handledSharedCompletion.current !== sharedSession.id) {
+    if (match?.sharedLiveMatchId && !sharedSession) {
+      sharedSession = await nearbyPresence.refreshLiveMatch(match.sharedLiveMatchId);
+      if (!sharedSession) {
+        Alert.alert('Couldn’t close connected match', 'Check your connection and try again. The match is still open for the other players.');
+        return false;
+      }
+    }
+    if (sharedSession?.id && handledSharedCompletion.current !== `${sharedSession.id}:${sharedSession.revision}`) {
       handledSharedCompletion.current = sharedSession.id;
       try {
         const terminalStatus = finishedResult.reason === 'completed' ? 'completed' : 'ended';
@@ -2445,17 +2508,20 @@ export default function PlayScreen({ route, navigation }) {
           { ...(session.state || {}), finalResult: finishedResult },
           terminalStatus,
         );
+        let closedSession;
         try {
-          await closeSession(sharedSession);
+          closedSession = await closeSession(sharedSession);
         } catch (firstError) {
           const latestSession = await nearbyPresence.refreshLiveMatch(sharedSession.id);
           if (!latestSession) throw firstError;
-          if (!['completed', 'ended'].includes(latestSession.status)) await closeSession(latestSession);
+          closedSession = ['completed', 'ended'].includes(latestSession.status) ? latestSession : await closeSession(latestSession);
         }
+        handledSharedCompletion.current = `${closedSession.id}:${closedSession.revision}`;
+        finishedResult = closedSession.state?.finalResult || finishedResult;
       } catch (error) {
         handledSharedCompletion.current = null;
         Alert.alert('Couldn’t close connected match', `${error.message || 'Refresh the live score and try again.'}\n\nThe match is still open; no result was lost.`);
-        return;
+        return false;
       }
     }
     if (finishedResult.reason === 'unfinished') {
@@ -2480,8 +2546,9 @@ export default function PlayScreen({ route, navigation }) {
   useEffect(() => {
     const session = nearbyPresence.sharedLiveMatch;
     const finalResult = session?.state?.finalResult;
-    if (!session?.id || !['completed', 'ended'].includes(session.status) || !finalResult || handledSharedCompletion.current === session.id) return;
-    handledSharedCompletion.current = session.id;
+    const completionKey = `${session?.id}:${session?.revision}`;
+    if (!session?.id || !['completed', 'ended'].includes(session.status) || !finalResult || handledSharedCompletion.current === session.id || handledSharedCompletion.current === completionKey) return;
+    handledSharedCompletion.current = completionKey;
     setResult(finalResult);
     setScreen('result');
     // The scorer records one canonical match. Registered participants receive
@@ -2630,7 +2697,7 @@ export default function PlayScreen({ route, navigation }) {
       {screen === 'choice' && <PlayChoiceScreen onFindPlay={findPlay} onSetupMatch={() => { setShowSetupBackToChoices(true); setScreen('setup'); }} unfinishedMatch={unfinishedMatch} onResume={resumeMatch} />}
       {screen === 'setup' && <SetupScreen courts={courts} courtsLoading={courtsLoading} courtsError={courtsError} onRefreshCourts={refreshCourtBookings} onBookCourt={openCourtBooking} recentCourts={recentCourts} defaultCourtArea={areaFromLocationLabel(userLocation?.label)} nearbyPlayers={nearbyPresence.players} nearbyPresence={nearbyPresence} currentUserName={user?.name} currentUserId={user?.id} currentUserAvatar={user?.picture} onStart={startMatch} focusChallenge={focusChallenge} onBackToChoices={showPlayChoices} showBackToChoices={showSetupBackToChoices} onFindPlay={findPlay} onMessagePlayer={(player) => navigation.navigate('DirectChat', { player: { id: player.id, name: player.name, avatar: player.avatar || null, area: player.area || null }, ownerTab: 'Play' })} onLeaveJoined={confirmLeaveJoinedMatch} unfinishedMatch={unfinishedMatch} onResume={resumeMatch} openNearbyPlayersToken={route?.params?.nearbyPlayersToken} scheduledGame={scheduledGameSetup} />}
       {screen === 'pregame' && match && <PreGameScreen match={match} onBack={() => setScreen('setup')} onStart={startLiveMatch} />}
-      {screen === 'live' && match && <LiveMatch key={DEMO_MODE ? `demo-${route?.params?.demoLiveToken || 0}` : 'live'} match={match} sharedSession={match.sharedLiveMatchId ? nearbyPresence.sharedLiveMatch : null} currentUserId={user?.id} onSyncSharedState={syncSharedScore} onHandoffScorer={handoffSharedScorer} onFinish={finishMatch} />}
+      {screen === 'live' && match && <LiveMatch key={DEMO_MODE ? `demo-${route?.params?.demoLiveToken || 0}` : 'live'} match={match} sharedSession={match.sharedLiveMatchId ? nearbyPresence.sharedLiveMatch : null} currentUserId={user?.id} onSyncSharedState={syncSharedScore} onHandoffScorer={handoffSharedScorer} onTakeOverScorer={takeOverSharedScorer} onFinish={finishMatch} />}
       {screen === 'result' && result && <ResultScreen result={result} saveState={resultSaveState === 'idle' ? 'saved' : resultSaveState} saveError={resultSaveError} onRetrySave={() => recordCompletedResult(result)} onRematch={!match?.sharedLiveMatchId || nearbyPresence.sharedLiveMatch?.host_id === user?.id ? () => startMatch(match) : null} onNewMatch={reset} />}
       </>}
       <LeaveMatchDialog
@@ -2710,6 +2777,7 @@ const lightStyles = createMobileStyleSheet({
   primaryButton: { minHeight: 54, marginTop: 24, paddingHorizontal: 17, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8, borderRadius: 15, backgroundColor: C.optic }, primaryText: { flex: 1, color: '#0E2321', fontSize: 13, fontWeight: '900', textAlign: 'center' }, wizardActions: { marginTop: 2, flexDirection: 'row', alignItems: 'flex-end', gap: 8 }, wizardPrimary: { flex: 1 }, wizardBack: { minWidth: 88, minHeight: 54, marginTop: 24, paddingHorizontal: 13, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 5, borderRadius: 15, borderWidth: 1, borderColor: C.line, backgroundColor: C.surface }, wizardBackText: { color: C.teal, fontSize: 10, fontWeight: '900' }, joinedMatchCard: { marginTop: 2, overflow: 'hidden', padding: 16, borderWidth: 1, borderColor: C.line, borderRadius: 20, borderBottomLeftRadius: 9, borderBottomRightRadius: 9, backgroundColor: C.surface, ...shadow }, joinedMatchHead: { flexDirection: 'row', alignItems: 'center', gap: 11 }, joinedHostAvatar: { width: 50, height: 50, alignItems: 'center', justifyContent: 'center', borderRadius: 16 }, joinedHostInitials: { color: C.surface, fontSize: 11, fontWeight: '900' }, joinedMatchEyebrow: { color: C.teal, fontSize: 7, fontWeight: '900', letterSpacing: .8 }, joinedMatchHost: { marginTop: 2, color: C.ink, fontSize: 15, fontWeight: '900' }, joinedMatchLead: { marginTop: 3, color: C.ink40, fontSize: 8, lineHeight: 12 }, joinedConfirmedBadge: { width: 34, height: 34, alignItems: 'center', justifyContent: 'center', borderRadius: 17, backgroundColor: C.optic }, joinedMatchDetails: { minHeight: 67, marginTop: 15, paddingVertical: 11, flexDirection: 'row', alignItems: 'center', borderTopWidth: 1, borderBottomWidth: 1, borderColor: C.line }, joinedMatchDetail: { minWidth: 0, flex: 1, paddingHorizontal: 4, flexDirection: 'row', alignItems: 'center', gap: 8 }, joinedDetailIcon: { width: 34, height: 34, alignItems: 'center', justifyContent: 'center', borderRadius: 11, backgroundColor: '#E5F0ED' }, joinedDetailLabel: { color: C.ink40, fontSize: 6, fontWeight: '900', letterSpacing: .65 }, joinedDetailValue: { marginTop: 2, color: C.ink, fontSize: 9, fontWeight: '900' }, joinedDetailDivider: { width: 1, height: 38, marginHorizontal: 7, backgroundColor: C.line }, joinedRulesRow: { minHeight: 34, paddingTop: 11, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6 }, joinedRulesText: { color: C.ink40, fontSize: 8, fontWeight: '700' }, joinedWaitingCard: { marginTop: 12, padding: 16, flexDirection: 'row', alignItems: 'center', gap: 12, borderWidth: 1, borderColor: C.teal, borderRadius: 18, backgroundColor: '#E5F0ED' }, joinedWaitingIcon: { width: 45, height: 45, alignItems: 'center', justifyContent: 'center', borderRadius: 23, backgroundColor: C.optic }, joinedWaitingEyebrow: { color: C.teal, fontSize: 7, fontWeight: '900', letterSpacing: .8 }, joinedWaitingTitle: { marginTop: 3, color: C.ink, fontSize: 13, fontWeight: '900' }, joinedWaitingText: { marginTop: 4, color: C.ink40, fontSize: 9, lineHeight: 14 }, leaveJoinedButton: { minWidth: 72, minHeight: 44, paddingHorizontal: 11, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 5, borderWidth: 1, borderColor: C.line, borderRadius: 13, backgroundColor: C.surface }, leaveJoinedText: { color: C.brick, fontSize: 10, fontWeight: '900' }, disabled: { opacity: .45 }, validation: { marginTop: 8, color: C.brick, fontSize: 9, textAlign: 'center' }, pressed: { opacity: .78, transform: [{ scale: .985 }] },
   liveContent: { paddingBottom: 42 }, liveHero: { paddingHorizontal: 20, paddingTop: 20, paddingBottom: 14, backgroundColor: C.ink }, liveHeader: { minHeight: 48, flexDirection: 'row', alignItems: 'center', gap: 10 }, heroIconButton: { width: 42, height: 42, alignItems: 'center', justifyContent: 'center', borderRadius: 21, borderWidth: 1, borderColor: 'rgba(255,255,255,.2)' }, liveHeaderCopy: { flex: 1 }, liveEyebrow: { color: 'rgba(255,255,255,.55)', fontSize: 8, fontWeight: '800', letterSpacing: .9 }, liveTitle: { marginTop: 2, color: C.surface, fontSize: 23, fontWeight: '800' }, timerChip: { minHeight: 34, paddingHorizontal: 10, flexDirection: 'row', alignItems: 'center', gap: 5, borderRadius: 17, backgroundColor: 'rgba(255,255,255,.12)' }, timerText: { color: C.surface, fontSize: 11, fontWeight: '800', fontVariant: ['tabular-nums'] }, matchMeta: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 7 }, matchMetaText: { color: 'rgba(255,255,255,.62)', fontSize: 7, fontWeight: '800', letterSpacing: .5 }, metaDot: { width: 3, height: 3, borderRadius: 2, backgroundColor: C.optic },
   watchVoiceButton: { minHeight: 36, paddingHorizontal: 9, flexShrink: 0, flexDirection: 'row', alignItems: 'center', gap: 4, borderRadius: 11, borderWidth: 1, borderColor: C.line, backgroundColor: C.surface }, watchVoiceButtonOn: { borderColor: '#D6E94A', backgroundColor: '#D6E94A' }, watchVoiceText: { color: C.teal, fontSize: 8, fontWeight: '900', letterSpacing: .4 }, watchVoiceTextOn: { color: '#0E2321' },
+  takeOverBanner: { marginHorizontal: 20, marginTop: 8, padding: 12, flexDirection: 'row', alignItems: 'center', gap: 9, borderRadius: 13, backgroundColor: '#D6E94A' }, takeOverTitle: { color: '#0E2321', fontSize: 11, fontWeight: '900' }, takeOverText: { marginTop: 2, color: '#0E2321', fontSize: 9, lineHeight: 12, opacity: .75 },
   scorerWatchBanner: { marginHorizontal: 20, marginTop: 14, padding: 12, flexDirection: 'row', alignItems: 'center', gap: 9, borderWidth: 1, borderColor: C.line, borderRadius: 13, backgroundColor: '#E5F0ED' }, scorerWatchTitle: { color: C.teal, fontSize: 10, fontWeight: '900' }, scorerWatchText: { marginTop: 2, color: C.ink40, fontSize: 8, lineHeight: 12 }, pausedBanner: { marginHorizontal: 20, marginTop: 14, padding: 11, flexDirection: 'row', justifyContent: 'center', alignItems: 'center', gap: 7, borderRadius: 11, backgroundColor: '#E5F0ED' }, pausedText: { color: C.teal, fontSize: 10, fontWeight: '800' },
   focusTracker: { marginHorizontal: 20, marginTop: 14, padding: 14, borderRadius: 18, borderWidth: 1, borderColor: C.line, backgroundColor: C.surface, ...shadow }, focusTrackerAchieved: { borderColor: '#B9D22C', backgroundColor: '#FAFCEB' }, focusTrackerMissed: { borderColor: '#E2B5A9', backgroundColor: '#FFF9F7' }, focusTrackerHead: { flexDirection: 'row', alignItems: 'center', gap: 9 }, focusTrackerIcon: { width: 38, height: 38, borderRadius: 12, alignItems: 'center', justifyContent: 'center', backgroundColor: C.optic }, focusTrackerCopy: { flex: 1 }, focusTrackerEyebrow: { color: C.teal, fontSize: 7, fontWeight: '900', letterSpacing: .7 }, focusTrackerTitle: { marginTop: 3, color: C.ink, fontSize: 10, lineHeight: 14, fontWeight: '800' }, focusTrackerScore: { color: C.ink, fontSize: 21, fontWeight: '900' }, returnDots: { marginTop: 13, flexDirection: 'row', justifyContent: 'space-between', gap: 3 }, returnDot: { flex: 1, aspectRatio: 1, maxWidth: 28, alignItems: 'center', justifyContent: 'center', borderRadius: 14, borderWidth: 1, borderColor: C.line, backgroundColor: C.paper }, returnDotDeep: { borderColor: C.teal, backgroundColor: C.teal }, returnDotShort: { borderColor: '#E2B5A9', backgroundColor: '#F7EAE6' }, returnDotText: { color: C.ink40, fontSize: 7, fontWeight: '900' }, returnDotTextRecorded: { color: C.surface }, returnActions: { marginTop: 13, flexDirection: 'row', gap: 8 }, returnButton: { flex: 1, minHeight: 45, paddingHorizontal: 9, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 5, borderRadius: 12 }, returnButtonDeep: { backgroundColor: C.teal }, returnButtonShort: { borderWidth: 1, borderColor: '#E2B5A9', backgroundColor: '#F7EAE6' }, returnButtonText: { color: C.surface, fontSize: 9, fontWeight: '900' }, returnButtonShortText: { color: C.brick, fontSize: 9, fontWeight: '900' }, returnUndo: { alignSelf: 'center', minHeight: 34, paddingHorizontal: 9, flexDirection: 'row', alignItems: 'center', gap: 4 }, returnUndoText: { color: C.ink40, fontSize: 8, fontWeight: '700' }, focusTrackerResult: { marginTop: 12, color: C.ink70, fontSize: 9, lineHeight: 14, fontWeight: '700', textAlign: 'center' },
   liveCourtCard: { marginHorizontal: 20, marginTop: 16, overflow: 'hidden', borderRadius: 22, borderBottomLeftRadius: 9, borderBottomRightRadius: 9, borderWidth: 1, borderColor: C.line, backgroundColor: C.surface }, liveCourtHead: { minHeight: 62, paddingHorizontal: 14, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }, liveCourtEyebrow: { color: C.ink40, fontSize: 7, fontWeight: '900', letterSpacing: .8 }, liveCourtTitle: { marginTop: 1, color: C.ink, fontSize: 17, fontWeight: '900' }, liveNowPill: { minHeight: 27, paddingHorizontal: 9, flexDirection: 'row', alignItems: 'center', gap: 5, borderRadius: 14, backgroundColor: C.ink }, liveNowDot: { width: 7, height: 7, borderRadius: 4, backgroundColor: C.optic }, liveNowText: { color: C.surface, fontSize: 7, fontWeight: '900', letterSpacing: .6 },

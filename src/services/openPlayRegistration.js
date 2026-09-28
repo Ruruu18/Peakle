@@ -55,6 +55,30 @@ export function mapOpenPlaySession(row) {
     registeredCount: Number(row.registered_count || 0),
     registration: mapOpenPlayRegistration(row.my_registration),
     liveState: row.live_state || null,
+    hosted: mapHostedOpenPlay(row.hosted),
+  };
+}
+
+// Player-hosted open play: no venue, courts filled automatically by Peakle.
+function mapHostedOpenPlay(hosted) {
+  if (!hosted) return null;
+  return {
+    scheduledGameId: hosted.scheduled_game_id,
+    place: hosted.place || '',
+    area: hosted.area || '',
+    courtCount: Number(hosted.court_count || 1),
+    liveStartedAt: hosted.live_started_at,
+    isHost: Boolean(hosted.is_host),
+    canCheckIn: Boolean(hosted.can_check_in),
+    players: (hosted.players || []).map((player) => ({
+      userId: player.user_id,
+      name: player.name || 'Player',
+      avatar: player.avatar_url || null,
+      isHost: Boolean(player.is_host),
+      state: player.state,
+      queuePosition: player.queue_position == null ? null : Number(player.queue_position),
+      gamesPlayed: Number(player.games_played || 0),
+    })),
   };
 }
 
@@ -321,6 +345,42 @@ export async function undoOpenPlayRally(matchId) {
   });
   if (error) throw error;
   return single(data);
+}
+
+export async function startHostedOpenPlay({ gameId, courtCount, presentIds }) {
+  const { data, error } = await requireSupabase().rpc('start_hosted_open_play', {
+    p_game_id: gameId,
+    p_court_count: courtCount,
+    p_present_user_ids: presentIds,
+  });
+  if (error) throw error;
+  const result = single(data);
+  if (!result?.session_id) throw new Error('Open play could not be started.');
+  return result.session_id;
+}
+
+// The live session a scheduled open play is running, or null before it starts.
+export async function getHostedOpenPlay(gameId) {
+  const { data, error } = await requireSupabase().rpc('get_hosted_open_play', { p_game_id: gameId });
+  if (error) throw error;
+  const row = single(data);
+  if (!row?.session_id) return null;
+  return { sessionId: row.session_id, status: row.status, liveStartedAt: row.live_started_at, endedAt: row.ended_at };
+}
+
+export async function checkInHostedOpenPlay(sessionId, userId = null) {
+  const { error } = await requireSupabase().rpc('check_in_hosted_open_play', { p_session_id: sessionId, p_user_id: userId });
+  if (error) throw error;
+}
+
+export async function leaveHostedOpenPlayQueue(sessionId, userId = null) {
+  const { error } = await requireSupabase().rpc('leave_hosted_open_play_queue', { p_session_id: sessionId, p_user_id: userId });
+  if (error) throw error;
+}
+
+export async function endHostedOpenPlay(sessionId) {
+  const { error } = await requireSupabase().rpc('end_hosted_open_play', { p_session_id: sessionId });
+  if (error) throw error;
 }
 
 export async function completeOpenPlayMatchByScorer(matchId, scores) {

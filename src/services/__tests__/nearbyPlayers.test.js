@@ -15,6 +15,8 @@ import {
   getActiveNearbyLiveMatchId,
   updateNearbyLiveMatch,
   handoffNearbyLiveScorer,
+  takeOverNearbyLiveScorer,
+  touchNearbyLiveScorer,
   cancelMatchInvite,
   searchRegisteredPlayers,
 } from '../nearbyPlayers';
@@ -391,6 +393,33 @@ describe('listMatchInvites (the 60s pending / 15-minute history window logic)', 
     expect(result.removedInvite).toEqual(removed);
   });
 
+  it.each(['ended', 'completed'])('releases both players from an accepted invite once the match is %s', async (status) => {
+    const finished = { id: 'finished', status: 'accepted', live_match_id: 'old-match', live_match: { status } };
+    const next = { id: 'next', status: 'accepted', live_match_id: 'new-match', live_match: { status: 'live' } };
+    const client = buildInviteListClient({ incomingData: [finished], outgoingData: [finished, next] });
+    requireSupabase.mockReturnValue(client);
+    const result = await listMatchInvites();
+    expect(result.joinedInvite).toBeNull();
+    expect(result.outgoing).toEqual([next]);
+  });
+
+  it('keeps accepted invites for setup and paused matches', async () => {
+    const paused = { id: 'paused', status: 'accepted', live_match_id: 'match', live_match: { status: 'paused' } };
+    const setup = { id: 'setup', status: 'accepted', live_match_id: null, live_match: null };
+    const client = buildInviteListClient({ incomingData: [paused], outgoingData: [paused, setup] });
+    requireSupabase.mockReturnValue(client);
+    const result = await listMatchInvites();
+    expect(result.joinedInvite).toEqual(paused);
+    expect(result.outgoing).toEqual([paused, setup]);
+  });
+
+  it('does not surface an old removal after a more recent match ended', async () => {
+    const finished = { id: 'finished', status: 'accepted', live_match: { status: 'ended' } };
+    const removed = { id: 'removed', status: 'removed' };
+    requireSupabase.mockReturnValue(buildInviteListClient({ incomingData: [finished, removed] }));
+    expect((await listMatchInvites()).removedInvite).toBeNull();
+  });
+
   it('does not surface a removal once a newer joinedInvite exists', async () => {
     const joined = { status: 'accepted', created_at: new Date(NOW - 10 * 1000).toISOString() };
     const removed = { status: 'removed', created_at: new Date(NOW - 60 * 1000).toISOString() };
@@ -425,6 +454,20 @@ describe('listMatchInvites (the 60s pending / 15-minute history window logic)', 
   });
 });
 
+describe('touchNearbyLiveScorer', () => {
+  it('checks the scorer in for the match', async () => {
+    const rpc = jest.fn(async () => ({ data: null, error: null }));
+    requireSupabase.mockReturnValue({ rpc });
+    await touchNearbyLiveScorer('m1');
+    expect(rpc).toHaveBeenCalledWith('touch_nearby_live_scorer', { p_match_id: 'm1' });
+  });
+
+  it('propagates a server error', async () => {
+    requireSupabase.mockReturnValue({ rpc: jest.fn(async () => ({ data: null, error: new Error('nope') })) });
+    await expect(touchNearbyLiveScorer('m1')).rejects.toThrow('nope');
+  });
+});
+
 describe('simple rpc-backed invite/match actions', () => {
   const cases = [
     { label: 'respondToMatchInvite', fn: () => respondToMatchInvite('inv1', true), rpcName: 'respond_match_invite', rpcArgs: { p_invite_id: 'inv1', p_accept: true } },
@@ -432,6 +475,7 @@ describe('simple rpc-backed invite/match actions', () => {
     { label: 'removeMatchInvitee', fn: () => removeMatchInvitee('inv1'), rpcName: 'remove_match_invitee', rpcArgs: { p_invite_id: 'inv1' } },
     { label: 'cancelMatchInvite', fn: () => cancelMatchInvite('inv1'), rpcName: 'cancel_match_invite', rpcArgs: { p_invite_id: 'inv1' } },
     { label: 'handoffNearbyLiveScorer', fn: () => handoffNearbyLiveScorer('m1', 'u2'), rpcName: 'handoff_nearby_live_scorer', rpcArgs: { p_match_id: 'm1', p_scorer_id: 'u2' } },
+    { label: 'takeOverNearbyLiveScorer', fn: () => takeOverNearbyLiveScorer('m1'), rpcName: 'take_over_nearby_live_scorer', rpcArgs: { p_match_id: 'm1' } },
   ];
 
   it.each(cases)('$label sends the right rpc args and returns the data', async ({ fn, rpcName, rpcArgs }) => {

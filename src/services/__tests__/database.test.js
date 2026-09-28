@@ -50,6 +50,11 @@ describe('calculatePerformanceRating', () => {
     expect(rating).toBe(2.9);
   });
 
+  it('leaves the rating unchanged after a 0-0 draw', () => {
+    const rating = calculatePerformanceRating([{ result: 'D', games: [{ homeScore: 0, awayScore: 0 }] }]);
+    expect(rating).toBe(3);
+  });
+
   it('never drops the rating below the 1.0 floor across a long losing streak', () => {
     const losses = Array.from({ length: 40 }, () => ({ result: 'L', games: [{ homeScore: 0, awayScore: 11 }] }));
     expect(calculatePerformanceRating(losses)).toBe(1);

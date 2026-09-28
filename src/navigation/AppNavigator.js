@@ -27,6 +27,7 @@ import { APP_VERSION_LABEL } from '../config/appInfo';
 // Inbox hosts both private messages and community chats (its segments).
 const { DirectChatScreen, InboxScreen } = require('../screens/DirectMessagesScreens');
 import PublicProfileScreen from '../screens/PublicProfileScreen';
+import PlayerSearchScreen from '../screens/PlayerSearchScreen';
 import ConnectionsScreen from '../screens/ConnectionsScreen';
 import LeaderboardScreen from '../screens/LeaderboardScreen';
 import CompetitionDivisionScreen from '../screens/CompetitionDivisionScreen';
@@ -143,7 +144,7 @@ function PeakleTabBar({ state, descriptors, navigation }) {
   const [leavingMatch, setLeavingMatch] = useState(false);
   const [leaveError, setLeaveError] = useState('');
   const [pendingRoute, setPendingRoute] = useState(null);
-  const alwaysHiddenRoutes = new Set([COURT_BOOKING_ENABLED ? 'Schedule' : 'Book', 'Pickleball', 'Activities', 'ActivityDetails', 'OpenPlayActivity', 'Privacy', 'LegalDocument', 'AccountDeletion', 'PaymentHistory', 'HelpSupport', 'SupportChat', 'CommunityChat', 'NotificationTest', 'Inbox', 'DirectChat', 'PublicProfile', 'Connections', 'Leaderboard', 'CompetitionDivision', 'OrganizerPreview']);
+  const alwaysHiddenRoutes = new Set([COURT_BOOKING_ENABLED ? 'Schedule' : 'Book', 'Pickleball', 'Activities', 'ActivityDetails', 'OpenPlayActivity', 'Privacy', 'LegalDocument', 'AccountDeletion', 'PaymentHistory', 'HelpSupport', 'SupportChat', 'CommunityChat', 'NotificationTest', 'Inbox', 'DirectChat', 'PublicProfile', 'PlayerSearch', 'Connections', 'Leaderboard', 'CompetitionDivision', 'OrganizerPreview']);
   const currentRoute = state.routes[state.index];
   // A team chat opened from Chats lives on the Team route but belongs to Chats.
   const chatOwner = currentRoute.name === 'Team' ? (currentRoute.params?.chatOwner || currentRoute.params?.chatReturnTo) : undefined;
@@ -166,7 +167,8 @@ function PeakleTabBar({ state, descriptors, navigation }) {
     : null;
   const legacyMobileOwner = currentRoute.name === 'Pickleball'
     ? (currentRoute.params?.ownerTab || ({ Ratings: 'Profile', Privacy: 'Profile', 'Find play': 'Play', Compete: DISCOVERY_TAB }[currentRoute.params?.openTab]))
-    : currentRoute.name === 'Leaderboard' ? 'Home'
+    : ['Leaderboard', 'PlayerSearch'].includes(currentRoute.name) ? 'Home'
+    : currentRoute.name === 'PublicProfile' ? (currentRoute.params?.ownerTab || 'Profile')
     : ['Privacy', 'HelpSupport', 'SupportChat', 'NotificationTest', 'Connections', 'OrganizerPreview'].includes(currentRoute.name) ? 'Profile'
     : ['Inbox', 'DirectChat', 'CommunityChat'].includes(currentRoute.name) ? (currentRoute.params?.ownerTab || 'Team')
     : ['Activities', 'ActivityDetails', 'OpenPlayActivity'].includes(currentRoute.name) ? (currentRoute.params?.returnTo === 'Schedule' ? 'Schedule' : 'Home')
@@ -179,7 +181,7 @@ function PeakleTabBar({ state, descriptors, navigation }) {
   const contextualOwner = chatOwner || (desktop ? ({
     ...(COURT_BOOKING_ENABLED ? { ActivityDetails: 'Activities', OpenPlayActivity: 'Activities' } : {}),
     Privacy: 'Profile', LegalDocument: 'Profile', AccountDeletion: 'Profile',
-    PaymentHistory: 'Profile', PublicProfile: 'Profile', Connections: 'Profile', OrganizerPreview: 'Profile',
+    PaymentHistory: 'Profile', PublicProfile: currentRoute.params?.ownerTab || 'Profile', Connections: 'Profile', OrganizerPreview: 'Profile',
     SupportChat: 'HelpSupport', CommunityChat: 'Inbox', CompetitionDivision: DISCOVERY_TAB,
   }[currentRoute.name] || mobileOwner) : mobileOwner);
   const guardedNavigate = (name, params) => {
@@ -319,6 +321,7 @@ function PlayerWorkspace({ isDark }) {
       <Tab.Screen name="Inbox" component={InboxScreen} options={ACCOUNT_MENU_NAV ? { tabBarLabel: 'Chats', lazy: false } : undefined} />
       {PRIVATE_MESSAGES_ENABLED ? <Tab.Screen name="DirectChat" component={DirectChatScreen} /> : null}
       <Tab.Screen name="PublicProfile" component={PublicProfileScreen} />
+      <Tab.Screen name="PlayerSearch" component={PlayerSearchScreen} />
       <Tab.Screen name="Connections" component={ConnectionsScreen} />
       <Tab.Screen name="Leaderboard" component={LeaderboardScreen} />
       <Tab.Screen name="CompetitionDivision" component={CompetitionDivisionScreen} />

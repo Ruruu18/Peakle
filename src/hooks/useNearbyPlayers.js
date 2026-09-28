@@ -18,12 +18,17 @@ import {
   sendMatchInvite,
   startNearbyLiveMatch,
   stopPresence,
+  takeOverNearbyLiveScorer,
+  touchNearbyLiveScorer,
   updateNearbyLiveMatch,
 } from '../services/nearbyPlayers';
 import { DEMO_MODE } from '../config/demoMode';
 import { DEMO_NEARBY_PLAYERS } from '../config/demoData';
 
 const REFRESH_MS = 20_000;
+const LIVE_MATCH_REFRESH_MS = 3_000;
+// Must stay well under the 45 second silence take_over_nearby_live_scorer requires.
+const SCORER_CHECK_IN_MS = 20_000;
 const PRESENCE_AVAILABILITY = { free: 'available', away: 'offline', in_play: 'busy' };
 
 function friendlyError(error) {
@@ -47,6 +52,8 @@ export default function useNearbyPlayers(radiusKm = 25) {
   const [joinedInvite, setJoinedInvite] = useState(null);
   const [removedInvite, setRemovedInvite] = useState(null);
   const [sharedLiveMatch, setSharedLiveMatch] = useState(null);
+  const sharedLiveMatchRef = useRef(null);
+  const liveMatchIdRef = useRef(null);
   const [trackedLiveMatchId, setTrackedLiveMatchId] = useState(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
@@ -105,6 +112,7 @@ export default function useNearbyPlayers(radiusKm = 25) {
   // following a session once it is known so a player who backgrounded the
   // app still receives the other player's "match ended" update.
   const liveMatchId = inviteLiveMatchId || trackedLiveMatchId;
+  liveMatchIdRef.current = liveMatchId;
 
   useEffect(() => {
     if (inviteLiveMatchId) setTrackedLiveMatchId(inviteLiveMatchId);
@@ -122,20 +130,32 @@ export default function useNearbyPlayers(radiusKm = 25) {
 
   useEffect(() => { recoverActiveLiveMatch(); }, [recoverActiveLiveMatch]);
 
-  const refreshLiveMatch = useCallback(async (matchId = liveMatchId) => {
+  // Realtime, polling and score writes can finish out of order. Never replace
+  // an ended session with an older live score, or a new match with an old one.
+  const applyLiveMatch = useCallback((session) => {
+    if (!session || session.id !== liveMatchIdRef.current) return null;
+    const current = sharedLiveMatchRef.current;
+    if (current?.id === session.id && Number(session.revision) < Number(current.revision)) return current;
+    const next = current?.id === session.id ? { ...current, ...session } : session;
+    sharedLiveMatchRef.current = next;
+    setSharedLiveMatch(next);
+    return next;
+  }, []);
+
+  const refreshLiveMatch = useCallback(async (matchId = liveMatchIdRef.current) => {
     if (!matchId) {
+      sharedLiveMatchRef.current = null;
       setSharedLiveMatch(null);
       return null;
     }
     try {
       const session = await getNearbyLiveMatch(matchId);
-      setSharedLiveMatch(session);
-      return session;
+      return applyLiveMatch(session);
     } catch (nextError) {
       setError(friendlyError(nextError));
       return null;
     }
-  }, [liveMatchId]);
+  }, [applyLiveMatch]);
 
   const publish = useCallback(async (locationOverride) => {
     const location = locationOverride || locationRef.current;
@@ -226,11 +246,24 @@ export default function useNearbyPlayers(radiusKm = 25) {
     if (!settingsReady || !user?.id) return undefined;
     const timer = setInterval(() => {
       refreshInvites();
-      if (liveMatchId) refreshLiveMatch(liveMatchId);
+      // A rematch can reuse this session ID. Keep a slower recovery check even
+      // after the fast live polling stops at the final result.
+      if (['completed', 'ended'].includes(sharedLiveMatchRef.current?.status)) refreshLiveMatch();
       if (visibleRef.current) publishFreshPresence().catch(() => {});
     }, REFRESH_MS);
     return () => clearInterval(timer);
-  }, [liveMatchId, publishFreshPresence, refreshInvites, refreshLiveMatch, settingsReady, user?.id]);
+  }, [publishFreshPresence, refreshInvites, refreshLiveMatch, settingsReady, user?.id]);
+
+  // Keep active matches responsive even when the realtime socket misses an
+  // update. Presence and player discovery can keep their slower refresh rate.
+  const liveMatchFinished = ['completed', 'ended'].includes(sharedLiveMatch?.status);
+  useEffect(() => {
+    if (!liveMatchId || liveMatchFinished || !user?.id) return undefined;
+    const timer = setInterval(() => {
+      if (!['inactive', 'background'].includes(appStateRef.current)) refreshLiveMatch(liveMatchId);
+    }, LIVE_MATCH_REFRESH_MS);
+    return () => clearInterval(timer);
+  }, [liveMatchId, liveMatchFinished, refreshLiveMatch, user?.id]);
 
   useEffect(() => {
     const listener = AppState.addEventListener('change', (nextState) => {
@@ -257,10 +290,26 @@ export default function useNearbyPlayers(radiusKm = 25) {
     refreshLiveMatch();
     if (!supabase || !liveMatchId) return undefined;
     const channel = supabase.channel(`nearby-live-match-${liveMatchId}`)
-      .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'nearby_live_matches', filter: `id=eq.${liveMatchId}` }, () => refreshLiveMatch(liveMatchId))
-      .subscribe();
+      .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'nearby_live_matches', filter: `id=eq.${liveMatchId}` }, ({ new: session }) => {
+        applyLiveMatch(session);
+      })
+      .subscribe((status) => {
+        if (status === 'SUBSCRIBED') refreshLiveMatch(liveMatchId);
+      });
     return () => { supabase.removeChannel(channel); };
-  }, [liveMatchId, refreshLiveMatch]);
+  }, [applyLiveMatch, liveMatchId, refreshLiveMatch]);
+
+  // While this device holds the scoring controls, check in so teammates only get
+  // the take-over option when the scorer's phone has actually gone quiet.
+  const scoringMatchId = sharedLiveMatch?.scorer_id === user?.id && ['live', 'paused'].includes(sharedLiveMatch?.status) ? sharedLiveMatch.id : null;
+  useEffect(() => {
+    if (!scoringMatchId || DEMO_MODE) return undefined;
+    const checkIn = () => { touchNearbyLiveScorer(scoringMatchId).catch(() => {}); };
+    checkIn();
+    const timer = setInterval(checkIn, SCORER_CHECK_IN_MS);
+    const subscription = AppState.addEventListener('change', (state) => { if (state === 'active') checkIn(); });
+    return () => { clearInterval(timer); subscription.remove(); };
+  }, [scoringMatchId]);
 
   useEffect(() => () => {
     if (user?.id && visibleRef.current) stopPresence(user.id).catch(() => {});
@@ -361,29 +410,28 @@ export default function useNearbyPlayers(radiusKm = 25) {
     setError('');
     try {
       const created = await startNearbyLiveMatch({ setupId, configuration, initialState, scorerId });
-      await refreshInvites();
-      const session = await getNearbyLiveMatch(created.id);
+      liveMatchIdRef.current = created.id;
       setTrackedLiveMatchId(created.id);
-      setSharedLiveMatch(session || created);
-      return session || created;
+      applyLiveMatch(created);
+      await refreshInvites();
+      return await refreshLiveMatch(created.id) || created;
     } catch (nextError) {
       setError(friendlyError(nextError));
       throw nextError;
     }
-  }, [refreshInvites]);
+  }, [applyLiveMatch, refreshInvites, refreshLiveMatch]);
 
   const syncSharedMatch = useCallback(async (matchId, expectedRevision, state, status = null) => {
     setError('');
     try {
       const changed = await updateNearbyLiveMatch(matchId, expectedRevision, state, status);
-      setSharedLiveMatch((current) => ({ ...current, ...changed }));
-      return changed;
+      return applyLiveMatch(changed) || changed;
     } catch (nextError) {
       setError(friendlyError(nextError));
       await refreshLiveMatch(matchId);
       throw nextError;
     }
-  }, [refreshLiveMatch]);
+  }, [applyLiveMatch, refreshLiveMatch]);
 
   const handoffSharedScorer = useCallback(async (matchId, scorerId) => {
     setError('');
@@ -397,14 +445,33 @@ export default function useNearbyPlayers(radiusKm = 25) {
     }
   }, [refreshLiveMatch]);
 
+  const takeOverSharedScorer = useCallback(async (matchId) => {
+    setError('');
+    try {
+      const changed = await takeOverNearbyLiveScorer(matchId);
+      await refreshLiveMatch(matchId);
+      return changed;
+    } catch (nextError) {
+      setError(friendlyError(nextError));
+      await refreshLiveMatch(matchId);
+      throw nextError;
+    }
+  }, [refreshLiveMatch]);
+
+  // Release the joined-match UI as soon as this device sees the end, including
+  // when an older invite refresh still says the invitation is accepted.
+  const activeOutgoingInvites = useMemo(() => outgoingInvites.filter((invite) =>
+    !liveMatchFinished || invite.live_match_id !== sharedLiveMatch.id), [outgoingInvites, liveMatchFinished, sharedLiveMatch?.id]);
+  const activeJoinedInvite = liveMatchFinished && joinedInvite?.live_match_id === sharedLiveMatch.id ? null : joinedInvite;
+
   return {
     visible,
     loading,
     error,
     players,
     incomingInvites,
-    outgoingInvites,
-    joinedInvite,
+    outgoingInvites: activeOutgoingInvites,
+    joinedInvite: activeJoinedInvite,
     removedInvite,
     sharedLiveMatch,
     setDiscoveryVisible,
@@ -416,6 +483,7 @@ export default function useNearbyPlayers(radiusKm = 25) {
     startSharedMatch,
     syncSharedMatch,
     handoffSharedScorer,
+    takeOverSharedScorer,
     refreshLiveMatch,
     refresh: () => Promise.all([refreshPlayers(), refreshInvites()]),
   };

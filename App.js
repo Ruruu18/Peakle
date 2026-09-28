@@ -43,7 +43,7 @@ const linking = {
       AccountDeletion: 'account-deletion', PaymentHistory: 'payment-history',
       HelpSupport: 'help', SupportChat: 'support', Inbox: 'chats', CommunityChat: 'chats/:eventKind/:eventId', PublicProfile: 'players/:userId',
       DirectChat: 'chats/direct/:conversationId?',
-      Connections: 'connections', Leaderboard: 'leaderboard', OrganizerPreview: 'organizer',
+      PlayerSearch: 'players', Connections: 'connections', Leaderboard: 'leaderboard', OrganizerPreview: 'organizer',
       CompetitionDivision: 'competitions/:competitionId/divisions/:divisionId',
       // While booking is paused, old /explore links land on Schedule instead.
       ...(COURT_BOOKING_ENABLED

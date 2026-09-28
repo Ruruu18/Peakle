@@ -161,23 +161,26 @@ export async function listMatchInvites() {
   const historyCutoff = new Date(Date.now() - JOINED_INVITE_WINDOW_MS).toISOString();
   const [incomingResult, outgoingResult] = await Promise.all([
     client.from('match_invites')
-      .select('*, sender:profiles!match_invites_sender_id_fkey(id, display_name, avatar_url)')
+      .select('*, sender:profiles!match_invites_sender_id_fkey(id, display_name, avatar_url), live_match:nearby_live_matches!match_invites_live_match_id_fkey(status)')
       .eq('recipient_id', auth.user.id).gte('created_at', historyCutoff).order('created_at', { ascending: false }),
     client.from('match_invites')
-      .select('*, recipient:profiles!match_invites_recipient_id_fkey(id, display_name, avatar_url)')
+      .select('*, recipient:profiles!match_invites_recipient_id_fkey(id, display_name, avatar_url), live_match:nearby_live_matches!match_invites_live_match_id_fkey(status)')
       .eq('sender_id', auth.user.id).gte('created_at', historyCutoff).order('created_at', { ascending: false }),
   ]);
   const error = incomingResult.error || outgoingResult.error;
   if (error) throw error;
-  const incomingRows = incomingResult.data || [];
+  // Accepted invitations remain in history after scoring ends. They must no
+  // longer hold either player in the joined lineup, including after a restart.
+  const isOpenInvite = (invite) => !['completed', 'ended'].includes(invite.live_match?.status);
+  const incomingRows = (incomingResult.data || []).filter(isOpenInvite);
   const joinedInvite = incomingRows.find((invite) => invite.status === 'accepted') || null;
   return {
     incoming: incomingRows.filter((invite) => invite.status === 'pending' && invite.created_at >= pendingCutoff),
     joinedInvite,
     // Only surface a removal when it is the recipient's latest invitation
     // event. This prevents an older removal from interrupting a later re-invite.
-    removedInvite: !joinedInvite && incomingRows[0]?.status === 'removed' ? incomingRows[0] : null,
-    outgoing: outgoingResult.data || [],
+    removedInvite: !joinedInvite && incomingResult.data?.[0]?.status === 'removed' ? incomingResult.data[0] : null,
+    outgoing: (outgoingResult.data || []).filter(isOpenInvite),
   };
 }
 
@@ -253,6 +256,19 @@ export async function handoffNearbyLiveScorer(matchId, scorerId) {
     p_match_id: matchId,
     p_scorer_id: scorerId,
   });
+  if (error) throw error;
+  return data;
+}
+
+// Scorer check-in so other players can tell a live scorer from a dead phone.
+export async function touchNearbyLiveScorer(matchId) {
+  const { error } = await requireSupabase().rpc('touch_nearby_live_scorer', { p_match_id: matchId });
+  if (error) throw error;
+}
+
+// Any match member can claim scoring once the scorer has stopped checking in.
+export async function takeOverNearbyLiveScorer(matchId) {
+  const { data, error } = await requireSupabase().rpc('take_over_nearby_live_scorer', { p_match_id: matchId });
   if (error) throw error;
   return data;
 }

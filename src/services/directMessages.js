@@ -567,7 +567,8 @@ export async function getPlayerFollowCounts(playerId = null) {
 async function getPlayerFriendCount(client, playerId, fallback) {
   const { data, error } = await client.rpc('get_player_friend_count', { p_player_id: playerId });
   if (error) return fallback;
-  return Number((Array.isArray(data) ? data[0] : data) || 0);
+  const friends = Number((Array.isArray(data) ? data[0] : data) || 0);
+  return Number.isFinite(friends) ? friends : fallback;
 }
 
 async function getPlayerFollowCountsByIds(playerIds) {

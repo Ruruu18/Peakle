@@ -16,10 +16,11 @@ const MIN_AUDIBLE_VOLUME = 0;
 // more likely a mis-hearing of background noise than an actual shouted word.
 const MIN_CONFIDENCE = 0.35;
 const MAX_ERROR_BACKOFF_MS = 4000;
-// Browsers get the library's Web Speech API module; native builds load the
-// optional native module so Expo Go still opens without it.
+// Browsers get Peakle's Web Speech API adapter (which can fall back to on-device
+// recognition); native builds load the optional native module so Expo Go still opens
+// without it.
 const speechRecognitionModule = Platform.OS === 'web'
-  ? require('expo-speech-recognition').ExpoSpeechRecognitionModule
+  ? require('../services/webSpeechRecognition').default
   : requireOptionalNativeModule('ExpoSpeechRecognition');
 
 const RECOVERABLE_ERRORS = new Set(['audio-capture', 'network', 'busy', 'client', 'unknown', 'bad-grammar', 'interrupted']);
@@ -37,7 +38,10 @@ function unavailableMessage(code, nativeMessage = '') {
     return 'This browser cannot recognize speech. Use Chrome, Edge or Safari, or score with taps.';
   }
   if (Platform.OS === 'web' && code === 'network') {
-    return 'Browser speech recognition needs an internet connection. Check your connection, then select Mic again.';
+    if (typeof navigator !== 'undefined' && navigator.onLine === false) {
+      return 'You are offline, and this browser needs an internet connection for speech recognition. Reconnect, then select Mic again.';
+    }
+    return 'This browser could not reach its speech recognition service. Brave, Arc, Opera and in-app browsers often do not include one. Open Peakle in Chrome, Edge or Safari, or score with taps.';
   }
   if (code === 'not-allowed') {
     return 'Microphone or speech recognition access is off. Enable both for Peakle in your device Settings, then select Shout again.';
@@ -323,6 +327,24 @@ export default function useShoutScoring({
       return;
     }
     if (SILENCE_ERRORS.has(event.error) || event.error === 'aborted') return;
+    if (Platform.OS === 'web' && event.error === 'network' && !speechRecognitionModule.isUsingOnDevice()) {
+      // The browser's cloud recognizer is unreachable. Hold the mic closed while trying
+      // Chrome's on-device recognizer; the `end` handler must not restart meanwhile.
+      blockedRef.current = true;
+      clearRestartTimer();
+      speechRecognitionModule.enableOnDeviceRecognition().then((enabled) => {
+        if (!mountedRef.current || !activeRef.current) return;
+        if (!enabled) {
+          blockRecognition('network', event.message);
+          return;
+        }
+        blockedRef.current = false;
+        errorStreakRef.current = 0;
+        sessionActiveRef.current = false;
+        scheduleRestart(50);
+      });
+      return;
+    }
     if (RECOVERABLE_ERRORS.has(event.error)) {
       errorStreakRef.current = Math.min(errorStreakRef.current + 1, 5);
       if (errorStreakRef.current >= 3) blockRecognition(event.error, event.message);

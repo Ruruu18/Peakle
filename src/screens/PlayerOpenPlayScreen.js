@@ -7,10 +7,13 @@ import { createDarkStyleSheet, DARK_CONTENT_COLORS, useTheme } from '../context/
 import { createMobileStyleSheet } from '../utils/mobileStyles';
 import {
   cancelOpenPlayRegistration,
+  checkInHostedOpenPlay,
   checkInOpenPlayPlayer,
   completeOpenPlayMatchByScorer,
+  endHostedOpenPlay,
   getOpenPlaySession,
   joinOpenPlaySession,
+  leaveHostedOpenPlayQueue,
   listDiscoverableOpenPlaySessions,
   recordOpenPlayRally,
   undoOpenPlayRally,
@@ -69,7 +72,7 @@ function StatusCard({ registration, liveState }) {
 
 function LiveRotationCard({ session }) {
   const live = session.liveState;
-  if (!live || !session.registration?.checkedInAt) return null;
+  if (!live || (!session.registration?.checkedInAt && !session.hosted?.isHost)) return null;
   const position = live.queue_position;
   const estimate = live.estimated_wait_minutes;
   const latestDecision = live.latest_decision;
@@ -343,6 +346,52 @@ function SessionCard({ session, userLocation, onPress }) {
   </Pressable>;
 }
 
+const HOSTED_STATE_LABELS = { playing: 'On court', queued: 'In queue', break: 'On a break', not_here: 'Not here yet' };
+
+function hostedStatus(me, ended) {
+  if (ended) return ['flag-outline', 'Open play has ended', 'The host ended this open play. Finished matches are saved in your match history.'];
+  if (me?.state === 'queued') return ['checkmark-done', `You’re #${me.queuePosition} in the queue`, 'Peakle puts you on the next open court automatically. Stay nearby.'];
+  if (me?.state === 'break') return ['cafe-outline', 'You’re on a break', 'Tap I’m back when you’re ready. You rejoin at the end of the queue.'];
+  return ['location-outline', 'Tap I’m here when you arrive', 'Peakle adds you to the queue and puts you on the next open court.'];
+}
+
+// Player-hosted open play: no venue or fees; the host checks players in and
+// out, and Peakle fills every court from the queue as matches finish.
+function HostedSessionDetail({ session, userId, ended, busy, error, run, onBack, onOpenChat, onEnded }) {
+  const hosted = session.hosted;
+  const [confirmEnd, setConfirmEnd] = useState(false);
+  const me = hosted.players.find((player) => player.userId === userId);
+  const [icon, title, meta] = hostedStatus(me, ended);
+  const canCheckIn = !ended && hosted.canCheckIn && !['playing', 'queued'].includes(me?.state);
+  const canBreak = !ended && me?.state === 'queued';
+  const place = [hosted.place, hosted.area].filter(Boolean).join(' · ');
+  return <ScrollView contentContainerStyle={styles.content} showsVerticalScrollIndicator={false} refreshControl={<RefreshControl refreshing={busy} onRefresh={() => run(async () => {})} tintColor={C.teal} />}>
+    <View style={styles.header}><Pressable accessibilityLabel="Back" onPress={onBack} style={styles.backButton}><Icon name="arrow-back" /></Pressable><View style={styles.flex}><Text style={styles.eyebrow}>OPEN PLAY</Text><Text style={styles.h1}>Live rotation</Text></View>{onOpenChat && !ended && session.registration ? <Pressable accessibilityLabel="Open community chat" onPress={() => onOpenChat(session)} style={styles.backButton}><Icon name="chatbubble-ellipses-outline" /></Pressable> : null}</View>
+    <ConnectionStatus />
+    <View style={styles.detailHero}><View style={styles.verifiedPill}><Icon name="people" size={12} color={C.teal} /><Text style={styles.verifiedText}>{ended ? 'FINISHED' : 'HOSTED · LIVE'}</Text></View><Text style={styles.detailTitle}>{session.name}</Text><Text style={styles.detailVenue}>{place || 'Court set by the host'}</Text><Text style={styles.detailAddress}>Hosted by {hosted.isHost ? 'you' : session.organizer?.name || 'a Peakle player'} · {hosted.courtCount} {hosted.courtCount === 1 ? 'court' : 'courts'} · {session.matchFormat === 'singles' ? 'Singles' : 'Doubles'}</Text></View>
+    <View style={[styles.statusCard, me?.state === 'queued' && styles.statusApproved]}><Icon name={icon} color={me?.state === 'queued' ? C.teal : C.ink70} /><View style={styles.flex}><Text style={styles.statusTitle}>{title}</Text><Text style={styles.statusMeta}>{meta}</Text></View></View>
+    {!ended ? <LiveRotationCard session={session} /> : null}
+    {error ? <View style={styles.errorCard}><Icon name="alert-circle" color={C.brick} /><Text style={styles.errorText}>{error}</Text></View> : null}
+    {canCheckIn ? <Pressable disabled={busy} onPress={() => run(() => checkInHostedOpenPlay(session.id))} style={({ pressed }) => [styles.primaryButton, busy && styles.disabled, pressed && styles.pressed]}><Text style={styles.primaryText}>{me?.state === 'break' ? 'I’m back' : 'I’m here'}</Text><Icon name="checkmark-done" color="#0E2321" /></Pressable> : null}
+    {canBreak ? <Pressable disabled={busy} onPress={() => run(() => leaveHostedOpenPlayQueue(session.id))} style={({ pressed }) => [styles.hostedSecondaryButton, busy && styles.disabled, pressed && styles.pressed]}><Text style={styles.hostedSecondaryText}>Take a break</Text></Pressable> : null}
+    <Text style={styles.sectionLabel}>PLAYERS · {hosted.players.filter((player) => ['playing', 'queued'].includes(player.state)).length} HERE</Text>
+    <View style={styles.detailCard}>{hosted.players.map((player, index) => {
+      const hostAction = hosted.isHost && !ended
+        ? player.state === 'queued' ? ['Break', () => leaveHostedOpenPlayQueue(session.id, player.userId)]
+          : player.state === 'not_here' || player.state === 'break' ? ['Check in', () => checkInHostedOpenPlay(session.id, player.userId)] : null
+        : null;
+      return <View key={player.userId} style={[styles.hostedPlayerRow, index > 0 && styles.rowBorder]}>
+        <View style={[styles.hostedStateDot, styles[`hostedState_${player.state}`]]} />
+        <View style={styles.flex}><Text numberOfLines={1} style={styles.hostedPlayerName}>{player.userId === userId ? 'You' : player.name}{player.isHost ? ' · Host' : ''}</Text><Text style={styles.hostedPlayerMeta}>{player.state === 'queued' ? `#${player.queuePosition} in queue` : HOSTED_STATE_LABELS[player.state]}{player.gamesPlayed ? ` · ${player.gamesPlayed} ${player.gamesPlayed === 1 ? 'game' : 'games'}` : ''}</Text></View>
+        {hostAction ? <Pressable accessibilityRole="button" accessibilityLabel={`${hostAction[0]} ${player.name}`} disabled={busy} onPress={() => run(hostAction[1])} style={({ pressed }) => [styles.hostedRowAction, busy && styles.disabled, pressed && styles.pressed]}><Text style={styles.hostedRowActionText}>{hostAction[0]}</Text></Pressable> : null}
+      </View>;
+    })}</View>
+    {hosted.isHost && !ended ? (confirmEnd
+      ? <View style={styles.hostedConfirm}><Text style={styles.hostedConfirmText}>End open play for everyone? Matches still in progress are cancelled; finished results stay saved.</Text><View style={styles.hostedConfirmActions}><Pressable accessibilityRole="button" disabled={busy} onPress={() => setConfirmEnd(false)} style={({ pressed }) => [styles.hostedSecondaryButton, styles.hostedConfirmButton, styles.flex, pressed && styles.pressed]}><Text style={styles.hostedSecondaryText}>Keep playing</Text></Pressable><Pressable accessibilityRole="button" disabled={busy} onPress={() => run(async () => { await endHostedOpenPlay(session.id); onEnded(); })} style={({ pressed }) => [styles.hostedEndButton, styles.hostedConfirmButton, styles.flex, busy && styles.disabled, pressed && styles.pressed]}>{busy ? <ActivityIndicator color="#FFFFFF" /> : <Text style={styles.hostedEndText}>End open play</Text>}</Pressable></View></View>
+      : <Pressable accessibilityRole="button" onPress={() => setConfirmEnd(true)} style={({ pressed }) => [styles.cancelButton, pressed && styles.pressed]}><Text style={styles.cancelText}>End open play</Text></Pressable>) : null}
+  </ScrollView>;
+}
+
 export default function PlayerOpenPlayScreen({ onBack, onDetailBack = null, onOpenChat = null, initialCode = '', initialSession = null, initialSessionId = null, navigationToken = null }) {
   const { isDark } = useTheme();
   C = isDark ? { ...LIGHT_C, ...DARK_CONTENT_COLORS } : LIGHT_C;
@@ -359,11 +408,21 @@ export default function PlayerOpenPlayScreen({ onBack, onDetailBack = null, onOp
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   const [sessionFilter, setSessionFilter] = useState('nearby');
+  const [hostedEnded, setHostedEnded] = useState(false);
   const sessionsRef = useRef(sessions);
   const loadRequestRef = useRef(null);
   const realtimeRefreshTimer = useRef(null);
   const selectedRefreshRevisionRef = useRef(0);
   useEffect(() => { sessionsRef.current = sessions; }, [sessions]);
+  useEffect(() => { setHostedEnded(false); }, [selected?.id]);
+  // A hosted session disappears once the host ends it; keep the last view and
+  // show it as finished instead of an error.
+  const selectedIsHosted = Boolean(selected?.hosted);
+  const endedHostedLookup = useCallback((lookupError) => {
+    if (!selectedIsHosted || !/not found/i.test(lookupError?.message || '')) return false;
+    setHostedEnded(true);
+    return true;
+  }, [selectedIsHosted]);
   const hasUserLocation = [userLocation?.latitude, userLocation?.longitude].every(Number.isFinite);
   const today = new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Manila' });
   const sessionMatchesFilter = useCallback((session, filter) => {
@@ -512,7 +571,7 @@ export default function PlayerOpenPlayScreen({ onBack, onDetailBack = null, onOp
       const revision = ++selectedRefreshRevisionRef.current;
       getOpenPlaySession({ sessionId, code: resolvedCode || null })
         .then((session) => { if (revision === selectedRefreshRevisionRef.current) setSelected(session); })
-        .catch(() => {});
+        .catch((lookupError) => { endedHostedLookup(lookupError); });
     };
     const channel = requireSupabase()
       .channel(`player-open-play-${sessionId}`)
@@ -530,12 +589,18 @@ export default function PlayerOpenPlayScreen({ onBack, onDetailBack = null, onOp
       })
       .subscribe((status) => reportRealtime(`player-${sessionId}`, status));
     return () => { requireSupabase().removeChannel(channel); reportRealtime(`player-${sessionId}`, 'REMOVE'); };
-  }, [reportRealtime, resolvedCode, selected?.id]);
+  }, [endedHostedLookup, reportRealtime, resolvedCode, selected?.id]);
 
   const refreshSelected = async () => {
     if (!selected) return;
     const revision = ++selectedRefreshRevisionRef.current;
-    const refreshed = await getOpenPlaySession({ sessionId: selected.id, code: resolvedCode || null });
+    let refreshed;
+    try {
+      refreshed = await getOpenPlaySession({ sessionId: selected.id, code: resolvedCode || null });
+    } catch (lookupError) {
+      if (endedHostedLookup(lookupError)) return;
+      throw lookupError;
+    }
     if (revision === selectedRefreshRevisionRef.current) setSelected(refreshed);
   };
 
@@ -552,7 +617,9 @@ export default function PlayerOpenPlayScreen({ onBack, onDetailBack = null, onOp
     const canCancel = registration && ['requested', 'waitlisted', 'approved'].includes(registration.status) && registration.playStatus !== 'playing' && !registration.departedAt;
     const canCheckIn = registration?.status === 'approved' && !registration.checkedInAt;
     const canOpenChat = Boolean(onOpenChat) && ['approved', 'waitlisted'].includes(registration?.status);
-    if (registration?.playStatus === 'playing' && selected.liveState?.activeMatch) return <OpenPlayLiveMatch session={selected} onRefresh={refreshSelected} onBack={() => { if (onDetailBack) { onDetailBack(); return; } setSelected(null); }} />;
+    const leaveDetail = () => { if (onDetailBack) { onDetailBack(); return; } setSelected(null); setError(''); };
+    if (!hostedEnded && registration?.playStatus === 'playing' && selected.liveState?.activeMatch) return <OpenPlayLiveMatch session={selected} onRefresh={refreshSelected} onBack={leaveDetail} />;
+    if (selected.hosted) return <HostedSessionDetail session={selected} userId={user?.id} ended={hostedEnded} busy={busy} error={error} run={run} onBack={leaveDetail} onOpenChat={onOpenChat} onEnded={() => setHostedEnded(true)} />;
     return <ScrollView contentContainerStyle={styles.content} showsVerticalScrollIndicator={false} refreshControl={<RefreshControl refreshing={busy} onRefresh={() => run(async () => {})} tintColor={C.teal} />}>
       <View style={styles.header}><Pressable accessibilityLabel={onDetailBack ? 'Back' : 'Back to open play'} onPress={() => { if (onDetailBack) { onDetailBack(); return; } setSelected(null); setError(''); }} style={styles.backButton}><Icon name="arrow-back" /></Pressable><View style={styles.flex}><Text style={styles.eyebrow}>OPEN PLAY</Text><Text style={styles.h1}>Session details</Text></View>{canOpenChat ? <Pressable accessibilityLabel="Open community chat" onPress={() => onOpenChat(selected)} style={styles.backButton}><Icon name="chatbubble-ellipses-outline" /></Pressable> : null}</View>
       <ConnectionStatus />
@@ -615,6 +682,10 @@ const lightStyles = createMobileStyleSheet({
   openPlayPlayAnnouncement: { position: 'absolute', zIndex: 12, left: 22, right: 22, top: 35, bottom: 35, alignItems: 'center', justifyContent: 'center', borderRadius: 18, backgroundColor: 'rgba(14,35,33,.92)' }, openPlayPlayAnnouncementPlayer: { color: LIGHT_C.optic, fontSize: 16, fontWeight: '900', textAlign: 'center' }, openPlayPlayAnnouncementTeam: { maxWidth: '90%', marginTop: 3, color: LIGHT_C.surface, fontSize: 10, fontWeight: '800', textAlign: 'center' }, openPlayPlayAnnouncementText: { marginTop: 6, color: 'rgba(255,255,255,.58)', fontSize: 8, fontWeight: '900', letterSpacing: 1.2 }, openPlayPlayAnnouncementScore: { marginTop: 3, color: LIGHT_C.surface, fontSize: 25, fontWeight: '900' }, openPlayPlayAnnouncementServe: { maxWidth: '92%', marginTop: 5, color: LIGHT_C.optic, textAlign: 'center', fontSize: 8, fontWeight: '800' },
   openPlayScorerBooth: { minHeight: 86, padding: 12, flexDirection: 'row', alignItems: 'center', gap: 10 }, openPlayScorerBoothAvatar: { width: 46, height: 46, alignItems: 'center', justifyContent: 'center', borderRadius: 15, backgroundColor: LIGHT_C.ink }, openPlayScorerBoothInitials: { color: LIGHT_C.surface, fontSize: 11, fontWeight: '900' }, openPlayScorerOnline: { position: 'absolute', right: -2, bottom: -2, width: 13, height: 13, borderRadius: 7, borderWidth: 3, borderColor: LIGHT_C.surface, backgroundColor: LIGHT_C.optic }, openPlayScorerBoothCopy: { flex: 1, minWidth: 0 }, openPlayScorerBoothLabel: { color: LIGHT_C.teal, fontSize: 6, fontWeight: '900', letterSpacing: .7 }, openPlayScorerBoothName: { marginTop: 2, color: LIGHT_C.ink, fontSize: 11, fontWeight: '900' }, openPlayScorerMessage: { marginTop: 3, color: LIGHT_C.ink40, fontSize: 7 }, openPlayScorerServing: { marginTop: 3, color: LIGHT_C.teal, fontSize: 7, fontWeight: '800' }, openPlayScorerControlBadge: { paddingHorizontal: 7, minHeight: 27, flexDirection: 'row', alignItems: 'center', gap: 3, borderRadius: 9, backgroundColor: LIGHT_C.tealWash }, openPlayScorerControlText: { color: LIGHT_C.teal, fontSize: 5, fontWeight: '900', letterSpacing: .4 },
   openPlayPlayScorerActions: { marginHorizontal: 20, marginTop: 14, padding: 14, borderRadius: 18, borderWidth: 1, borderColor: LIGHT_C.line, backgroundColor: LIGHT_C.surface }, openPlayPlayScorerActionHead: { marginBottom: 11, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }, openPlayPlayScorerActionTitle: { color: LIGHT_C.ink, fontSize: 14, fontWeight: '900' }, openPlayPlayScorerActionMeta: { marginTop: 3, color: LIGHT_C.teal, fontSize: 8, fontWeight: '800' }, openPlayPlayTeamBadge: { width: 31, height: 31, borderRadius: 9, alignItems: 'center', justifyContent: 'center', backgroundColor: LIGHT_C.teal }, openPlayPlayTeamBadgeAway: { backgroundColor: LIGHT_C.brick }, openPlayPlayTeamBadgeText: { color: LIGHT_C.surface, fontSize: 8, fontWeight: '900' }, openPlayPlayRallyButtons: { flexDirection: 'row', gap: 8 }, openPlayPlayRallyButton: { minHeight: 82, flex: 1, paddingHorizontal: 8, alignItems: 'center', justifyContent: 'center', borderRadius: 13, backgroundColor: LIGHT_C.teal }, openPlayPlayRallyButtonAway: { backgroundColor: LIGHT_C.brick }, openPlayPlayRallyTag: { color: 'rgba(255,255,255,.58)', fontSize: 6, fontWeight: '900', letterSpacing: .7 }, openPlayPlayRallyName: { minHeight: 27, marginTop: 3, color: LIGHT_C.surface, textAlign: 'center', fontSize: 9, lineHeight: 13, fontWeight: '900' }, openPlayPlayRallyAction: { marginTop: 3, color: LIGHT_C.surface, fontSize: 7, fontWeight: '900', letterSpacing: .7 }, openPlayPlayAutoServeHint: { marginTop: 10, color: LIGHT_C.teal, textAlign: 'center', fontSize: 8, fontWeight: '800' }, openPlayPlayPointDisabled: { opacity: .4 },
+  hostedPlayerRow: { minHeight: 58, flexDirection: 'row', alignItems: 'center', gap: 10 }, hostedStateDot: { width: 9, height: 9, borderRadius: 5, backgroundColor: LIGHT_C.line }, hostedState_playing: { backgroundColor: LIGHT_C.brick }, hostedState_queued: { backgroundColor: LIGHT_C.teal }, hostedState_break: { backgroundColor: LIGHT_C.ink40 }, hostedState_not_here: { borderWidth: 1, borderColor: LIGHT_C.ink40, backgroundColor: 'transparent' },
+  hostedPlayerName: { color: LIGHT_C.ink, fontSize: 11, fontWeight: '900' }, hostedPlayerMeta: { marginTop: 2, color: LIGHT_C.ink40, fontSize: 8, fontWeight: '700' }, hostedRowAction: { minHeight: 34, paddingHorizontal: 12, alignItems: 'center', justifyContent: 'center', borderRadius: 11, borderWidth: 1, borderColor: LIGHT_C.line, backgroundColor: LIGHT_C.paper }, hostedRowActionText: { color: LIGHT_C.teal, fontSize: 8, fontWeight: '900' },
+  hostedConfirm: { marginTop: 13, padding: 13, borderRadius: 15, backgroundColor: '#F7EAE6' }, hostedConfirmText: { color: LIGHT_C.brick, fontSize: 9, lineHeight: 14, fontWeight: '800' }, hostedConfirmActions: { marginTop: 4, flexDirection: 'row', gap: 8 }, hostedEndButton: { minHeight: 48, alignItems: 'center', justifyContent: 'center', borderRadius: 14, backgroundColor: LIGHT_C.brick }, hostedEndText: { color: '#FFFFFF', fontSize: 10, fontWeight: '900' }, hostedConfirmButton: { marginTop: 9 },
+  hostedSecondaryButton: { minHeight: 52, marginTop: 10, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 7, borderRadius: 15, borderWidth: 1, borderColor: LIGHT_C.line, backgroundColor: LIGHT_C.surface }, hostedSecondaryText: { color: LIGHT_C.teal, fontSize: 11, fontWeight: '900' },
   openPlayPlayControls: { marginHorizontal: 20, marginTop: 12, flexDirection: 'row', gap: 8 }, openPlayPlayControlButton: { flex: 1, minHeight: 48, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 5, borderRadius: 12, borderWidth: 1, borderColor: LIGHT_C.line, backgroundColor: LIGHT_C.surface }, openPlayPlayControlText: { color: LIGHT_C.teal, fontSize: 8, fontWeight: '800' }, openPlayPlayControlDisabled: { opacity: .48 }, openPlayPlayControlTextDisabled: { color: LIGHT_C.ink40 }, openPlayPlayFinishButton: { borderColor: LIGHT_C.optic, backgroundColor: LIGHT_C.optic }, openPlayPlayFinishPending: { borderColor: LIGHT_C.line, backgroundColor: LIGHT_C.tealWash }, openPlayPlayFinishText: { color: '#0E2321', fontSize: 8, fontWeight: '900' }, openPlayPlayFinishTextPending: { color: LIGHT_C.ink70 },
 });
 const darkStyles = createDarkStyleSheet(lightStyles);

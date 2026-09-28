@@ -3193,5 +3193,7 @@ const lightStyles = createMobileStyleSheet({
 const darkStyles = {
   ...createDarkStyleSheet(lightStyles),
   chatSafetyPrimaryText: lightStyles.chatSafetyPrimaryText,
+  // The pale optic wash has no dark mapping; tint the dark bubble with optic instead.
+  bubbleMentioned: { borderColor: DARK_CONTENT_COLORS.optic, borderWidth: 1.5, backgroundColor: '#2E4630' },
 };
 let styles = lightStyles;

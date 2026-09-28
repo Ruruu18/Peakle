@@ -1330,7 +1330,8 @@ export async function saveCompletedMatch(userId, result, userName) {
   if (result.reason === 'completed' && (expectedCompletedGames < 1 || scores.length !== expectedCompletedGames)) {
     throw new Error('The completed score is incomplete. Reopen the connected result and retry recording it.');
   }
-  if (!scores.length) throw new Error('A 0-0 match cannot be recorded. Add a score or save it as unfinished.');
+  // A match ended early before any point is a 0-0 draw: one scoreless game, no winner.
+  if (!scores.length) scores.push([0, 0]);
   if (deterministicMatchId) {
     await writeLocalUnfinishedMatch(userId, { ...result, resultPendingSave: true, draftSavedAt: Date.now() }).catch(() => {});
   }
@@ -1485,6 +1486,12 @@ export async function listPlayers() {
   return data.map((player) => ({ id: player.id, name: player.display_name, avatar: player.avatar_url, initials: player.display_name.split(/\s+/).map((part) => part[0]).join('').slice(0, 2), rating: player.skill_rating ?? 'Unrated', distance: 'Available', color: '#1C6B66' }));
 }
 
+// Level on games (a 0-0 early finish, or 1-1 when ended early) is a draw, not a loss.
+function matchResult(homeWins, awayWins) {
+  if (homeWins === awayWins) return 'D';
+  return homeWins > awayWins ? 'W' : 'L';
+}
+
 export async function listMyMatches({ limit } = {}) {
   if (DEMO_MODE) return limit != null ? DEMO_MATCHES.slice(0, limit) : DEMO_MATCHES;
   const client = requireSupabase();
@@ -1513,7 +1520,7 @@ export async function listMyMatches({ limit } = {}) {
       ? match.match_participants.find((player) => player.side === currentSide && player.user_id !== userId && player.position !== currentParticipant.position)
       : match.match_participants.find((player) => player.side === currentSide && player.position === 1);
     const partner = partnerRow ? playerName(partnerRow) : null;
-    return { id: match.id, opponent: opponents || 'Opponent', opponentPlayers, partner, score: normalizedGames.map((game) => `${game.homeScore}–${game.awayScore}`).join(', '), games: normalizedGames, result: homeWins > awayWins ? 'W' : 'L', date: new Date(match.ended_at).toLocaleDateString('en-US', { month: 'short', day: '2-digit' }).toUpperCase(), endedAt: match.ended_at, startedAt: match.started_at, type: `${match.mode === 'ranked' ? 'Ranked' : 'Casual'} ${match.match_type}`, rating: '—', venue: match.venues ? `${match.venues.name}${match.courts ? ` · ${match.courts.name}` : ''}` : match.court_label ? `${match.court_label}${match.court_area ? ` · ${match.court_area}` : ''}` : 'Unlisted court', duration: match.started_at && match.ended_at ? `${Math.max(1, Math.round((new Date(match.ended_at) - new Date(match.started_at)) / 60000))} min` : '—', longestRally: null, sideOuts: null, serveWon: null, returnWon: null, kitchenWon: null, errors: null, takeaway: homeWins > awayWins ? 'Match completed and recorded.' : 'Review the scoring pattern from this match.', improve: 'Use the score history to plan the next match.' };
+    return { id: match.id, opponent: opponents || 'Opponent', opponentPlayers, partner, score: normalizedGames.map((game) => `${game.homeScore}–${game.awayScore}`).join(', '), games: normalizedGames, result: matchResult(homeWins, awayWins), date: new Date(match.ended_at).toLocaleDateString('en-US', { month: 'short', day: '2-digit' }).toUpperCase(), endedAt: match.ended_at, startedAt: match.started_at, type: `${match.mode === 'ranked' ? 'Ranked' : 'Casual'} ${match.match_type}`, rating: '—', venue: match.venues ? `${match.venues.name}${match.courts ? ` · ${match.courts.name}` : ''}` : match.court_label ? `${match.court_label}${match.court_area ? ` · ${match.court_area}` : ''}` : 'Unlisted court', duration: match.started_at && match.ended_at ? `${Math.max(1, Math.round((new Date(match.ended_at) - new Date(match.started_at)) / 60000))} min` : '—', longestRally: null, sideOuts: null, serveWon: null, returnWon: null, kitchenWon: null, errors: null, takeaway: homeWins > awayWins ? 'Match completed and recorded.' : homeWins === awayWins ? 'Match ended level — recorded as a draw.' : 'Review the scoring pattern from this match.', improve: 'Use the score history to plan the next match.' };
   });
 }
 
@@ -1526,7 +1533,7 @@ export function calculatePerformanceRating(matches) {
     const pointsAgainst = games.reduce((total, game) => total + Number(game.awayScore || 0), 0);
     const totalPoints = pointsFor + pointsAgainst;
     const margin = totalPoints ? (pointsFor - pointsAgainst) / totalPoints : 0;
-    const resultChange = match.result === 'W' ? 0.12 : -0.12;
+    const resultChange = match.result === 'W' ? 0.12 : match.result === 'L' ? -0.12 : 0;
     rating = Math.min(5.5, Math.max(1, rating + resultChange + margin * 0.08));
   });
   return Number(rating.toFixed(1));

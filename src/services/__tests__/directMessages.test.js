@@ -45,9 +45,10 @@ jest.mock('../database', () => ({ uploadChatMedia: jest.fn() }));
 // assert each fallback drops only the missing part (reactions or unsend).
 const MESSAGE_SELECT_CORE = 'id, conversation_id, sender_id, body, created_at, profiles!direct_messages_sender_id_fkey(display_name, avatar_url)';
 const MESSAGE_MEDIA_COLUMNS = ', deleted_at, media_path, media_type, media_mime, media_name, media_duration_ms';
-const MESSAGE_SELECT_FULL = `${MESSAGE_SELECT_CORE}, direct_message_reactions(emoji, user_id)${MESSAGE_MEDIA_COLUMNS}`;
-const MESSAGE_SELECT_BASE = `${MESSAGE_SELECT_CORE}${MESSAGE_MEDIA_COLUMNS}`;
-const MESSAGE_SELECT_UNSEND_ONLY = `${MESSAGE_SELECT_CORE}, direct_message_reactions(emoji, user_id), deleted_at`;
+const MESSAGE_REPLY_COLUMNS = ', reply:reply_to_id(id, sender_id, body, media_type, deleted_at, profiles!direct_messages_sender_id_fkey(display_name))';
+const MESSAGE_SELECT_FULL = `${MESSAGE_SELECT_CORE}, direct_message_reactions(emoji, user_id)${MESSAGE_MEDIA_COLUMNS}${MESSAGE_REPLY_COLUMNS}`;
+const MESSAGE_SELECT_BASE = `${MESSAGE_SELECT_CORE}${MESSAGE_MEDIA_COLUMNS}${MESSAGE_REPLY_COLUMNS}`;
+const MESSAGE_SELECT_WITHOUT_REPLIES = `${MESSAGE_SELECT_CORE}, direct_message_reactions(emoji, user_id)${MESSAGE_MEDIA_COLUMNS}`;
 // listDirectMessages reads settings, then this player's hidden messages, then the messages.
 const noHides = () => makeQueryBuilder({ data: [], error: null });
 
@@ -524,7 +525,7 @@ describe('listDirectMessages (reactions-schema fallback)', () => {
 });
 
 describe('listDirectMessages (per-message delete)', () => {
-  it('drops only the media columns when they are missing (42703)', async () => {
+  it('drops only the reply columns when they are missing (42703)', async () => {
     const client = makeClient();
     const failing = makeQueryBuilder({ data: null, error: { code: '42703' } });
     const fallback = makeQueryBuilder({ data: [], error: null });
@@ -532,7 +533,7 @@ describe('listDirectMessages (per-message delete)', () => {
     requireSupabase.mockReturnValue(client);
     await listDirectMessages('c1');
     expect(failing.select).toHaveBeenCalledWith(MESSAGE_SELECT_FULL);
-    expect(fallback.select).toHaveBeenCalledWith(MESSAGE_SELECT_UNSEND_ONLY);
+    expect(fallback.select).toHaveBeenCalledWith(MESSAGE_SELECT_WITHOUT_REPLIES);
   });
 
   it('leaves out messages this player deleted for themselves', async () => {
@@ -674,16 +675,27 @@ describe('getDirectMessagePermission', () => {
 
 describe('getPlayerFollowCounts', () => {
   it('returns the counts from the RPC row', async () => {
-    const client = { rpc: jest.fn(async () => ({ data: [{ followers: '5', following: '2' }], error: null })) };
+    const client = { rpc: jest.fn(async (name) => (name === 'get_player_friend_count'
+      ? { data: '1', error: null }
+      : { data: [{ followers: '5', following: '2' }], error: null })) };
     requireSupabase.mockReturnValue(client);
     const result = await getPlayerFollowCounts('p1');
     expect(client.rpc).toHaveBeenCalledWith('get_player_follow_counts', { p_player_id: 'p1' });
-    expect(result).toEqual({ followers: 5, following: 2 });
+    expect(client.rpc).toHaveBeenCalledWith('get_player_friend_count', { p_player_id: 'p1' });
+    expect(result).toEqual({ followers: 5, following: 2, friends: 1 });
+  });
+
+  it('falls back to the smaller follow total when the friend count RPC is missing', async () => {
+    const client = { rpc: jest.fn(async (name) => (name === 'get_player_friend_count'
+      ? { data: null, error: { code: 'PGRST202' } }
+      : { data: [{ followers: '5', following: '2' }], error: null })) };
+    requireSupabase.mockReturnValue(client);
+    expect(await getPlayerFollowCounts('p1')).toEqual({ followers: 5, following: 2, friends: 2 });
   });
 
   it('defaults missing counts to 0', async () => {
-    requireSupabase.mockReturnValue({ rpc: jest.fn(async () => ({ data: [{}], error: null })) });
-    expect(await getPlayerFollowCounts()).toEqual({ followers: 0, following: 0 });
+    requireSupabase.mockReturnValue({ rpc: jest.fn(async (name) => ({ data: name === 'get_player_friend_count' ? null : [{}], error: null })) });
+    expect(await getPlayerFollowCounts()).toEqual({ followers: 0, following: 0, friends: 0 });
   });
 
   it('falls back to manual counting for the caller\'s own profile when the RPC is not deployed yet (PGRST202)', async () => {
@@ -697,7 +709,7 @@ describe('getPlayerFollowCounts', () => {
     const result = await getPlayerFollowCounts();
     expect(followers.eq).toHaveBeenCalledWith('followed_id', 'me');
     expect(following.eq).toHaveBeenCalledWith('follower_id', 'me');
-    expect(result).toEqual({ followers: 7, following: 3 });
+    expect(result).toEqual({ followers: 7, following: 3, friends: 3 });
   });
 
   it('does not fall back when a specific playerId was requested, even on PGRST202', async () => {
@@ -919,6 +931,9 @@ describe('listPlayerSuggestions', () => {
       if (name === 'get_player_follow_counts_batch') {
         return { data: [{ player_id: 'p1', followers: 10, following: 4 }], error: null };
       }
+      if (name === 'get_player_friend_counts_batch') {
+        return { data: [{ player_id: 'p1', friends: 3 }], error: null };
+      }
       throw new Error(`unexpected rpc ${name}`);
     }) };
     requireSupabase.mockReturnValue(client);
@@ -926,9 +941,9 @@ describe('listPlayerSuggestions', () => {
     const result = await listPlayerSuggestions(5);
     expect(client.rpc).toHaveBeenCalledWith('get_player_suggestions', { p_limit: 5 });
     expect(client.rpc).toHaveBeenCalledWith('get_player_follow_counts_batch', { p_player_ids: ['p1', 'p2'] });
-    expect(result[0]).toEqual({ id: 'p1', name: 'Alex', avatar: 'a.png', area: 'BGC', rating: 3.5, reason: 'Mutual friends', followers: 10, following: 4, mutuals: 2, followRequestPending: false });
+    expect(result[0]).toEqual({ id: 'p1', name: 'Alex', avatar: 'a.png', area: 'BGC', rating: 3.5, reason: 'Mutual friends', followers: 10, following: 4, friends: 3, mutuals: 2, followRequestPending: false });
     // p2 was absent from the batch response, so it falls back to its own row counts.
-    expect(result[1]).toMatchObject({ followers: 5, following: 1 });
+    expect(result[1]).toMatchObject({ followers: 5, following: 1, friends: 1 });
   });
 
   it('falls back to per-player follow-count RPCs when the batch RPC errors', async () => {
@@ -939,12 +954,13 @@ describe('listPlayerSuggestions', () => {
         expect(args).toEqual({ p_player_id: 'p1' });
         return { data: [{ followers: 9, following: 4 }], error: null };
       }
+      if (name === 'get_player_friend_count') return { data: 2, error: null };
       throw new Error(`unexpected rpc ${name}`);
     }) };
     requireSupabase.mockReturnValue(client);
 
     const result = await listPlayerSuggestions();
-    expect(result[0]).toMatchObject({ followers: 9, following: 4 });
+    expect(result[0]).toMatchObject({ followers: 9, following: 4, friends: 2 });
   });
 
   it('propagates a suggestions RPC error', async () => {
