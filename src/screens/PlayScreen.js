@@ -27,6 +27,7 @@ import Ionicons from '@expo/vector-icons/Ionicons';
 import AppIcon from '../components/AppIcon';
 import { captureRef } from 'react-native-view-shot';
 import { exportWebMatchCard } from '../services/exportWebMatchCard';
+import MatchStoryCard, { STORY_CARD_HEIGHT, STORY_CARD_WIDTH } from '../components/MatchStoryCard';
 import PlayerOpenPlayScreen from './PlayerOpenPlayScreen';
 import ResilientImage from '../components/ResilientImage';
 import CourtLineup from '../components/CourtLineup';
@@ -2157,12 +2158,12 @@ function ResultScreen({ result, saveState = 'saved', saveError = '', onRetrySave
   const focusAchieved = focusComplete && focusSuccesses >= result.focusChallenge.target;
 
   const makeMatchPhoto = async (action) => {
-    if (!storyCardRef.current || exporting) return;
+    if (exporting || (Platform.OS !== 'web' && !storyCardRef.current)) return;
     setActionsOpen(false);
     setExporting(true);
     try {
       if (Platform.OS === 'web') { await exportWebMatchCard(result, action); return; }
-      const uri = await captureRef(storyCardRef, { format: 'png', quality: 1, result: 'tmpfile' });
+      const uri = await captureRef(storyCardRef, { format: 'png', quality: 1, result: 'tmpfile', width: STORY_CARD_WIDTH * 3, height: STORY_CARD_HEIGHT * 3 });
       if (action === 'save') {
         if (Platform.OS === 'android') {
           if (Number(Platform.Version) <= 28) {
@@ -2195,6 +2196,9 @@ function ResultScreen({ result, saveState = 'saved', saveError = '', onRetrySave
   };
 
   return (
+    <View style={styles.flex}>
+    {/* Rendered off-screen so the exported photo is a full portrait story card, not a crop of the page. */}
+    {Platform.OS !== 'web' ? <View pointerEvents="none" style={{ position: 'absolute', top: 0, left: -10000 }}><MatchStoryCard ref={storyCardRef} result={result} /></View> : null}
     <ScrollView contentContainerStyle={[styles.content, styles.resultContent]} showsVerticalScrollIndicator={false}>
       <View style={styles.resultTopBar}>
         <Pressable accessibilityRole="button" accessibilityLabel="Back to match setup" onPress={onNewMatch} style={({ pressed }) => [styles.resultTopButton, pressed && styles.pressed]}>
@@ -2206,7 +2210,7 @@ function ResultScreen({ result, saveState = 'saved', saveError = '', onRetrySave
         </Pressable>
       </View>
 
-      <View ref={storyCardRef} collapsable={false} style={styles.resultPoster}>
+      <View style={styles.resultPoster}>
         <View style={styles.posterGlow} />
         <View style={styles.posterBrandRow}>
           <View style={styles.posterBrand}><Image source={BALL_IMAGE} style={{ width: 24, height: 24 }} tintColor={C.optic} resizeMode="contain" /><Text style={styles.posterBrandText}>PEAKLE</Text></View>
@@ -2267,6 +2271,7 @@ function ResultScreen({ result, saveState = 'saved', saveError = '', onRetrySave
         </Pressable>
       </Modal>
     </ScrollView>
+    </View>
   );
 }
 
