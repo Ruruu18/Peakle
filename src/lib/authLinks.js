@@ -5,13 +5,14 @@ export function readAuthParams(url) {
   return new URLSearchParams([query, fragment].filter(Boolean).join('&'));
 }
 
-export function cleanAuthUrl(url) {
+// returnPath: where a signed-out player was heading (a shared game) before auth.
+export function cleanAuthUrl(url, returnPath = null) {
   const parsed = new URL(url);
   const authKeys = ['code', 'access_token', 'refresh_token', 'expires_in', 'expires_at', 'token_type', 'type', 'provider_token', 'provider_refresh_token', 'error', 'error_code', 'error_description', 'google_handoff'];
   for (const key of authKeys) parsed.searchParams.delete(key);
   const fragment = new URLSearchParams(parsed.hash.slice(1));
   if (authKeys.some((key) => fragment.has(key))) parsed.hash = '';
-  if (['/oauth/callback', '/verify-email', '/reset-password'].includes(parsed.pathname)) parsed.pathname = '/';
+  if (['/oauth/callback', '/verify-email', '/reset-password'].includes(parsed.pathname)) parsed.pathname = returnPath || '/';
   return `${parsed.pathname}${parsed.search}${parsed.hash}`;
 }
 

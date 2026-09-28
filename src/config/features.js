@@ -3,10 +3,13 @@ import { Platform } from 'react-native';
 // The removable browser beta uses the same player identity and data as native.
 // Feature boundaries affect this client only, never the shared database.
 export const PRIVATE_MESSAGES_ENABLED = true;
-// Spoken score commands use the device recognizer on iOS/Android and the Web
-// Speech API in browsers that have it (Chrome, Edge, Safari; not Firefox).
+// Spoken score commands use the device recognizer on iOS/Android. Browsers use the
+// Web Speech API where it works and in-browser Whisper otherwise, so any browser that
+// can open the microphone supports them.
 export const VOICE_COMMAND_SCORING_ENABLED = Platform.OS !== 'web'
-  || (typeof window !== 'undefined' && Boolean(window.SpeechRecognition || window.webkitSpeechRecognition));
+  || (typeof window !== 'undefined' && Boolean(
+    window.SpeechRecognition || window.webkitSpeechRecognition || navigator.mediaDevices?.getUserMedia,
+  ));
 
 // Court booking is paused for the public beta: no court operators are onboarded
 // yet, so players score matches at any court and organizers drive events. The

@@ -5,6 +5,7 @@ import { SCHEDULE_ACTIVITY_TYPES } from '../config/scheduleTypes';
 import { listDiscoverablePlayerActivities } from './playerActivities';
 import { cleanCourtText, courtLabel } from './playCourts';
 import { geocode } from '../utils/geocode';
+import { recordPlayerEvent } from './playerFunnel';
 
 // Everything the Schedule tab shows is normalized to one calendar entry shape:
 //   { id, kind, sourceId, title, startsAt, endsAt, place, area, status, ... }
@@ -17,15 +18,23 @@ export const MIN_GAME_MINUTES = 30;
 export const MAX_GAME_MINUTES = 6 * 60;
 export const START_STEP_MINUTES = 5;
 const GAME_FIELDS = 'id,host_id,activity_kind,title,notes,starts_at,ends_at,match_type,mode,visibility,capacity,court_label,court_area,venue_id,court_id,status';
-// Added by 202609260013; read separately so older databases keep working.
-const COORDINATE_FIELDS = ',latitude,longitude';
+// Added by 202609260013 and 202609280005; read separately so older databases keep working.
+const OPTIONAL_FIELDS = [',latitude,longitude,skill_level,court_cost', ',latitude,longitude', ''];
 const GEOCODE_TIMEOUT_MS = 5000;
 
 const coordinateOrNull = (value) => (value == null || value === '' || !Number.isFinite(Number(value)) ? null : Number(value));
 const schemaMissing = (error) => ['42703', 'PGRST204', 'PGRST202'].includes(error?.code);
 const ROSTER_FIELDS = 'user_id,status,profile:profiles!scheduled_game_players_user_id_fkey(id,display_name,avatar_url)';
 
-function mapGame(row, userId) {
+export const SKILL_LEVELS = [
+  { value: 'any', label: 'All levels' },
+  { value: 'beginner', label: 'Beginner friendly' },
+  { value: 'intermediate', label: 'Intermediate' },
+  { value: 'advanced', label: 'Advanced' },
+];
+export const skillLevelLabel = (value) => SKILL_LEVELS.find((level) => level.value === value)?.label || 'All levels';
+
+function mapGame(row, userId, waitlist = []) {
   const roster = (row.scheduled_game_players || []).map((player) => ({
     id: player.user_id,
     status: player.status,
@@ -34,6 +43,7 @@ function mapGame(row, userId) {
   }));
   const me = roster.find((player) => player.id === userId);
   const going = roster.filter((player) => player.status === 'going');
+  const waiting = waitlist.find((entry) => entry.game_id === row.id);
   return {
     id: `game:${row.id}`,
     kind: row.activity_kind || 'game',
@@ -59,6 +69,10 @@ function mapGame(row, userId) {
     roster,
     going,
     spotsLeft: Math.max(0, row.capacity - going.length),
+    skillLevel: row.skill_level || 'any',
+    courtCost: row.court_cost || '',
+    waitlistPlace: waiting?.place || null,
+    waitlistCount: waiting?.waiting || 0,
     court: { id: row.court_id || `custom:${row.id}`, source: row.venue_id ? 'listed' : 'custom', name: row.court_label, courtName: '', area: row.court_area || '', venueId: row.venue_id, courtId: row.court_id, color: '#1C6B66', detail: row.court_area || 'Scheduled game' },
   };
 }
@@ -96,10 +110,13 @@ export async function listScheduledGames({ from, to }) {
   const client = requireSupabase();
   const userId = await currentUserId(client);
   if (!userId) return [];
-  const fields = (coordinates = true) => `${GAME_FIELDS}${coordinates ? COORDINATE_FIELDS : ''},scheduled_game_players(${ROSTER_FIELDS})`;
+  const fields = (optional) => `${GAME_FIELDS}${optional},scheduled_game_players(${ROSTER_FIELDS})`;
   const read = async (build) => {
-    let result = await build(fields());
-    if (['42703', 'PGRST204'].includes(result.error?.code)) result = await build(fields(false));
+    let result;
+    for (const optional of OPTIONAL_FIELDS) {
+      result = await build(fields(optional));
+      if (!['42703', 'PGRST204'].includes(result.error?.code)) break;
+    }
     if (result.error) throw result.error;
     return result.data || [];
   };
@@ -130,19 +147,26 @@ export async function listScheduledGames({ from, to }) {
       return [...hosted, ...joined];
     }
   };
-  const [mine, discovery] = await Promise.all([
+  const [mine, discovery, waitlist] = await Promise.all([
     loadMine(),
     read((selection) => client.from('scheduled_games').select(selection)
       .eq('visibility', 'open').eq('status', 'scheduled')
       .gte('ends_at', from).lt('starts_at', to)
       .order('starts_at').order('id').limit(200)),
+    loadWaitlist(client),
   ]);
   const rows = new Map(discovery.map((row) => [row.id, row]));
   mine.forEach((row) => rows.set(row.id, row));
   return [...rows.values()]
-    .map((row) => mapGame(row, userId))
+    .map((row) => mapGame(row, userId, waitlist))
     .filter((game) => game.status === 'scheduled' || game.myStatus)
     .sort((a, b) => new Date(a.startsAt) - new Date(b.startsAt) || a.id.localeCompare(b.id));
+}
+
+// The player's place on each waitlist, and the size of hosted activities' waitlists.
+async function loadWaitlist(client) {
+  const { data, error } = await client.rpc('list_scheduled_game_waitlists');
+  return error ? [] : data || [];
 }
 
 export async function listScheduleEvents() {
@@ -168,7 +192,7 @@ export function isPlayerScheduledEntry(entry) {
 
 const DEMO_WRITE_ERROR = 'Scheduling is turned off in the demo.';
 
-export async function createScheduledActivity({ kind = 'game', title, startsAt, durationMinutes, matchType = 'doubles', mode = 'casual', visibility = 'invite', capacity: requestedCapacity = 16, court, notes = '', invitees = [] }) {
+export async function createScheduledActivity({ kind = 'game', title, startsAt, durationMinutes, matchType = 'doubles', mode = 'casual', visibility = 'invite', capacity: requestedCapacity = 16, court, notes = '', invitees = [], skillLevel = 'any', courtCost = '' }) {
   if (DEMO_MODE) throw new Error(DEMO_WRITE_ERROR);
   if (!Object.hasOwn(SCHEDULE_ACTIVITY_TYPES, kind)) throw new Error('Choose an activity type.');
   const start = new Date(startsAt);
@@ -201,7 +225,130 @@ export async function createScheduledActivity({ kind = 'game', title, startsAt, 
   let { data, error } = await client.rpc('create_scheduled_activity', position ? { ...params, p_latitude: position.latitude, p_longitude: position.longitude } : params);
   if (position && schemaMissing(error)) ({ data, error } = await client.rpc('create_scheduled_activity', params));
   if (error) throw error;
+  const created = Array.isArray(data) ? data[0] : data;
+  recordPlayerEvent('activity_created', { gameId: created?.id });
+  // Details added by 202609280005. The activity already exists, so a database
+  // without them keeps it and simply skips the extra details.
+  if (created?.id && (skillLevel !== 'any' || cleanCourtText(courtCost))) {
+    const { error: detailError } = await client.rpc('update_scheduled_game', { p_game_id: created.id, p_skill_level: skillLevel, p_court_cost: cleanCourtText(courtCost) || '' });
+    if (detailError && !schemaMissing(detailError)) console.warn('Activity details were not saved:', detailError.message);
+  }
+  return created;
+}
+
+// Host changes to an upcoming activity. Only the fields passed are changed;
+// moving the time or court notifies everyone invited or going.
+export async function updateScheduledGame(gameId, { startsAt, durationMinutes, court, skillLevel, courtCost, notes, title } = {}) {
+  if (DEMO_MODE) throw new Error(DEMO_WRITE_ERROR);
+  const params = { p_game_id: gameId };
+  if (startsAt) {
+    const start = new Date(startsAt);
+    const end = new Date(start.getTime() + durationMinutes * 60000);
+    if (!Number.isFinite(start.getTime()) || !(durationMinutes > 0) || durationMinutes > 12 * 60) throw new Error('Choose a valid start time and a duration of at most 12 hours.');
+    params.p_starts_at = start.toISOString();
+    params.p_ends_at = end.toISOString();
+  }
+  if (court) {
+    params.p_court_label = courtLabel(court);
+    params.p_court_area = cleanCourtText(court.area) || null;
+    params.p_venue_id = court.venueId || null;
+    params.p_court_id = court.venueId ? court.courtId || null : null;
+    const position = court.venueId ? null : await courtCoordinates(court);
+    params.p_latitude = position?.latitude ?? null;
+    params.p_longitude = position?.longitude ?? null;
+  }
+  if (skillLevel) params.p_skill_level = skillLevel;
+  if (courtCost !== undefined) params.p_court_cost = cleanCourtText(courtCost) || '';
+  if (notes !== undefined) params.p_notes = notes.trim();
+  if (title !== undefined) params.p_title = cleanCourtText(title) || null;
+  const { data, error } = await requireSupabase().rpc('update_scheduled_game', params);
+  if (schemaMissing(error)) throw new Error('Editing activities is not available yet. Please try again after the next update.');
+  if (error) throw error;
   return Array.isArray(data) ? data[0] : data;
+}
+
+// "Play again next week": the same activity, a week later, with the players
+// who went already picked. The host still reviews and saves it.
+export function nextWeekDraft(game) {
+  const start = new Date(new Date(game.startsAt).getTime() + 7 * 24 * 60 * 60000);
+  const durationMinutes = Math.round((new Date(game.endsAt) - new Date(game.startsAt)) / 60000);
+  return {
+    kind: game.kind || 'game',
+    title: game.title,
+    day: dayKey(start),
+    startMinutes: minutesOfDay(start),
+    durationMinutes,
+    matchType: game.matchType,
+    mode: game.mode,
+    visibility: game.visibility,
+    capacity: game.capacity,
+    court: game.court,
+    notes: game.notes || '',
+    skillLevel: game.skillLevel || 'any',
+    courtCost: game.courtCost || '',
+    invitees: (game.going || []).filter((player) => player.id !== game.hostId).map((player) => ({ id: player.id, name: player.name, avatar: player.avatar })),
+  };
+}
+
+// Minutes after midnight in the scheduling time zone.
+export function minutesOfDay(value) {
+  const [hour, minute] = new Intl.DateTimeFormat('en-GB', { timeZone: SCHEDULE_TIME_ZONE, hour: '2-digit', minute: '2-digit', hourCycle: 'h23' }).format(new Date(value)).split(':').map(Number);
+  return hour * 60 + minute;
+}
+
+export async function joinScheduledGameWaitlist(gameId) {
+  if (DEMO_MODE) throw new Error(DEMO_WRITE_ERROR);
+  const { data, error } = await requireSupabase().rpc('join_scheduled_game_waitlist', { p_game_id: gameId });
+  if (schemaMissing(error)) throw new Error('Waitlists are not available yet. Please try again after the next update.');
+  if (error) throw error;
+  recordPlayerEvent('waitlist_joined', { gameId });
+  return data;
+}
+
+export async function leaveScheduledGameWaitlist(gameId) {
+  if (DEMO_MODE) throw new Error(DEMO_WRITE_ERROR);
+  const { error } = await requireSupabase().rpc('leave_scheduled_game_waitlist', { p_game_id: gameId });
+  if (error) throw error;
+}
+
+// ---------- "Tell me when a game opens here" ----------
+
+export async function getGameAlert() {
+  if (DEMO_MODE) return null;
+  const client = requireSupabase();
+  const userId = await currentUserId(client);
+  if (!userId) return null;
+  const { data, error } = await client.from('scheduled_game_alerts').select('area,created_at').eq('user_id', userId).maybeSingle();
+  return error ? null : data;
+}
+
+export async function setGameAlert(area) {
+  if (DEMO_MODE) throw new Error(DEMO_WRITE_ERROR);
+  const { data, error } = await requireSupabase().rpc('set_scheduled_game_alert', { p_area: area });
+  if (schemaMissing(error)) throw new Error('Game alerts are not available yet. Please try again after the next update.');
+  if (error) throw error;
+  recordPlayerEvent('game_alert_set');
+  return Array.isArray(data) ? data[0] : data;
+}
+
+export async function clearGameAlert() {
+  if (DEMO_MODE) throw new Error(DEMO_WRITE_ERROR);
+  const { error } = await requireSupabase().rpc('clear_scheduled_game_alert');
+  if (error) throw error;
+}
+
+// Discover filters. Area matching mirrors the server's game alerts: either
+// name may contain the other ("Pasig" and "Kapitolyo, Pasig").
+export function matchesArea(entry, area) {
+  const wanted = String(area || '').trim().toLowerCase();
+  if (!wanted) return true;
+  const where = `${entry.area || ''} ${entry.place || ''}`.toLowerCase();
+  return where.includes(wanted) || (entry.area && wanted.includes(entry.area.trim().toLowerCase()));
+}
+
+export function matchesSkill(entry, skill) {
+  if (!skill || skill === 'any') return true;
+  return !isPlayerScheduledEntry(entry) || !entry.skillLevel || entry.skillLevel === 'any' || entry.skillLevel === skill;
 }
 
 // Best effort: a court that cannot be found is still scheduled, just without
@@ -235,6 +382,7 @@ export async function respondToScheduledGame(gameId, going) {
   if (DEMO_MODE) throw new Error(DEMO_WRITE_ERROR);
   const { data, error } = await requireSupabase().rpc('respond_scheduled_game', { p_game_id: gameId, p_going: going });
   if (error) throw error;
+  if (going) recordPlayerEvent('activity_joined', { gameId });
   return data;
 }
 
@@ -271,7 +419,16 @@ export async function getScheduledGameShareUrl(gameId) {
   const { data, error } = await requireSupabase().rpc('get_scheduled_game_share_code', { p_game_id: gameId });
   if (schemaMissing(error)) throw new Error(SHARE_UNAVAILABLE);
   if (error) throw error;
+  recordPlayerEvent('invite_shared', { gameId });
   return scheduledGameShareUrl(data);
+}
+
+// What a shared link invites to, readable before sign-in: public fields only.
+export async function getScheduledGamePreview(code) {
+  if (DEMO_MODE || !/^[a-z0-9]{10}$/i.test(code || '')) return null;
+  const { data, error } = await requireSupabase().rpc('get_scheduled_game_preview', { p_code: code });
+  if (error) throw error;
+  return data || null;
 }
 
 // Adds the player to the activity as invited; returns { gameId, startsAt }.
@@ -280,6 +437,7 @@ export async function openScheduledGameLink(code) {
   const { data, error } = await requireSupabase().rpc('open_scheduled_game_link', { p_code: code });
   if (schemaMissing(error)) throw new Error(SHARE_UNAVAILABLE);
   if (error) throw error;
+  recordPlayerEvent('invite_opened', { gameId: data?.gameId });
   return data;
 }
 

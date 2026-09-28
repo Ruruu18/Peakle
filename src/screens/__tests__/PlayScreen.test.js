@@ -5,6 +5,7 @@ import PlayScreen from '../PlayScreen';
 import { useAuth } from '../../context/AuthContext';
 import { useNearbyPlayersContext } from '../../context/NearbyPlayersContext';
 import { saveCompletedMatch } from '../../services/database';
+import CourtPickerSheet from '../../components/CourtPickerSheet';
 
 jest.mock('@react-navigation/native', () => ({ useFocusEffect: jest.fn(), useIsFocused: () => true }));
 jest.mock('react-native-safe-area-context', () => ({ SafeAreaView: 'SafeAreaView', useSafeAreaInsets: () => ({ top: 0, bottom: 0 }) }));
@@ -19,8 +20,8 @@ jest.mock('../../services/database', () => ({
   listTeams: jest.fn(async () => []),
 }));
 jest.mock('../../services/nearbyPlayers', () => ({ searchRegisteredPlayers: jest.fn() }));
-jest.mock('../../services/directMessages', () => ({ listFollowingPlayers: jest.fn(async () => []) }));
-jest.mock('../../services/playCourts', () => ({ loadRecentCourts: jest.fn(async () => []), areaFromLocationLabel: jest.fn() }));
+jest.mock('../../services/directMessages', () => ({ listFollowingPlayers: jest.fn(async () => []), listPlayerActivity: async () => new Map() }));
+jest.mock('../../services/playCourts', () => ({ loadRecentCourts: jest.fn(async () => []), rememberCourt: jest.fn(async () => []), areaFromLocationLabel: jest.fn() }));
 jest.mock('../PlayerOpenPlayScreen', () => () => null);
 jest.mock('../../components/AccountMenu', () => ({ HeaderAvatar: () => null }));
 jest.mock('../../components/CourtPickerSheet', () => () => null);
@@ -53,6 +54,18 @@ const press = async (label) => {
   expect(button.props.disabled).not.toBe(true);
   await act(async () => { await button.props.onPress(); });
 };
+const labeledButton = (label) => renderer.root.findAll((node) => node.props.accessibilityLabel === label && node.props.onPress)[0];
+const pressLabel = async (label) => {
+  const button = labeledButton(label);
+  expect(button).toBeTruthy();
+  expect(button.props.disabled).not.toBe(true);
+  await act(async () => { await button.props.onPress(); });
+};
+const expectStep = (label) => {
+  expect(labeledButton(`${label} step`).props.accessibilityState.selected).toBe(true);
+  expect(renderer.root.findAllByType(Text).some((node) => React.Children.toArray(node.props.children).join('') === `${label} details`)).toBe(true);
+};
+const lineupInputs = () => renderer.root.findAllByType(TextInput).filter((node) => node.props.accessibilityLabel?.startsWith('Team '));
 const update = async (session) => {
   nearby.sharedLiveMatch = session;
   await act(async () => { renderer.update(screen()); });
@@ -109,26 +122,48 @@ it('lets the scorer retry ending early after the shared close fails', async () =
   expect(hasText('Match recorded')).toBe(true);
 });
 
-it('lets Build a Four switch between singles and doubles directly on the players step', async () => {
+it('starts Build a Four on Game and keeps the selected step and form aligned when going back', async () => {
   nearby.sharedLiveMatch = null;
   await act(async () => {
     renderer = TestRenderer.create(<PlayScreen navigation={navigation} route={{ params: { nearbyPlayersToken: 1 } }} />);
   });
-  const lineupInputs = () => renderer.root.findAllByType(TextInput).filter((node) => node.props.accessibilityLabel !== 'Search registered players');
-  expect(hasText('Continue to court')).toBe(true);
-  expect(lineupInputs()).toHaveLength(4);
+  expectStep('Game');
+  expect(hasText('FORMAT')).toBe(true);
+  expect(hasText('PLAY TYPE')).toBe(true);
+  expect(hasText('COURT LINEUP')).toBe(false);
+  expect(lineupInputs()).toHaveLength(0);
+  expect(labeledButton('Court step').props.disabled).toBe(true);
 
   await press('Singles');
+  await press('Ranked');
+  await press('Continue to players');
+  expectStep('Players');
+  expect(hasText('FORMAT')).toBe(false);
+  expect(hasText('PLAY TYPE')).toBe(false);
   expect(hasText('One player on each side')).toBe(true);
   expect(hasText('Add 1 more player.')).toBe(true);
   expect(lineupInputs()).toHaveLength(2);
   expect(lineupInputs()[0].props.value).toBe('Player');
   expect(hasText('Continue to court')).toBe(true);
 
+  await pressLabel('Back to game');
+  expectStep('Game');
+  expect(hasText('HOW TO ADD PLAYERS')).toBe(false);
+  expect(hasText('COURT LINEUP')).toBe(false);
   await press('Doubles');
+  await press('Continue to players');
+  expectStep('Players');
   expect(hasText('Two players on each side')).toBe(true);
   expect(lineupInputs()).toHaveLength(4);
   expect(lineupInputs()[0].props.value).toBe('Player');
+  await press('Change game');
+  expectStep('Game');
+  await press('Continue to players');
+  await press('Back');
+  expectStep('Game');
+  await pressLabel('Back to Play options');
+  await pressLabel('Set up a match');
+  expectStep('Game');
 });
 
 it('sends singles invitations after changing format from Build a Four', async () => {
@@ -140,6 +175,54 @@ it('sends singles invitations after changing format from Build a Four', async ()
     renderer = TestRenderer.create(<PlayScreen navigation={navigation} route={{ params: { nearbyPlayersToken: 2 } }} />);
   });
   await press('Singles');
+  await press('Continue to players');
   await press('Invite');
   expect(nearby.invite).toHaveBeenCalledWith('opponent', expect.objectContaining({ matchType: 'singles' }));
+});
+
+it('preserves the setup through Court, Review, first serve, and every previous step', async () => {
+  nearby.sharedLiveMatch = null;
+  await act(async () => {
+    renderer = TestRenderer.create(<PlayScreen navigation={navigation} route={{ params: { startLiveToken: 3 } }} />);
+  });
+  await press('Singles');
+  await press('Continue to players');
+  await press('Guest names');
+  await act(async () => { lineupInputs()[1].props.onChangeText('Alex'); });
+  await press('Continue to court');
+  expectStep('Court');
+  expect(hasText('COURT LINEUP')).toBe(false);
+  await pressLabel('Choose a court');
+  await act(async () => { renderer.root.findByType(CourtPickerSheet).props.onSelect({ name: 'Test court', source: 'custom' }); });
+  await press('Review match');
+  expectStep('Review');
+  await press('Continue to first serve');
+  expect(hasText('Choose the opening server.')).toBe(true);
+  await press('Back to match setup');
+  expectStep('Review');
+  expect(hasText('Continue to first serve')).toBe(true);
+  await pressLabel('Back to court');
+  expectStep('Court');
+  expect(labeledButton('Change court. Selected: Test court')).toBeTruthy();
+  await press('Back');
+  expectStep('Players');
+  expect(lineupInputs().map((node) => node.props.value)).toEqual(['Player', 'Alex']);
+  await pressLabel('Game step');
+  expectStep('Game');
+  await press('Continue to players');
+  expect(lineupInputs().map((node) => node.props.value)).toEqual(['Player', 'Alex']);
+});
+
+it('starts a fresh Game step when a new shortcut is opened with an old nearby token still in the route', async () => {
+  nearby.sharedLiveMatch = null;
+  await act(async () => {
+    renderer = TestRenderer.create(<PlayScreen navigation={navigation} route={{ params: { nearbyPlayersToken: 4 } }} />);
+  });
+  await press('Continue to players');
+  expectStep('Players');
+  await act(async () => {
+    renderer.update(<PlayScreen navigation={navigation} route={{ params: { nearbyPlayersToken: 4, startLiveToken: 5 } }} />);
+  });
+  expectStep('Game');
+  expect(lineupInputs()).toHaveLength(0);
 });

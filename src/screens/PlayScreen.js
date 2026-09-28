@@ -41,14 +41,14 @@ import { listMyBookings, listTeams, loadUnfinishedMatch, saveCompletedMatch, sav
 import { areaFromLocationLabel, courtKey, loadRecentCourts, rememberCourt } from '../services/playCourts';
 import CourtPickerSheet from '../components/CourtPickerSheet';
 import { useUserLocation } from '../context/LocationContext';
-import { listFollowingPlayers } from '../services/directMessages';
+import { listFollowingPlayers, listPlayerActivity } from '../services/directMessages';
 import { useNearbyPlayersContext } from '../context/NearbyPlayersContext';
 import { createMobileStyleSheet } from '../utils/mobileStyles';
 import { announceScoreForVoiceOver, estimateScoreAnnouncementMs, speakScoreAnnouncement, stopScoreAnnouncement } from '../utils/scoreAccessibility';
 import useShoutScoring from '../hooks/useShoutScoring';
 import useMatchDraft from '../hooks/useMatchDraft';
 import { COURT_BOOKING_ENABLED, PRIVATE_MESSAGES_ENABLED, VOICE_COMMAND_SCORING_ENABLED } from '../config/features';
-import { parseVoiceMatchCommand } from '../utils/voiceMatchCommands';
+import { mentionsScoring, parseVoiceMatchCommand } from '../utils/voiceMatchCommands';
 import { evenSidePlayerFromCurrentServer, playerForSideOut, resolveRallyState } from '../utils/liveMatchScoring';
 import { DEMO_MODE } from '../config/demoMode';
 import { DEMO_LIVE_MATCH } from '../config/demoData';
@@ -121,11 +121,11 @@ function KitchenLine({ dark = false, style }) {
   return <View style={[styles.kitchen, style]}><View style={[styles.solid, dark && styles.solidLight]} /><View style={[styles.dashed, dark && styles.dashedLight]} /></View>;
 }
 
-function Header({ eyebrow, title, action, onBack }) {
+function Header({ eyebrow, title, action, onBack, backLabel = 'Back to Play options' }) {
   return (
     <>
       <View style={styles.header}>
-        {onBack ? <Pressable accessibilityRole="button" accessibilityLabel="Back to Play options" hitSlop={6} onPress={onBack} style={styles.headerBack}><Icon name="arrow-back" /></Pressable> : null}
+        {onBack ? <Pressable accessibilityRole="button" accessibilityLabel={backLabel} hitSlop={6} onPress={onBack} style={styles.headerBack}><Icon name="arrow-back" /></Pressable> : null}
         <View style={styles.headerCopy}><Text numberOfLines={1} style={styles.eyebrow}>{eyebrow}</Text><Text accessibilityRole="header" numberOfLines={2} style={styles.h1}>{title}</Text></View>
         {action}
       </View>
@@ -300,6 +300,16 @@ function IncomingInvites({ invites, onRespond }) {
   );
 }
 
+// " · active 12m ago" for recently active players; older activity is hidden.
+function lastActiveLabel(lastActiveAt) {
+  const time = lastActiveAt ? new Date(lastActiveAt).getTime() : NaN;
+  if (!Number.isFinite(time)) return '';
+  const minutes = Math.max(1, Math.floor((Date.now() - time) / 60000));
+  if (minutes < 60) return ` · active ${minutes}m ago`;
+  if (minutes < 24 * 60) return ` · active ${Math.floor(minutes / 60)}h ago`;
+  return '';
+}
+
 function NearbyLobby({ players, invited, outgoingInvites, onToggle, onMessage, full, visible, loading, error, onVisibility }) {
   const [searchQuery, setSearchQuery] = useState('');
   const nearbyPlayers = players.filter((player) => !player.isTeammate);
@@ -333,6 +343,18 @@ function NearbyLobby({ players, invited, outgoingInvites, onToggle, onMessage, f
   const filteredPlayers = normalizedQuery
     ? [...localMatches, ...searchResults.filter((result) => !localMatches.some((player) => player.id === result.id))]
     : visiblePlayers;
+  // Nearby players are online by definition; everyone else is checked against
+  // app activity, refreshed each minute while the list is open.
+  const [activity, setActivity] = useState(() => new Map());
+  const activityIdsKey = filteredPlayers.map((player) => player.id).sort().join(',');
+  useEffect(() => {
+    if (!activityIdsKey) return undefined;
+    let active = true;
+    const load = () => listPlayerActivity(activityIdsKey.split(',')).then((rows) => { if (active) setActivity(rows); });
+    load();
+    const interval = setInterval(load, 60000);
+    return () => { active = false; clearInterval(interval); };
+  }, [activityIdsKey]);
   return (
     <View style={styles.nearbyCard}>
       <View style={styles.nearbyHead}><View style={styles.flex}><Text style={styles.sectionLabel}>REGISTERED PLAYERS</Text><Text style={styles.nearbySubtitle}>{visible ? 'Online players within 25 km appear below. Search by name to find registered players in any city. Your exact position stays private.' : 'Your accepted teammates appear here. Search by name to find players in any city, or go visible to see who is online nearby.'}</Text></View><Pressable disabled={loading} accessibilityRole="switch" accessibilityState={{ checked: visible }} accessibilityLabel={visible ? 'Stop showing me to nearby players' : 'Show me to nearby players'} onPress={() => onVisibility(!visible)} style={[styles.visibilityButton, visible && styles.visibilityButtonOn, loading && styles.disabled]}><View style={[styles.visibilityDot, visible && styles.visibilityDotOn]} /><Text style={[styles.visibilityText, visible && styles.visibilityTextOn]}>{loading ? 'WAIT' : visible ? 'VISIBLE' : 'GO VISIBLE'}</Text></Pressable></View>
@@ -350,17 +372,23 @@ function NearbyLobby({ players, invited, outgoingInvites, onToggle, onMessage, f
         const pending = latestInvite?.status === 'pending';
         const accepted = latestInvite?.status === 'accepted';
         const disabled = !accepted && full && !added && !pending;
+        const isNearby = !player.isTeammate && !player.isSearchResult && !player.isAcceptedInvite;
+        const online = isNearby || Boolean(activity.get(player.id)?.isOnline);
+        const statusLabel = isNearby ? '' : online ? ' · online' : lastActiveLabel(activity.get(player.id)?.lastActiveAt);
         return (
           <View key={player.id} style={[styles.nearbyPlayer, index > 0 && styles.nearbyPlayerBorder]}>
-            <ResilientImage
-              uri={normalizeProfilePhoto(player.avatar || player.avatar_url)}
-              accessibilityLabel={`${player.name} profile photo`}
-              fallback={<Text style={styles.nearbyAvatarText}>{player.initials || initials(player.name)}</Text>}
-              fallbackColor={player.color || C.teal}
-              showLoadingIndicator={false}
-              style={styles.nearbyAvatar}
-            />
-            <View style={styles.nearbyCopy}><Text style={styles.nearbyName}>{player.name}</Text><Text style={styles.nearbyMeta}>{accepted ? 'Accepted · in your lineup' : player.isTeammate ? `${player.teamNames?.join(', ') || 'Your team'} · teammate${player.distance ? ` · ${player.distance} away` : ''}` : player.isSearchResult ? `★ ${player.rating}${player.area ? ` · ${player.area}` : ''} · registered player` : `★ ${player.rating} · ${player.distance} away${player.distanceAccuracy ? ` (±${player.distanceAccuracy})` : ''} · online`}</Text></View>
+            <View>
+              <ResilientImage
+                uri={normalizeProfilePhoto(player.avatar || player.avatar_url)}
+                accessibilityLabel={`${player.name} profile photo${online ? ', online' : ''}`}
+                fallback={<Text style={styles.nearbyAvatarText}>{player.initials || initials(player.name)}</Text>}
+                fallbackColor={player.color || C.teal}
+                showLoadingIndicator={false}
+                style={styles.nearbyAvatar}
+              />
+              {online && <View style={styles.nearbyOnlineDot} />}
+            </View>
+            <View style={styles.nearbyCopy}><Text style={styles.nearbyName}>{player.name}</Text><Text style={styles.nearbyMeta}>{accepted ? `Accepted · in your lineup${statusLabel}` : player.isTeammate ? `${player.teamNames?.join(', ') || 'Your team'} · teammate${player.distance ? ` · ${player.distance} away` : ''}${statusLabel}` : player.isSearchResult ? `★ ${player.rating}${player.area ? ` · ${player.area}` : ''} · registered player${statusLabel}` : `★ ${player.rating} · ${player.distance} away${player.distanceAccuracy ? ` (±${player.distanceAccuracy})` : ''} · online`}</Text></View>
             {PRIVATE_MESSAGES_ENABLED ? <Pressable accessibilityLabel={`Message ${player.name} privately`} onPress={() => onMessage(player)} style={({ pressed }) => [styles.nearbyMessageButton, pressed && styles.pressed]}><Icon name="chatbubble-outline" size={16} color={C.teal} /></Pressable> : null}
             <Pressable disabled={disabled} accessibilityLabel={`${accepted ? 'Remove' : pending ? 'Cancel invitation for' : disabled ? 'Lineup full for' : 'Invite'} ${player.name}`} accessibilityHint={accepted ? 'Removes this player from your match after confirmation' : undefined} hitSlop={accepted ? 6 : 0} onPress={() => onToggle(player, latestInvite)} style={({ pressed }) => [styles.inviteButton, pending && styles.inviteButtonAdded, accepted && styles.inviteButtonRemove, disabled && styles.inviteButtonDisabled, pressed && !disabled && styles.pressed]}>
               <Icon name={accepted ? 'person-remove-outline' : pending ? 'time-outline' : disabled ? 'remove' : 'add'} size={accepted ? 18 : 15} color={accepted ? C.brick : pending ? C.teal : disabled ? C.ink40 : '#0E2321'} />
@@ -504,7 +532,7 @@ function SidelineScorerInvite({ candidates, excludedIds, invites, onInvite, onWi
   );
 }
 
-function SetupScreen({ courts, courtsLoading, courtsError, onRefreshCourts, onBookCourt, recentCourts = [], defaultCourtArea = '', nearbyPlayers, nearbyPresence, currentUserName, currentUserId, currentUserAvatar, onStart, focusChallenge, onBackToChoices, showBackToChoices = true, onFindPlay, onMessagePlayer, onLeaveJoined, unfinishedMatch, onResume, openNearbyPlayersToken, scheduledGame = null }) {
+function SetupScreen({ active = true, courts, courtsLoading, courtsError, onRefreshCourts, onBookCourt, recentCourts = [], defaultCourtArea = '', nearbyPlayers, nearbyPresence, currentUserName, currentUserId, currentUserAvatar, onStart, focusChallenge, onBackToChoices, showBackToChoices = true, onFindPlay, onMessagePlayer, onLeaveJoined, unfinishedMatch, onResume, openNearbyPlayersToken, scheduledGame = null }) {
   const [followingPlayers, setFollowingPlayers] = useState([]);
   const [teammates, setTeammates] = useState([]);
   const [rosterError, setRosterError] = useState('');
@@ -551,13 +579,11 @@ function SetupScreen({ courts, courtsLoading, courtsError, onRefreshCourts, onBo
   const [scoringMethod, setScoringMethod] = useState('manual');
   const [showCourts, setShowCourts] = useState(false);
   const [showAdvanced, setShowAdvanced] = useState(false);
-  const [setupStage, setSetupStage] = useState(() => openNearbyPlayersToken ? 1 : 0);
+  const [setupStage, setSetupStage] = useState(0);
   const setupId = useRef(`${Date.now()}-${Math.random().toString(36).slice(2)}`).current;
   const appliedInviteIds = useRef(new Set());
   const appliedInvitePlayers = useRef(new Map());
   const scrollRef = useRef(null);
-  const nearbySectionY = useRef(0);
-  const pendingNearbyScroll = useRef(Boolean(openNearbyPlayersToken));
   const handledNearbyToken = useRef(null);
   const requiredPlayers = matchType === 'doubles' ? 2 : 1;
 
@@ -567,22 +593,19 @@ function SetupScreen({ courts, courtsLoading, courtsError, onRefreshCourts, onBo
     setScorerId(currentUserId || null);
   }, [currentUserId, currentUserName, scorerSource]);
 
-  const scrollToNearbyPlayers = () => {
-    if (!nearbySectionY.current) return;
-    pendingNearbyScroll.current = false;
-    scrollRef.current?.scrollTo({ y: Math.max(0, nearbySectionY.current - 16), animated: true });
-  };
+  useEffect(() => {
+    if (!active) return undefined;
+    const frame = requestAnimationFrame(() => scrollRef.current?.scrollTo({ y: 0, animated: false }));
+    return () => cancelAnimationFrame(frame);
+  }, [active, setupStage]);
 
   useEffect(() => {
     if (!openNearbyPlayersToken || handledNearbyToken.current === openNearbyPlayersToken) return undefined;
     handledNearbyToken.current = openNearbyPlayersToken;
-    pendingNearbyScroll.current = true;
     setAccess('public');
-    setSetupStage(1);
+    setSetupStage(0);
     setPlayers(emptyLineup(currentUserName));
     setInvited([]);
-    const timer = setTimeout(scrollToNearbyPlayers, 250);
-    return () => clearTimeout(timer);
   }, [currentUserName, openNearbyPlayersToken]);
 
   const handledScheduledGame = useRef(null);
@@ -600,7 +623,7 @@ function SetupScreen({ courts, courtsLoading, courtsError, onRefreshCourts, onBo
       ? [[me, ''], [names[0] || '', '']]
       : [[me, names[0] || ''], [names[1] || '', names[2] || '']]);
     setInvited([]);
-    setSetupStage(1);
+    setSetupStage(0);
   }, [currentUserId, currentUserName, scheduledGame?.token]);
 
   const updatePlayer = (team, index, value) => {
@@ -696,8 +719,21 @@ function SetupScreen({ courts, courtsLoading, courtsError, onRefreshCourts, onBo
 
   const moveToStage = (nextStage) => {
     setSetupStage(nextStage);
-    requestAnimationFrame(() => scrollRef.current?.scrollTo({ y: 0, animated: true }));
   };
+  const goBack = useCallback(() => {
+    if (setupStage > 0) setSetupStage((stage) => stage - 1);
+    else onBackToChoices();
+  }, [onBackToChoices, setupStage]);
+
+  useFocusEffect(useCallback(() => {
+    if (!active || joinedInvite) return undefined;
+    const listener = BackHandler.addEventListener('hardwareBackPress', () => {
+      if (setupStage === 0 && !showBackToChoices) return false;
+      goBack();
+      return true;
+    });
+    return () => listener.remove();
+  }, [active, goBack, joinedInvite, setupStage, showBackToChoices]));
 
   useEffect(() => {
     if (!COURT_BOOKING_ENABLED || !court || joinedInvite) return undefined;
@@ -859,7 +895,8 @@ function SetupScreen({ courts, courtsLoading, courtsError, onRefreshCourts, onBo
       <Header
         eyebrow={joinedInvite ? 'MATCH JOINED' : 'MATCH DAY'}
         title={joinedInvite ? (joinedAsScorer ? 'You’re keeping score' : 'You’re in the match') : 'Set up a match'}
-        onBack={showBackToChoices && !joinedInvite ? onBackToChoices : null}
+        onBack={!joinedInvite && (setupStage > 0 || showBackToChoices) ? goBack : null}
+        backLabel={setupStage > 0 ? `Back to ${setupStages[setupStage - 1].label.toLowerCase()}` : 'Back to Play options'}
         action={joinedInvite ? <View style={styles.joinedChip}><Icon name="checkmark-circle" size={13} color="#0E2321" /><Text style={styles.joinedChipText}>JOINED</Text></View> : <View style={styles.liveChip}><View style={styles.liveDot} /><Text style={styles.liveChipText}>COURT-SIDE</Text></View>}
       />
 
@@ -911,31 +948,24 @@ function SetupScreen({ courts, courtsLoading, courtsError, onRefreshCourts, onBo
 
       {!joinedInvite && <View style={styles.setupGuide}>
         <View style={styles.setupGuideHead}>
-          <View><Text style={styles.setupGuideEyebrow}>STEP {setupStage + 1} OF {setupStages.length}</Text><Text style={styles.setupGuideTitle}>{setupStages[setupStage].label} details</Text></View>
+          <View><Text style={styles.setupGuideEyebrow}>STEP {setupStage + 1} OF {setupStages.length}</Text><Text accessibilityRole="header" style={styles.setupGuideTitle}>{setupStages[setupStage].label} details</Text></View>
           <View accessibilityLabel={`Setup progress ${Math.round(((setupStage + 1) / setupStages.length) * 100)} percent`} style={[styles.setupProgressBadge, setupStage === setupStages.length - 1 && canStart && styles.setupProgressBadgeReady]}><Text maxFontSizeMultiplier={1.2} style={[styles.setupProgressText, { color: '#0E2321' }]}>{Math.round(((setupStage + 1) / setupStages.length) * 100)}%</Text></View>
         </View>
         <View style={styles.setupSteps}>
           {setupStages.map(({ icon, label }, index) => {
             const done = index < setupStage;
             const active = index === setupStage;
-            return <React.Fragment key={label}><View style={styles.setupStep}><View style={[styles.setupStepIcon, done && styles.setupStepIconDone, active && styles.setupStepIconActive]}>{done ? <Icon name="checkmark" size={15} color="#0E2321" /> : icon === 'tennisball-outline' ? <Image source={BALL_IMAGE} style={{ width: 17, height: 17 }} tintColor={active ? '#0E2321' : C.ink40} resizeMode="contain" /> : <Icon name={icon} size={15} color={active ? '#0E2321' : C.ink40} />}</View><Text style={[styles.setupStepText, done && styles.setupStepTextDone, active && styles.setupStepTextActive]}>{label}</Text></View>{index < setupStages.length - 1 && <View style={[styles.setupStepLine, index < setupStage && styles.setupStepLineDone]} />}</React.Fragment>;
+            return <React.Fragment key={label}><Pressable accessibilityRole="button" accessibilityLabel={`${label} step`} accessibilityState={{ selected: active, disabled: !done }} disabled={!done} onPress={() => moveToStage(index)} style={styles.setupStep}><View style={[styles.setupStepIcon, done && styles.setupStepIconDone, active && styles.setupStepIconActive]}>{done ? <Icon name="checkmark" size={15} color="#0E2321" /> : icon === 'tennisball-outline' ? <Image source={BALL_IMAGE} style={{ width: 17, height: 17 }} tintColor={active ? '#0E2321' : C.ink40} resizeMode="contain" /> : <Icon name={icon} size={15} color={active ? '#0E2321' : C.ink40} />}</View><Text style={[styles.setupStepText, done && styles.setupStepTextDone, active && styles.setupStepTextActive]}>{label}</Text></Pressable>{index < setupStages.length - 1 && <View style={[styles.setupStepLine, index < setupStage && styles.setupStepLineDone]} />}</React.Fragment>;
           })}
         </View>
         <Text accessibilityLiveRegion="polite" style={[styles.setupGuideMessage, setupStage === 3 && canStart && styles.setupGuideMessageReady]}>{stageMessage}</Text>
       </View>}
 
-      {/* Keep format within reach when Find players opens directly on step 2. */}
-      {setupStage <= 1 && !joinedInvite && <View style={styles.formPart} onLayout={(event) => {
-        nearbySectionY.current = event.nativeEvent.layout.y;
-        if (pendingNearbyScroll.current && setupStage === 1) requestAnimationFrame(scrollToNearbyPlayers);
-      }}>
+      {setupStage === 0 && !joinedInvite && <View style={styles.formPart}>
       <SegmentedControl label="FORMAT" value={matchType} onChange={setMatchType} options={[
         { value: 'singles', label: 'Singles', icon: 'person-outline' },
         { value: 'doubles', label: 'Doubles', icon: 'people-outline' },
       ]} />
-      </View>}
-
-      {setupStage === 0 && !joinedInvite && <View style={styles.formPart}>
       <SegmentedControl label="PLAY TYPE" value={mode} onChange={setMode} options={[
         { value: 'casual', label: 'Casual', icon: 'happy-outline' },
         { value: 'ranked', label: 'Ranked', icon: 'podium-outline' },
@@ -944,6 +974,11 @@ function SetupScreen({ courts, courtsLoading, courtsError, onRefreshCourts, onBo
       </View>}
 
       {setupStage === 1 && !joinedInvite && <View style={styles.formPart}>
+      <Pressable accessibilityRole="button" accessibilityLabel="Change game type" onPress={() => moveToStage(0)} style={({ pressed }) => [styles.setupGameSummary, pressed && styles.pressed]}>
+        <Icon name={matchType === 'singles' ? 'person-outline' : 'people-outline'} color={C.teal} />
+        <View style={styles.flex}><Text style={styles.setupGameSummaryTitle}>{matchType === 'singles' ? 'Singles' : 'Doubles'} · {mode === 'ranked' ? 'Ranked' : 'Casual'}</Text><Text style={styles.setupGameSummaryMeta}>{requiredPlayers * 2} players · {target} points · {bestOf === 1 ? '1 game' : 'Best of 3'}</Text></View>
+        <Text style={styles.setupGameSummaryAction}>Change game</Text><Icon name="chevron-back" size={15} color={C.teal} />
+      </Pressable>
       <SegmentedControl label="HOW TO ADD PLAYERS" value={access} onChange={changeAccess} options={[
         { value: 'public', label: 'Registered', icon: 'person-add-outline' },
         { value: 'private', label: 'Guest names', icon: 'create-outline' },
@@ -996,7 +1031,7 @@ function SetupScreen({ courts, courtsLoading, courtsError, onRefreshCourts, onBo
       </View>
       </View>}
 
-      {!joinedInvite && <View style={styles.lineupPreview}>
+      {!joinedInvite && (setupStage === 1 || setupStage === 3) && <View style={styles.lineupPreview}>
         <View style={styles.sectionHeadingRow}><View style={styles.sectionHeadingCopy}><Text style={styles.sectionLabel}>COURT LINEUP</Text><Text style={styles.sectionHelper}>{canStart ? 'Everything looks good' : 'Open spots update as you add players'}</Text></View>{canStart && <View style={styles.readyPill}><Icon name="checkmark-circle" size={14} color={C.teal} /><Text style={styles.readyPillText}>READY</Text></View>}</View>
         <CourtLineup players={players} matchType={matchType} court={court} onSwap={() => setPlayers(([first, second]) => [second, first])} currentUserName={currentUserName} currentUserAvatar={currentUserAvatar} registeredPlayers={[...registeredPlayers, ...lineupProfiles]} />
       </View>}
@@ -1071,7 +1106,7 @@ function SetupScreen({ courts, courtsLoading, courtsError, onRefreshCourts, onBo
         <View style={styles.flex}><Text style={styles.joinedWaitingEyebrow}>YOU’RE CONNECTED</Text><Text style={styles.joinedWaitingTitle}>Waiting for {joinedSender?.display_name || 'the host'}</Text><Text style={styles.joinedWaitingText}>Keep this screen open. The host controls the lineup and starts the match.</Text></View>
         <Pressable accessibilityRole="button" accessibilityLabel="Leave joined match" onPress={onLeaveJoined} style={({ pressed }) => [styles.leaveJoinedButton, pressed && styles.pressed]}><Icon name="exit-outline" size={17} color={C.brick} /><Text style={styles.leaveJoinedText}>Leave</Text></Pressable>
       </View> : <View style={styles.wizardActions}>
-        {setupStage > 0 && <Pressable accessibilityRole="button" onPress={() => moveToStage(setupStage - 1)} style={({ pressed }) => [styles.wizardBack, pressed && styles.pressed]}><Icon name="arrow-back" size={16} color={C.teal} /><Text style={styles.wizardBackText}>Back</Text></Pressable>}
+        {setupStage > 0 && <Pressable accessibilityRole="button" accessibilityLabel={`Back to ${setupStages[setupStage - 1].label.toLowerCase()}`} onPress={goBack} style={({ pressed }) => [styles.wizardBack, pressed && styles.pressed]}><Icon name="arrow-back" size={16} color={C.teal} /><Text style={styles.wizardBackText}>Back</Text></Pressable>}
         {setupStage < setupStages.length - 1 ? <Pressable
           accessibilityRole="button"
           disabled={!canContinueStage}
@@ -1879,6 +1914,13 @@ function LiveMatch({ match, sharedSession = null, currentUserId, onSyncSharedSta
       const command = parseVoiceMatchCommand(transcript, match.players, server);
       if (!command) continue;
 
+      if (command.type === 'undo') {
+        if (!history.length) return false;
+        undo();
+        setShoutFeedback({ accepted: true, message: `Undid last point · “${transcript}”` });
+        return true;
+      }
+
       if (command.type === 'rally') {
         setShoutFeedback({ accepted: true, message: `Applied “${transcript}”` });
         recordRally(command.team);
@@ -1909,9 +1951,11 @@ function LiveMatch({ match, sharedSession = null, currentUserId, onSyncSharedSta
     }
 
     if (metadata?.pending) return false;
+    // Court chatter and noise with no scoring words are ignored without feedback.
+    if (![primaryTranscript, ...transcripts].some(mentionsScoring)) return false;
     const reason = metadata?.reason === 'low-confidence'
       ? 'Recognition was uncertain. Please repeat the full command.'
-      : 'Not applied. Say “point,” “serving,” or start with “score.”';
+      : 'Not applied. Say “point team one,” “side out,” “Alex serving,” or “score 2 1 2.”';
     setShoutFeedback({ accepted: false, message: reason });
     setScorerMessage(`Heard “${primaryTranscript}” · No score or serve change applied`);
     return true;
@@ -1921,6 +1965,8 @@ function LiveMatch({ match, sharedSession = null, currentUserId, onSyncSharedSta
   const {
     listening: shoutListening,
     lastHeard: shoutLastHeard,
+    preparingOnDevice: shoutPreparingOnDevice,
+    needsTap: shoutNeedsTap,
     unavailable: shoutUnavailable,
     errorMessage: shoutErrorMessage,
   } = useShoutScoring({
@@ -2031,14 +2077,14 @@ function LiveMatch({ match, sharedSession = null, currentUserId, onSyncSharedSta
               {scoringMethod === 'voice'
                 ? 'Score and next server are announced aloud'
                 : scoringMethod === 'shout'
-                  ? (shoutListening ? (shoutLastHeard ? 'Heard: "' + shoutLastHeard + '"' : 'Listening for a complete command…') : 'Starting the microphone…')
+                  ? (shoutListening ? (shoutLastHeard ? 'Heard: "' + shoutLastHeard + '"' : 'Listening for a complete command…') : shoutNeedsTap ? 'Tap anywhere to turn on the microphone' : shoutPreparingOnDevice ? 'Downloading speech recognition (one time)…' : 'Starting the microphone…')
                   : 'Quiet one-tap courtside controls'}
             </Text>
           </View>
           <View accessibilityRole="radiogroup" style={styles.liveScoringMethodSwitch}>
             {[{ value: 'manual', label: 'Manual', icon: 'hand-left-outline' }, { value: 'voice', label: 'Announce', icon: 'volume-high-outline' }, { value: 'shout', label: 'Listen', icon: 'mic-outline' }].filter((option) => VOICE_COMMAND_SCORING_ENABLED || option.value !== 'shout').map((option) => {
               const active = scoringMethod === option.value;
-              return <Pressable key={option.value} accessibilityRole="radio" accessibilityState={{ checked: active }} onPress={() => changeScoringMethod(option.value)} style={[styles.liveScoringMethodOption, active && styles.liveScoringMethodOptionActive]}><Icon name={active && option.value === 'shout' && shoutListening ? 'mic' : option.icon} size={13} color={active ? '#0E2321' : C.ink40} /><Text style={[styles.liveScoringMethodText, active && styles.liveScoringMethodTextActive]}>{option.label}</Text></Pressable>;
+              return <Pressable key={option.value} accessibilityRole="radio" accessibilityState={{ checked: active }} onPress={() => changeScoringMethod(option.value)} style={[styles.liveScoringMethodOption, active && styles.liveScoringMethodOptionActive]}><Icon name={active && option.value === 'shout' && shoutListening ? 'mic' : option.icon} size={13} color={active ? '#0E2321' : C.ink40} /><Text numberOfLines={1} style={[styles.liveScoringMethodText, active && styles.liveScoringMethodTextActive]}>{option.label}</Text></Pressable>;
             })}
           </View>
         </View>
@@ -2076,7 +2122,7 @@ function LiveMatch({ match, sharedSession = null, currentUserId, onSyncSharedSta
       <MatchBoxScore match={match} games={games} scores={scores} gameScores={gameScores} elapsed={elapsed} gameElapsed={gameElapsed} gameDurations={gameDurations} gameBreak={gameBreak} />
       <RallyBoxScore rallies={rallyLog} />
 
-      {(canScore || isHost || finishing) && <Pressable disabled={finishing} onPress={() => setShowEnd(true)} style={({ pressed }) => [styles.endLink, pressed && styles.pressed]}><Icon name="flag-outline" size={17} color={C.brick} /><Text style={styles.endLinkText}>{finishing ? 'Ending match…' : 'End match early'}</Text></Pressable>}
+      {(canScore || isHost || finishing) && <Pressable accessibilityRole="button" disabled={finishing} onPress={() => setShowEnd(true)} style={({ pressed }) => [styles.endLink, pressed && styles.pressed]}><Icon name="flag-outline" size={17} color={C.brick} /><Text style={styles.endLinkText}>{finishing ? 'Ending match…' : 'End match early'}</Text></Pressable>}
       <ConfirmEndModal visible={showEnd} onCancel={() => setShowEnd(false)} onConfirm={endEarly} onSaveUnfinished={saveUnfinished} />
       <ServerSelectionModal visible={manualServeTeam !== null} teamName={manualServeTeam !== null ? teamName(match.players[manualServeTeam]) : ''} players={manualServeTeam !== null ? match.players[manualServeTeam] : []} onCancel={() => setManualServeTeam(null)} onSelect={(playerIndex, selectedServiceNumber) => { applyServeCorrection(manualServeTeam, playerIndex, selectedServiceNumber, 'Manual correction'); setManualServeTeam(null); }} />
     </ScrollView>
@@ -2244,6 +2290,8 @@ export default function PlayScreen({ route, navigation }) {
   const [openPlayMode, setOpenPlayMode] = useState(null);
   const [unfinishedMatch, setUnfinishedMatch] = useState(null);
   const [showSetupBackToChoices, setShowSetupBackToChoices] = useState(true);
+  const [setupEntry, setSetupEntry] = useState(0);
+  const [scheduledGameSetup, setScheduledGameSetup] = useState(null);
   const handledStartToken = useRef(null);
   const handledFocusToken = useRef(null);
   const handledNearbyToken = useRef(null);
@@ -2587,6 +2635,8 @@ export default function PlayScreen({ route, navigation }) {
     setResultSaveState('idle');
     setResultSaveError('');
     setFocusChallenge(null);
+    setScheduledGameSetup(null);
+    setSetupEntry((entry) => entry + 1);
     setShowSetupBackToChoices(true);
     setScreen('setup');
     setOpenPlayMode(null);
@@ -2596,6 +2646,7 @@ export default function PlayScreen({ route, navigation }) {
     setMatch(null);
     setResult(null);
     setFocusChallenge(null);
+    setScheduledGameSetup(null);
     setOpenPlayMode(null);
     setShowSetupBackToChoices(true);
     setScreen('choice');
@@ -2605,6 +2656,8 @@ export default function PlayScreen({ route, navigation }) {
     const token = route?.params?.focusChallengeToken;
     if (!token || handledFocusToken.current === token) return;
     handledFocusToken.current = token;
+    setSetupEntry((entry) => entry + 1);
+    setScheduledGameSetup(null);
     setFocusChallenge(route.params.focusChallenge);
     setMatch(null);
     setResult(null);
@@ -2617,6 +2670,9 @@ export default function PlayScreen({ route, navigation }) {
     const token = route?.params?.startLiveToken;
     if (!token || handledStartToken.current === token) return;
     handledStartToken.current = token;
+    setSetupEntry((entry) => entry + 1);
+    setScheduledGameSetup(null);
+    setFocusChallenge(null);
     setMatch(null);
     setResult(null);
     setShowSetupBackToChoices(false);
@@ -2628,6 +2684,8 @@ export default function PlayScreen({ route, navigation }) {
     const token = route?.params?.joinedMatchToken;
     if (!token || handledJoinedMatchToken.current === token) return;
     handledJoinedMatchToken.current = token;
+    setSetupEntry((entry) => entry + 1);
+    setScheduledGameSetup(null);
     setMatch(null);
     setResult(null);
     setFocusChallenge(null);
@@ -2636,11 +2694,12 @@ export default function PlayScreen({ route, navigation }) {
     setOpenPlayMode(null);
   }, [route?.params?.joinedMatchToken]);
 
-  const [scheduledGameSetup, setScheduledGameSetup] = useState(null);
   useEffect(() => {
     const setup = route?.params?.scheduledGame;
     const token = route?.params?.scheduledGameToken;
     if (!setup || !token || scheduledGameSetup?.token === token) return;
+    setSetupEntry((entry) => entry + 1);
+    setFocusChallenge(null);
     setMatch(null);
     setResult(null);
     setShowSetupBackToChoices(true);
@@ -2656,6 +2715,9 @@ export default function PlayScreen({ route, navigation }) {
     const token = route?.params?.nearbyPlayersToken;
     if (!token || handledNearbyToken.current === token) return;
     handledNearbyToken.current = token;
+    setSetupEntry((entry) => entry + 1);
+    setScheduledGameSetup(null);
+    setFocusChallenge(null);
     setMatch(null);
     setResult(null);
     setShowSetupBackToChoices(true);
@@ -2702,7 +2764,9 @@ export default function PlayScreen({ route, navigation }) {
       <StatusBar style={screen === 'live' || isDark ? 'light' : 'dark'} backgroundColor={screen === 'live' ? '#0E2321' : C.paper} />
       {openPlayMode === 'join' ? <PlayerOpenPlayScreen initialCode={route?.params?.openPlayCode || ''} initialSessionId={route?.params?.openPlaySessionId || null} navigationToken={route?.params?.openPlayToken || null} onBack={leaveOpenPlay} onDetailBack={route?.params?.openPlayDirect ? leaveOpenPlay : null} onOpenChat={(session) => navigation.navigate('CommunityChat', { eventKind: 'open_play', eventId: session.id, title: session.name, ownerTab: 'Play' })} /> : <>
       {screen === 'choice' && <PlayChoiceScreen onFindPlay={findPlay} onSetupMatch={() => { setShowSetupBackToChoices(true); setScreen('setup'); }} unfinishedMatch={unfinishedMatch} onResume={resumeMatch} />}
-      {screen === 'setup' && <SetupScreen courts={courts} courtsLoading={courtsLoading} courtsError={courtsError} onRefreshCourts={refreshCourtBookings} onBookCourt={openCourtBooking} recentCourts={recentCourts} defaultCourtArea={areaFromLocationLabel(userLocation?.label)} nearbyPlayers={nearbyPresence.players} nearbyPresence={nearbyPresence} currentUserName={user?.name} currentUserId={user?.id} currentUserAvatar={user?.picture} onStart={startMatch} focusChallenge={focusChallenge} onBackToChoices={showPlayChoices} showBackToChoices={showSetupBackToChoices} onFindPlay={findPlay} onMessagePlayer={(player) => navigation.navigate('DirectChat', { player: { id: player.id, name: player.name, avatar: player.avatar || null, area: player.area || null }, ownerTab: 'Play' })} onLeaveJoined={confirmLeaveJoinedMatch} unfinishedMatch={unfinishedMatch} onResume={resumeMatch} openNearbyPlayersToken={route?.params?.nearbyPlayersToken} scheduledGame={scheduledGameSetup} />}
+      {(screen === 'setup' || screen === 'pregame') && <View key={setupEntry} style={{ flex: 1, display: screen === 'setup' ? 'flex' : 'none' }}>
+        <SetupScreen active={screen === 'setup'} courts={courts} courtsLoading={courtsLoading} courtsError={courtsError} onRefreshCourts={refreshCourtBookings} onBookCourt={openCourtBooking} recentCourts={recentCourts} defaultCourtArea={areaFromLocationLabel(userLocation?.label)} nearbyPlayers={nearbyPresence.players} nearbyPresence={nearbyPresence} currentUserName={user?.name} currentUserId={user?.id} currentUserAvatar={user?.picture} onStart={startMatch} focusChallenge={focusChallenge} onBackToChoices={showPlayChoices} showBackToChoices={showSetupBackToChoices} onFindPlay={findPlay} onMessagePlayer={(player) => navigation.navigate('DirectChat', { player: { id: player.id, name: player.name, avatar: player.avatar || null, area: player.area || null }, ownerTab: 'Play' })} onLeaveJoined={confirmLeaveJoinedMatch} unfinishedMatch={unfinishedMatch} onResume={resumeMatch} openNearbyPlayersToken={route?.params?.nearbyPlayersToken} scheduledGame={scheduledGameSetup} />
+      </View>}
       {screen === 'pregame' && match && <PreGameScreen match={match} onBack={() => setScreen('setup')} onStart={startLiveMatch} />}
       {screen === 'live' && match && <LiveMatch key={DEMO_MODE ? `demo-${route?.params?.demoLiveToken || 0}` : 'live'} match={match} sharedSession={match.sharedLiveMatchId ? nearbyPresence.sharedLiveMatch : null} currentUserId={user?.id} onSyncSharedState={syncSharedScore} onHandoffScorer={handoffSharedScorer} onTakeOverScorer={takeOverSharedScorer} onFinish={finishMatch} />}
       {screen === 'result' && result && <ResultScreen result={result} saveState={resultSaveState === 'idle' ? 'saved' : resultSaveState} saveError={resultSaveError} onRetrySave={() => recordCompletedResult(result)} onRematch={!match?.sharedLiveMatchId || nearbyPresence.sharedLiveMatch?.host_id === user?.id ? () => startMatch(match) : null} onNewMatch={reset} />}
@@ -2726,6 +2790,10 @@ const lightStyles = createMobileStyleSheet({
   safe: { flex: 1, backgroundColor: C.paper },
   flex: { flex: 1 },
   content: { paddingHorizontal: 20, paddingTop: 18, paddingBottom: 126 },
+  setupGameSummary: { marginTop: 20, padding: 14, flexDirection: 'row', alignItems: 'center', gap: 10, borderWidth: 1, borderColor: C.line, borderRadius: 16, backgroundColor: C.surface },
+  setupGameSummaryTitle: { color: C.ink, fontSize: 12, fontWeight: '800' },
+  setupGameSummaryMeta: { marginTop: 4, color: C.ink40, fontSize: 9, lineHeight: 14 },
+  setupGameSummaryAction: { color: C.teal, fontSize: 10, fontWeight: '800' },
   playChoiceContent: { paddingBottom: 126 },
   choiceHelpBadge: { minHeight: 34, paddingHorizontal: 10, flexDirection: 'row', alignItems: 'center', gap: 5, borderRadius: 17, backgroundColor: '#E5F0ED' },
   choiceHelpBadgeText: { color: C.teal, fontSize: 7, fontWeight: '900', letterSpacing: .65 },
@@ -2772,7 +2840,7 @@ const lightStyles = createMobileStyleSheet({
   fieldGroup: { marginTop: 22 }, sectionLabel: { marginBottom: 8, color: C.ink, fontSize: 10, fontWeight: '800', letterSpacing: .9 }, sectionHeadingRow: { marginBottom: 9, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 10 }, sectionHeadingCopy: { flex: 1, minWidth: 0 }, sectionHelper: { marginTop: -5, color: C.ink40, fontSize: 8, lineHeight: 12 }, rosterCount: { minWidth: 38, minHeight: 27, paddingHorizontal: 7, alignItems: 'center', justifyContent: 'center', borderRadius: 14, backgroundColor: C.paper }, rosterCountReady: { backgroundColor: C.optic }, rosterCountText: { color: C.ink, fontSize: 8, fontWeight: '900' },
   playerSourceHelp: { marginTop: 9, padding: 11, flexDirection: 'row', alignItems: 'center', gap: 9, borderRadius: 14, borderWidth: 1, borderColor: C.line, backgroundColor: C.surface }, playerSourceHelpIcon: { width: 38, height: 38, alignItems: 'center', justifyContent: 'center', borderRadius: 12, backgroundColor: '#E5F0ED' }, playerSourceHelpTitle: { color: C.ink, fontSize: 10, fontWeight: '900' }, playerSourceHelpText: { marginTop: 3, color: C.ink40, fontSize: 8, lineHeight: 12 },
   segment: { padding: 4, flexDirection: 'row', gap: 4, borderRadius: 14, backgroundColor: C.surface }, segmentItem: { flex: 1, minHeight: 44, paddingHorizontal: 8, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6, borderRadius: 10 }, segmentActive: { backgroundColor: C.optic, ...shadow }, segmentText: { color: C.ink40, fontSize: 11, fontWeight: '700' }, segmentTextActive: { color: C.ink, fontWeight: '800' },
-  nearbyCard: { marginTop: 14, padding: 14, borderRadius: 18, borderWidth: 1, borderColor: C.line, backgroundColor: C.surface }, nearbyHead: { paddingBottom: 11, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 8 }, nearbySubtitle: { marginTop: -4, color: C.ink40, fontSize: 9, lineHeight: 13 }, visibilityButton: { minWidth: 80, minHeight: 34, paddingHorizontal: 9, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 5, borderRadius: 17, backgroundColor: C.paper }, visibilityButtonOn: { backgroundColor: C.optic }, visibilityDot: { width: 7, height: 7, borderRadius: 4, backgroundColor: C.ink40 }, visibilityDotOn: { backgroundColor: '#0E2321' }, visibilityText: { color: C.ink40, fontSize: 6, fontWeight: '900', letterSpacing: .45 }, visibilityTextOn: { color: '#0E2321' }, playerSearch: { minHeight: 44, marginBottom: 8, paddingHorizontal: 12, flexDirection: 'row', alignItems: 'center', gap: 9, borderWidth: 1, borderColor: C.line, borderRadius: 12, backgroundColor: C.surface }, playerSearchInput: { minWidth: 0, flex: 1, paddingVertical: 10, color: C.ink, fontSize: 11, fontWeight: '700' }, nearbyCountRow: { paddingVertical: 5, borderTopWidth: 1, borderColor: C.line }, nearbyCount: { alignSelf: 'flex-start', paddingHorizontal: 7, minHeight: 23, flexDirection: 'row', alignItems: 'center', gap: 4, borderRadius: 12, backgroundColor: '#E5F0ED' }, nearbyCountText: { color: C.teal, fontSize: 6, fontWeight: '900', letterSpacing: .4 }, nearbyError: { marginBottom: 6, padding: 9, flexDirection: 'row', alignItems: 'center', gap: 6, borderRadius: 11, backgroundColor: '#F9ECE8' }, nearbyErrorText: { flex: 1, color: C.brick, fontSize: 8, lineHeight: 12 }, nearbyEmpty: { paddingVertical: 15, alignItems: 'center', borderTopWidth: 1, borderColor: C.line }, nearbyEmptyTitle: { marginTop: 5, color: C.ink, fontSize: 10, fontWeight: '900' }, nearbyEmptyText: { maxWidth: 250, marginTop: 3, color: C.ink40, fontSize: 8, lineHeight: 12, textAlign: 'center' }, nearbyPlayer: { minHeight: 61, flexDirection: 'row', alignItems: 'center', gap: 7 }, nearbyPlayerBorder: { borderTopWidth: 1, borderColor: C.line }, nearbyAvatar: { width: 38, height: 38, alignItems: 'center', justifyContent: 'center', borderRadius: 19 }, nearbyAvatarText: { color: C.surface, fontSize: 9, fontWeight: '900' }, nearbyCopy: { flex: 1 }, nearbyName: { color: C.ink, fontSize: 11, fontWeight: '800' }, nearbyMeta: { marginTop: 3, color: C.ink40, fontSize: 8 }, nearbyMessageButton: { width: 34, height: 34, alignItems: 'center', justifyContent: 'center', borderRadius: 11, borderWidth: 1, borderColor: C.line, backgroundColor: C.surface }, inviteButton: { minWidth: 58, minHeight: 32, paddingHorizontal: 7, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 3, borderRadius: 10, backgroundColor: C.optic }, inviteButtonAdded: { borderWidth: 1, borderColor: '#BFD8D2', backgroundColor: '#E5F0ED' }, inviteButtonRemove: { width: 34, minWidth: 34, height: 34, minHeight: 34, paddingHorizontal: 0, borderWidth: 1, borderColor: '#E8C7BF', borderRadius: 11, backgroundColor: '#FFF5F2' }, inviteButtonDisabled: { backgroundColor: C.paper }, inviteButtonText: { color: '#0E2321', fontSize: 8, fontWeight: '900' }, inviteButtonTextAdded: { color: C.teal }, inviteButtonTextDisabled: { color: C.ink40 },
+  nearbyCard: { marginTop: 14, padding: 14, borderRadius: 18, borderWidth: 1, borderColor: C.line, backgroundColor: C.surface }, nearbyHead: { paddingBottom: 11, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 8 }, nearbySubtitle: { marginTop: -4, color: C.ink40, fontSize: 9, lineHeight: 13 }, visibilityButton: { minWidth: 80, minHeight: 34, paddingHorizontal: 9, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 5, borderRadius: 17, backgroundColor: C.paper }, visibilityButtonOn: { backgroundColor: C.optic }, visibilityDot: { width: 7, height: 7, borderRadius: 4, backgroundColor: C.ink40 }, visibilityDotOn: { backgroundColor: '#0E2321' }, visibilityText: { color: C.ink40, fontSize: 6, fontWeight: '900', letterSpacing: .45 }, visibilityTextOn: { color: '#0E2321' }, playerSearch: { minHeight: 44, marginBottom: 8, paddingHorizontal: 12, flexDirection: 'row', alignItems: 'center', gap: 9, borderWidth: 1, borderColor: C.line, borderRadius: 12, backgroundColor: C.surface }, playerSearchInput: { minWidth: 0, flex: 1, paddingVertical: 10, color: C.ink, fontSize: 11, fontWeight: '700' }, nearbyCountRow: { paddingVertical: 5, borderTopWidth: 1, borderColor: C.line }, nearbyCount: { alignSelf: 'flex-start', paddingHorizontal: 7, minHeight: 23, flexDirection: 'row', alignItems: 'center', gap: 4, borderRadius: 12, backgroundColor: '#E5F0ED' }, nearbyCountText: { color: C.teal, fontSize: 6, fontWeight: '900', letterSpacing: .4 }, nearbyError: { marginBottom: 6, padding: 9, flexDirection: 'row', alignItems: 'center', gap: 6, borderRadius: 11, backgroundColor: '#F9ECE8' }, nearbyErrorText: { flex: 1, color: C.brick, fontSize: 8, lineHeight: 12 }, nearbyEmpty: { paddingVertical: 15, alignItems: 'center', borderTopWidth: 1, borderColor: C.line }, nearbyEmptyTitle: { marginTop: 5, color: C.ink, fontSize: 10, fontWeight: '900' }, nearbyEmptyText: { maxWidth: 250, marginTop: 3, color: C.ink40, fontSize: 8, lineHeight: 12, textAlign: 'center' }, nearbyPlayer: { minHeight: 61, flexDirection: 'row', alignItems: 'center', gap: 7 }, nearbyPlayerBorder: { borderTopWidth: 1, borderColor: C.line }, nearbyAvatar: { width: 38, height: 38, alignItems: 'center', justifyContent: 'center', borderRadius: 19 }, nearbyAvatarText: { color: C.surface, fontSize: 9, fontWeight: '900' }, nearbyOnlineDot: { position: 'absolute', right: -1, bottom: -1, width: 12, height: 12, borderRadius: 6, borderWidth: 2, borderColor: C.surface, backgroundColor: '#68B96B' }, nearbyCopy: { flex: 1 }, nearbyName: { color: C.ink, fontSize: 11, fontWeight: '800' }, nearbyMeta: { marginTop: 3, color: C.ink40, fontSize: 8 }, nearbyMessageButton: { width: 34, height: 34, alignItems: 'center', justifyContent: 'center', borderRadius: 11, borderWidth: 1, borderColor: C.line, backgroundColor: C.surface }, inviteButton: { minWidth: 58, minHeight: 32, paddingHorizontal: 7, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 3, borderRadius: 10, backgroundColor: C.optic }, inviteButtonAdded: { borderWidth: 1, borderColor: '#BFD8D2', backgroundColor: '#E5F0ED' }, inviteButtonRemove: { width: 34, minWidth: 34, height: 34, minHeight: 34, paddingHorizontal: 0, borderWidth: 1, borderColor: '#E8C7BF', borderRadius: 11, backgroundColor: '#FFF5F2' }, inviteButtonDisabled: { backgroundColor: C.paper }, inviteButtonText: { color: '#0E2321', fontSize: 8, fontWeight: '900' }, inviteButtonTextAdded: { color: C.teal }, inviteButtonTextDisabled: { color: C.ink40 },
   courtSelect: { minHeight: 70, padding: 12, flexDirection: 'row', alignItems: 'center', gap: 11, borderRadius: 16, borderWidth: 1, borderStyle: 'dashed', borderColor: C.teal, backgroundColor: C.surface }, courtSelectChosen: { borderStyle: 'solid', borderColor: C.line }, courtSelectIcon: { width: 44, height: 44, alignItems: 'center', justifyContent: 'center', borderRadius: 13, backgroundColor: '#E5F0ED' }, courtSelectCopy: { flex: 1 }, courtSelectName: { color: C.ink, fontSize: 12, fontWeight: '800' }, courtSelectDetail: { marginTop: 4, color: C.ink40, fontSize: 8, lineHeight: 12 },
   bookingGateCard: { minHeight: 112, padding: 14, flexDirection: 'row', alignItems: 'center', gap: 11, borderRadius: 17, borderWidth: 1, borderColor: C.line, backgroundColor: C.surface }, bookingGateIcon: { width: 44, height: 44, alignItems: 'center', justifyContent: 'center', borderRadius: 13, backgroundColor: '#E5F0ED' }, bookingGateTitle: { color: C.ink, fontSize: 12, fontWeight: '900' }, bookingGateText: { marginTop: 4, color: C.ink40, fontSize: 8, lineHeight: 12 }, bookingGateLink: { alignSelf: 'flex-start', marginTop: 7, paddingVertical: 3 }, bookingGateLinkText: { color: C.teal, fontSize: 9, fontWeight: '900' }, bookCourtButton: { alignSelf: 'flex-start', minHeight: 38, marginTop: 10, paddingHorizontal: 11, flexDirection: 'row', alignItems: 'center', gap: 6, borderRadius: 11, backgroundColor: C.optic }, bookCourtButtonText: { color: '#0E2321', fontSize: 9, fontWeight: '900' }, bookingVerifiedNote: { marginTop: 9, paddingHorizontal: 4, flexDirection: 'row', alignItems: 'center', gap: 6 }, bookingVerifiedText: { flex: 1, color: C.ink40, fontSize: 8, lineHeight: 12 }, bookAnotherButton: { alignSelf: 'flex-start', minHeight: 36, marginTop: 5, paddingHorizontal: 4, flexDirection: 'row', alignItems: 'center', gap: 5 }, bookAnotherText: { color: C.teal, fontSize: 9, fontWeight: '900' },
   scorerPicker: { marginTop: 9, paddingHorizontal: 11, borderRadius: 17, borderWidth: 1, borderColor: C.line, backgroundColor: C.surface }, scorerOption: { minHeight: 64, flexDirection: 'row', alignItems: 'center', gap: 10, borderBottomWidth: 1, borderColor: C.line }, scorerOptionSelected: { marginHorizontal: -11, paddingHorizontal: 11, borderRadius: 14, borderBottomColor: 'transparent', backgroundColor: '#F4F9F7' }, scorerOptionAvatar: { width: 38, height: 38, alignItems: 'center', justifyContent: 'center', borderRadius: 12 }, scorerOptionInitials: { color: C.surface, fontSize: 9, fontWeight: '900' }, scorerOptionCopy: { flex: 1 }, scorerOptionName: { color: C.ink, fontSize: 11, fontWeight: '900' }, scorerOptionMeta: { marginTop: 3, color: C.ink40, fontSize: 8 }, scorerHint: { marginTop: 8, paddingHorizontal: 4, flexDirection: 'row', alignItems: 'center', gap: 6 }, scorerHintText: { flex: 1, color: C.ink40, fontSize: 8, lineHeight: 12 }, scorerReady: { paddingHorizontal: 7, minHeight: 25, flexDirection: 'row', alignItems: 'center', gap: 4, borderRadius: 13, backgroundColor: '#E5F0ED' }, scorerReadyText: { color: C.teal, fontSize: 6, fontWeight: '900', letterSpacing: .4 }, emptyScorerText: { marginTop: 8, color: C.brick, fontSize: 8, lineHeight: 12, textAlign: 'center' },
@@ -2793,7 +2861,7 @@ const lightStyles = createMobileStyleSheet({
   scorerBooth: { minHeight: 86, padding: 12, flexDirection: 'row', alignItems: 'center', gap: 10 }, scorerBoothAvatar: { width: 46, height: 46, alignItems: 'center', justifyContent: 'center', borderRadius: 15, backgroundColor: C.ink }, scorerBoothInitials: { color: C.surface, fontSize: 11, fontWeight: '900' }, scorerOnline: { position: 'absolute', right: -2, bottom: -2, width: 13, height: 13, borderRadius: 7, borderWidth: 3, borderColor: C.surface, backgroundColor: C.optic }, scorerBoothCopy: { flex: 1, minWidth: 0 }, scorerBoothLabel: { color: C.teal, fontSize: 6, fontWeight: '900', letterSpacing: .7 }, scorerBoothName: { marginTop: 2, color: C.ink, fontSize: 11, fontWeight: '900' }, scorerMessage: { marginTop: 3, color: C.ink40, fontSize: 7 }, scorerServing: { marginTop: 3, color: C.teal, fontSize: 7, fontWeight: '800' }, scorerControlBadge: { paddingHorizontal: 7, minHeight: 27, flexDirection: 'row', alignItems: 'center', gap: 3, borderRadius: 9, backgroundColor: '#E5F0ED' }, scorerControlText: { color: C.teal, fontSize: 5, fontWeight: '900', letterSpacing: .4 }, scorerChangeButton: { minHeight: 32, paddingHorizontal: 8, flexDirection: 'row', alignItems: 'center', gap: 4, borderWidth: 1, borderColor: C.line, borderRadius: 10, backgroundColor: C.surface }, scorerChangeText: { color: C.teal, fontSize: 6, fontWeight: '900', letterSpacing: .4 },
   scoreboard: { marginHorizontal: 20, marginTop: 16, flexDirection: 'row', gap: 10 }, scoreTeam: { flex: 1, minHeight: 310, padding: 13, alignItems: 'center', borderRadius: 22, borderBottomLeftRadius: 9, borderBottomRightRadius: 9, borderWidth: 1, borderColor: C.line, backgroundColor: C.surface, ...shadow }, scoreTeamAway: { backgroundColor: '#FFFDFC' }, scoreTeamWinner: { borderColor: C.optic, borderWidth: 2 }, scoreTeamHead: { width: '100%', minHeight: 58, flexDirection: 'row', alignItems: 'flex-start', gap: 8 }, teamBadge: { width: 31, height: 31, borderRadius: 9, alignItems: 'center', justifyContent: 'center', backgroundColor: C.teal }, teamBadgeAway: { backgroundColor: C.brick }, teamBadgeText: { color: C.surface, fontSize: 8, fontWeight: '900' }, scoreNameWrap: { flex: 1 }, scoreName: { color: C.ink, fontSize: 11, lineHeight: 15, fontWeight: '800' }, gamesText: { marginTop: 3, color: C.ink40, fontSize: 8 }, score: { marginTop: 8, color: C.ink, fontSize: 72, lineHeight: 80, fontWeight: '900', letterSpacing: -4, fontVariant: ['tabular-nums'] }, serveRow: { height: 24, flexDirection: 'row', alignItems: 'center', gap: 5 }, serveDot: { width: 7, height: 7, borderRadius: 4, backgroundColor: C.optic }, serveText: { color: C.teal, fontSize: 8, fontWeight: '900', letterSpacing: .7 }, receiveText: { color: C.ink40, fontSize: 8, fontWeight: '800', letterSpacing: .5 }, pointButton: { width: '100%', minHeight: 55, marginTop: 'auto', flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 3, borderRadius: 14, backgroundColor: C.teal }, pointButtonAway: { backgroundColor: C.brick }, pointDisabled: { opacity: .4 }, pointText: { color: C.surface, fontSize: 10, fontWeight: '900', letterSpacing: .8 },
   scorerActions: { marginHorizontal: 20, marginTop: 14, padding: 14, borderRadius: 18, borderWidth: 1, borderColor: C.line, backgroundColor: C.surface, ...shadow }, scorerActionHead: { marginBottom: 11, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }, scorerActionTitle: { color: C.ink, fontSize: 14, fontWeight: '900' }, scorerActionMeta: { marginTop: 3, color: C.teal, fontSize: 8, fontWeight: '800' }, rallyWinnerButtons: { flexDirection: 'row', gap: 8 }, rallyWinnerButton: { minHeight: 82, flex: 1, paddingHorizontal: 8, alignItems: 'center', justifyContent: 'center', borderRadius: 13, backgroundColor: C.teal }, rallyWinnerButtonAway: { backgroundColor: C.brick }, rallyWinnerTag: { color: 'rgba(255,255,255,.58)', fontSize: 6, fontWeight: '900', letterSpacing: .7 }, rallyWinnerName: { minHeight: 27, marginTop: 3, color: C.surface, textAlign: 'center', fontSize: 9, lineHeight: 13, fontWeight: '900' }, rallyWinnerAction: { marginTop: 3, color: C.surface, fontSize: 7, fontWeight: '900', letterSpacing: .7 }, autoServeHint: { marginTop: 10, color: C.teal, textAlign: 'center', fontSize: 8, fontWeight: '800' }, correctServerButton: { minHeight: 40, marginTop: 12, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6, borderRadius: 11, borderWidth: 1, borderColor: C.line, backgroundColor: C.surface }, correctServerText: { color: C.teal, fontSize: 9, fontWeight: '800' }, controls: { marginHorizontal: 20, marginTop: 12, flexDirection: 'row', gap: 8 }, controlButton: { flex: 1, minHeight: 48, alignItems: 'center', justifyContent: 'center', gap: 3, borderRadius: 12, borderWidth: 1, borderColor: C.line, backgroundColor: C.surface }, pauseButton: { borderColor: C.optic, backgroundColor: C.optic }, controlText: { color: C.teal, fontSize: 8, fontWeight: '800' }, pauseText: { color: C.ink, fontSize: 8, fontWeight: '900' }, controlDisabled: { opacity: .48 }, controlTextDisabled: { color: C.ink40 },
-  gamesCard: { marginHorizontal: 20, marginTop: 20, padding: 14, borderRadius: 17, borderWidth: 1, borderColor: C.line, backgroundColor: C.surface }, gamesHead: { paddingBottom: 11, flexDirection: 'row', alignItems: 'flex-end', justifyContent: 'space-between', borderBottomWidth: 1, borderColor: C.line }, gamesTitle: { color: C.ink, fontSize: 17, fontWeight: '800' }, gamesCount: { color: C.teal, fontSize: 22, fontWeight: '900' }, gameRow: { minHeight: 40, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', borderBottomWidth: 1, borderColor: C.line }, gameLabel: { color: C.ink40, fontSize: 9, fontWeight: '700' }, gameScore: { color: C.ink, fontSize: 13, fontWeight: '900' }, noGamesText: { paddingVertical: 15, color: C.ink40, fontSize: 9, textAlign: 'center' }, endLink: { alignSelf: 'center', minHeight: 42, marginTop: 13, paddingHorizontal: 13, flexDirection: 'row', alignItems: 'center', gap: 6 }, endLinkText: { color: C.brick, fontSize: 10, fontWeight: '800' },
+  gamesCard: { marginHorizontal: 20, marginTop: 20, padding: 14, borderRadius: 17, borderWidth: 1, borderColor: C.line, backgroundColor: C.surface }, gamesHead: { paddingBottom: 11, flexDirection: 'row', alignItems: 'flex-end', justifyContent: 'space-between', borderBottomWidth: 1, borderColor: C.line }, gamesTitle: { color: C.ink, fontSize: 17, fontWeight: '800' }, gamesCount: { color: C.teal, fontSize: 22, fontWeight: '900' }, gameRow: { minHeight: 40, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', borderBottomWidth: 1, borderColor: C.line }, gameLabel: { color: C.ink40, fontSize: 9, fontWeight: '700' }, gameScore: { color: C.ink, fontSize: 13, fontWeight: '900' }, noGamesText: { paddingVertical: 15, color: C.ink40, fontSize: 9, textAlign: 'center' }, endLink: { minHeight: 48, marginHorizontal: 20, marginTop: 14, paddingHorizontal: 14, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 7, borderRadius: 14, borderWidth: 1, borderColor: '#E8C7BF', backgroundColor: '#FFF5F2' }, endLinkText: { color: C.brick, fontSize: 10, fontWeight: '800' },
   gameBreakCard: { marginHorizontal: 20, marginTop: 14, minHeight: 104, padding: 13, flexDirection: 'row', alignItems: 'center', gap: 11, borderRadius: 18, borderWidth: 1, borderColor: '#BFD8D2', backgroundColor: '#E5F0ED', ...shadow }, gameBreakTimer: { width: 58, height: 66, alignItems: 'center', justifyContent: 'center', borderRadius: 16, backgroundColor: C.ink }, gameBreakTimerValue: { color: C.optic, fontSize: 24, lineHeight: 27, fontWeight: '900', fontVariant: ['tabular-nums'] }, gameBreakTimerUnit: { marginTop: 2, color: 'rgba(255,255,255,.58)', fontSize: 6, fontWeight: '900', letterSpacing: .8 }, gameBreakCopy: { minWidth: 0, flex: 1 }, gameBreakEyebrow: { color: C.teal, fontSize: 6, fontWeight: '900', letterSpacing: .55 }, gameBreakTitle: { marginTop: 3, color: C.ink, fontSize: 11, lineHeight: 15, fontWeight: '900' }, gameBreakMeta: { marginTop: 4, color: C.ink40, fontSize: 7, lineHeight: 11 }, gameBreakContinue: { minWidth: 78, minHeight: 46, paddingHorizontal: 9, alignItems: 'center', justifyContent: 'center', gap: 2, borderRadius: 13, backgroundColor: C.optic }, gameBreakContinueText: { color: '#0E2321', fontSize: 7, fontWeight: '900' }, gameBreakWaiting: { width: 66, minHeight: 46, alignItems: 'center', justifyContent: 'center', gap: 3, borderRadius: 13, borderWidth: 1, borderColor: C.line, backgroundColor: C.surface }, gameBreakWaitingText: { color: C.teal, fontSize: 5, fontWeight: '900', letterSpacing: .45 },
   boxScoreCard: { marginHorizontal: 20, marginTop: 12, overflow: 'hidden', borderRadius: 17, borderWidth: 1, borderColor: '#304743', backgroundColor: C.ink }, boxScoreHeader: { minHeight: 44, paddingHorizontal: 13, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', borderBottomWidth: 1, borderColor: 'rgba(255,255,255,.1)', backgroundColor: '#17302D' }, boxScoreHeaderText: { color: C.surface, fontSize: 9, fontWeight: '900', letterSpacing: .8 }, boxScoreHeaderMeta: { color: '#9FB3AC', fontSize: 6, fontWeight: '900', letterSpacing: .45 }, boxScoreColumns: { minHeight: 28, paddingHorizontal: 12, flexDirection: 'row', alignItems: 'center', borderBottomWidth: 1, borderColor: 'rgba(255,255,255,.08)' }, boxScoreColumn: { width: 36, color: '#9FB3AC', textAlign: 'center', fontSize: 5, fontWeight: '900', letterSpacing: .45 }, boxScoreTeamColumn: { minWidth: 0, flex: 1, textAlign: 'left' }, boxScoreTeamRow: { minHeight: 58, paddingHorizontal: 12, flexDirection: 'row', alignItems: 'center', borderBottomWidth: 1, borderColor: 'rgba(255,255,255,.08)' }, boxScoreTeamMark: { width: 28, height: 28, marginRight: 8, alignItems: 'center', justifyContent: 'center', borderRadius: 8, backgroundColor: C.teal }, boxScoreTeamMarkAway: { backgroundColor: C.brick }, boxScoreTeamMarkText: { color: C.surface, fontSize: 7, fontWeight: '900' }, boxScoreTeamName: { minWidth: 0, flex: 1, paddingRight: 7, color: C.surface, fontSize: 10, lineHeight: 14, fontWeight: '900' }, boxScoreSetValue: { width: 36, color: C.surface, textAlign: 'center', fontSize: 15, fontWeight: '900' }, boxScoreGameValue: { width: 36, color: '#9FB3AC', textAlign: 'center', fontSize: 14, fontWeight: '800', fontVariant: ['tabular-nums'] }, boxScoreGameValueLive: { color: C.optic }, boxScoreTimeRow: { minHeight: 46, paddingHorizontal: 12, flexDirection: 'row', alignItems: 'center', justifyContent: 'flex-end' }, boxScoreTimeLabel: { minWidth: 0, flex: 1, color: '#9FB3AC', textAlign: 'right', fontSize: 6, fontWeight: '900', letterSpacing: .55 }, boxScoreTimeTotal: { width: 46, color: C.surface, textAlign: 'center', fontSize: 8, fontWeight: '900', fontVariant: ['tabular-nums'] }, boxScoreTimeValue: { width: 36, color: '#9FB3AC', textAlign: 'center', fontSize: 7, fontWeight: '800', fontVariant: ['tabular-nums'] },
   rallyLogCard: { marginHorizontal: 20, marginTop: 12, padding: 14, borderRadius: 17, borderWidth: 1, borderColor: C.line, backgroundColor: C.surface }, rallyLogHead: { paddingBottom: 11, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 8, borderBottomWidth: 1, borderColor: C.line }, rallyLogTitle: { marginTop: 2, color: C.ink, fontSize: 15, fontWeight: '900' }, rallyLogCount: { minHeight: 26, paddingHorizontal: 8, alignItems: 'center', justifyContent: 'center', borderRadius: 13, backgroundColor: '#E5F0ED' }, rallyLogCountText: { color: C.teal, fontSize: 6, fontWeight: '900', letterSpacing: .45 }, rallyLogEmpty: { minHeight: 74, alignItems: 'center', justifyContent: 'center', gap: 5 }, rallyLogEmptyText: { color: C.ink40, textAlign: 'center', fontSize: 8, lineHeight: 12 }, rallyLogRow: { minHeight: 58, flexDirection: 'row', alignItems: 'center', gap: 9, borderBottomWidth: 1, borderColor: C.line }, rallyLogNumber: { width: 30, height: 30, alignItems: 'center', justifyContent: 'center', borderRadius: 10, backgroundColor: C.teal }, rallyLogNumberAway: { backgroundColor: C.brick }, rallyLogNumberText: { color: C.surface, fontSize: 8, fontWeight: '900' }, rallyLogCopy: { minWidth: 0, flex: 1 }, rallyLogResult: { color: C.ink, fontSize: 9, fontWeight: '900' }, rallyLogServe: { marginTop: 3, color: C.ink40, fontSize: 7 }, rallyLogScore: { alignItems: 'flex-end' }, rallyLogScoreText: { color: C.ink, fontSize: 13, fontWeight: '900', fontVariant: ['tabular-nums'] }, rallyLogGame: { marginTop: 2, color: C.teal, fontSize: 6, fontWeight: '900' }, rallyLogMore: { minHeight: 40, paddingTop: 9, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 4 }, rallyLogMoreText: { color: C.teal, fontSize: 8, fontWeight: '900' },
@@ -2815,19 +2883,19 @@ const lightStyles = createMobileStyleSheet({
   scoringMethodRadio: { position: 'absolute', top: 13, right: 13, width: 19, height: 19, alignItems: 'center', justifyContent: 'center', borderRadius: 10, borderWidth: 1, borderColor: C.line, backgroundColor: C.surface },
   scoringMethodRadioActive: { borderColor: C.teal },
   scoringMethodRadioDot: { width: 9, height: 9, borderRadius: 5, backgroundColor: C.teal },
-  liveScoringMethod: { minHeight: 67, marginHorizontal: 20, marginTop: 14, paddingHorizontal: 12, flexDirection: 'row', alignItems: 'center', gap: 10, borderRadius: 17, borderWidth: 1, borderColor: C.line, backgroundColor: C.surface },
-  liveScoringMethodCopy: { minWidth: 0, flex: 1 },
+  liveScoringMethod: { minHeight: 67, marginHorizontal: 20, marginTop: 14, paddingHorizontal: 12, paddingVertical: 10, flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center', gap: 10, borderRadius: 17, borderWidth: 1, borderColor: C.line, backgroundColor: C.surface },
+  liveScoringMethodCopy: { minWidth: 120, flexGrow: 1, flexShrink: 1, flexBasis: 120 },
   liveScoringMethodLabel: { color: C.teal, fontSize: 6, fontWeight: '900', letterSpacing: .65 },
   liveScoringMethodMeta: { marginTop: 3, color: C.ink40, fontSize: 7, lineHeight: 10 },
-  liveScoringMethodSwitch: { width: 204, height: 42, padding: 3, flexDirection: 'row', borderRadius: 11, backgroundColor: '#E7EBE6' },
-  liveScoringMethodOption: { flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 3, borderRadius: 8 },
+  liveScoringMethodSwitch: { flexGrow: 1, flexBasis: 204, maxWidth: '100%', height: 42, padding: 3, flexDirection: 'row', borderRadius: 11, backgroundColor: '#E7EBE6' },
+  liveScoringMethodOption: { flexGrow: 1, flexShrink: 0, paddingHorizontal: 8, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 3, borderRadius: 8 },
   liveScoringMethodOptionActive: { backgroundColor: C.optic },
   liveScoringMethodText: { color: C.ink40, fontSize: 7, fontWeight: '800' },
   liveScoringMethodTextActive: { color: '#0E2321', fontWeight: '900' },
   shoutFeedback: { minHeight: 40, marginHorizontal: 20, marginTop: 8, paddingHorizontal: 11, paddingVertical: 8, flexDirection: 'row', alignItems: 'center', gap: 7, borderRadius: 12, borderWidth: 1 },
-  shoutFeedbackAccepted: { borderColor: '#CFE2D7', backgroundColor: '#EDF5E5' },
-  shoutFeedbackRejected: { borderColor: '#F1CFC5', backgroundColor: '#FFF0EC' },
-  shoutFeedbackText: { minWidth: 0, flex: 1, color: C.ink, fontSize: 8, lineHeight: 11, fontWeight: '800' },
+  shoutFeedbackAccepted: { borderColor: 'rgba(28,107,102,.35)', backgroundColor: 'rgba(28,107,102,.14)' },
+  shoutFeedbackRejected: { borderColor: 'rgba(184,74,52,.4)', backgroundColor: 'rgba(184,74,52,.14)' },
+  shoutFeedbackText: { minWidth: 0, flex: 1, color: C.ink, fontSize: 12, lineHeight: 16, fontWeight: '800' },
   resultContent: { alignItems: 'center', paddingTop: 12, paddingBottom: 126 },
   resultIcon: { width: 72, height: 72, marginBottom: 15, alignItems: 'center', justifyContent: 'center', borderRadius: 23, borderBottomLeftRadius: 9, borderBottomRightRadius: 9, backgroundColor: C.optic },
   resultTopBar: { width: '100%', minHeight: 54, marginBottom: 14, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },

@@ -29,8 +29,8 @@ import Ionicons from '@expo/vector-icons/Ionicons';
 import * as Google from 'expo-auth-session/providers/google';
 import * as WebBrowser from 'expo-web-browser';
 import { useAuth } from '../context/AuthContext';
+import { recordPlayerEvent } from '../services/playerFunnel';
 import { clearAppHandoff, isStandaloneWebApp, readAppHandoff } from '../lib/authLinks';
-import ProfilePhotoPicker from '../components/ProfilePhotoPicker';
 import ResilientImage from '../components/ResilientImage';
 import { LEGAL_DOCUMENTS } from '../content/legalDocuments';
 import { createMobileStyleSheet } from '../utils/mobileStyles';
@@ -541,6 +541,7 @@ function AccountForm({ kind, onBack, onAlternate, onNewAccount, onForgot, onNeed
   const [busy, setBusy] = useState(false);
   const [googleError, setGoogleError] = useState('');
   const create = kind === 'create';
+  useEffect(() => { if (create) recordPlayerEvent('signup_started'); }, [create]);
 
   const requestRegistrationConsent = ({ waitForDecision = false } = {}) => {
     setLegalReviewRequired(true);
@@ -584,6 +585,7 @@ function AccountForm({ kind, onBack, onAlternate, onNewAccount, onForgot, onNeed
     try {
       if (create) {
         const result = await signUp({ name: name.trim(), email: normalizedEmail, password });
+        recordPlayerEvent('signup_completed');
         onNewAccount({ name: name.trim(), email: normalizedEmail, needsEmailConfirmation: result.needsEmailConfirmation });
       } else {
         await signIn({ email: normalizedEmail, password, rememberMe });
@@ -823,7 +825,9 @@ function Personalize({ profile, onBack }) {
   const { completeOnboarding } = useAuth();
   const [stage, setStage] = useState('name');
   const [name, setName] = useState(profile.name || '');
-  const [avatar, setAvatar] = useState(profile.picture || '');
+  // The photo is optional and editable from Profile, so first-run setup keeps
+  // only what other players and game suggestions need: a name and home area.
+  const avatar = profile.picture || '';
   const [preference, setPreference] = useState(profile.preference || 'Doubles');
   const [location, setLocation] = useState(profile.location || '');
   const [busy, setBusy] = useState(false);
@@ -831,13 +835,12 @@ function Personalize({ profile, onBack }) {
   const continueFromName = () => {
     const cleanName = name.trim();
     if (cleanName.length < 2 || cleanName.length > 80) { setError('Display name must be between 2 and 80 characters.'); return; }
-    setName(cleanName); setError(''); setStage('avatar');
+    setName(cleanName); setError(''); setStage('game');
   };
   const goBack = () => {
     if (busy) return true;
     setError('');
-    if (stage === 'game') setStage('avatar');
-    else if (stage === 'avatar') setStage('name');
+    if (stage === 'game') setStage('name');
     else if (onBack) onBack();
     else return false;
     return true;
@@ -848,7 +851,7 @@ function Personalize({ profile, onBack }) {
     if (cleanName.length < 2 || cleanName.length > 80) { setError('Display name must be between 2 and 80 characters.'); return; }
     if (!location.trim()) { setError('Add your home area.'); return; }
     setBusy(true); setError('');
-    try { await completeOnboarding({ ...profile, name: cleanName, avatar, preference, location: location.trim() }); }
+    try { await completeOnboarding({ ...profile, name: cleanName, avatar, preference, location: location.trim() }); recordPlayerEvent('onboarding_completed'); }
     catch (reason) { setError(reason.message || 'Your profile could not be saved.'); }
     finally { setBusy(false); }
   };
@@ -857,25 +860,19 @@ function Personalize({ profile, onBack }) {
       <StatusBar style="dark" backgroundColor={C.paper} />
       <KeyboardAvoidingView style={styles.flex} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
       <ScrollView keyboardShouldPersistTaps="handled" contentContainerStyle={styles.personalContent}>
-        <View style={styles.formTop}>{onBack || stage !== 'name' ? <Pressable accessibilityRole="button" accessibilityLabel="Back" disabled={busy} onPress={goBack} style={styles.back}><Icon name="arrow-back" /></Pressable> : <View style={styles.backSpacer} />}<Text style={styles.stepText}>{stage === 'name' ? 'YOUR NAME' : stage === 'avatar' ? 'YOUR PHOTO' : 'YOUR GAME'}</Text></View>
-        <Progress step={stage === 'name' ? 0 : stage === 'avatar' ? 1 : 2} total={3} />
+        <View style={styles.formTop}>{onBack || stage !== 'name' ? <Pressable accessibilityRole="button" accessibilityLabel="Back" disabled={busy} onPress={goBack} style={styles.back}><Icon name="arrow-back" /></Pressable> : <View style={styles.backSpacer} />}<Text style={styles.stepText}>{stage === 'name' ? 'YOUR NAME' : 'YOUR GAME'}</Text></View>
+        <Progress step={stage === 'name' ? 0 : 1} total={2} />
 
         {stage === 'name' ? <>
           <View style={styles.personalHead}><Text style={styles.eyebrow}>LET’S MEET</Text><Text style={styles.h1}>What should we call you?</Text><Text style={styles.subtitle}>This is the name other players will see on games, teams, and match results.</Text></View>
           <View style={styles.nameSpotlight}><View style={styles.nameIcon}><Icon name="person-outline" size={24} color={C.teal} /></View><Field label="DISPLAY NAME" icon="create-outline" value={name} onChangeText={(value) => { setName(value); setError(''); }} placeholder="Your name" autoCapitalize="words" autoFocus returnKeyType="next" onSubmitEditing={continueFromName} /></View>
           {error ? <Text style={styles.error}>{error}</Text> : null}
-          <Pressable onPress={continueFromName} style={({ pressed }) => [styles.accentButton, styles.stageButton, pressed && styles.pressed]}><Text style={styles.accentText}>Add my profile photo</Text><Icon name="arrow-forward" /></Pressable>
+          <Pressable onPress={continueFromName} style={({ pressed }) => [styles.accentButton, styles.stageButton, pressed && styles.pressed]}><Text style={styles.accentText}>Continue</Text><Icon name="arrow-forward" /></Pressable>
         </> : null}
 
-        {stage === 'avatar' ? <>
-          <View style={styles.personalHead}><Text style={styles.eyebrow}>MAKE IT YOURS</Text><Text style={styles.h1}>Hi, {name.split(' ')[0]}.{`\n`}Show up as you.</Text><Text style={styles.subtitle}>Add a clear profile photo so teammates can recognize you at games. It’s optional, and you can change it later.</Text></View>
-          <ProfilePhotoPicker value={avatar} name={name} onChange={setAvatar} onError={setError} colors={C} />
-          {error ? <Text style={styles.error}>{error}</Text> : null}
-          <Pressable onPress={() => { setError(''); setStage('game'); }} style={({ pressed }) => [styles.accentButton, pressed && styles.pressed]}><Text style={styles.accentText}>{avatar ? 'Use this photo' : 'Continue without photo'}</Text><Icon name="arrow-forward" /></Pressable>
-        </> : null}
 
         {stage === 'game' ? <>
-          <View style={styles.personalHead}><Text style={styles.eyebrow}>LAST STEP</Text><Text style={styles.h1}>Find your kind of game.</Text><Text style={styles.subtitle}>Two quick details help Peakle recommend nearby games and players.</Text></View>
+          <View style={styles.personalHead}><Text style={styles.eyebrow}>LAST STEP</Text><Text style={styles.h1}>Find your kind of game.</Text><Text style={styles.subtitle}>Two quick details help Peakle recommend nearby games and players. You can add a photo later from your profile.</Text></View>
           <Text style={[styles.label, styles.sectionLabel]}>I PLAY MOSTLY</Text><View style={styles.choiceRow}>{['Doubles', 'Singles', 'Both'].map((value) => <Pressable key={value} onPress={() => setPreference(value)} style={[styles.choice, preference === value && styles.optionActive]}><Icon name={value === 'Doubles' ? 'people-outline' : value === 'Singles' ? 'person-outline' : 'swap-horizontal-outline'} color={preference === value ? C.ink : C.ink40} /><Text style={[styles.choiceText, preference === value && styles.optionActiveText]}>{value}</Text></Pressable>)}</View>
           <HomeAreaPicker value={location} onChange={setLocation} forceLight />
           <View style={styles.permissionNote}><View style={styles.noteIcon}><Icon name="notifications-outline" size={18} color={C.teal} /></View><Text style={styles.noteText}><Text style={styles.noteStrong}>You’re in control.</Text> We’ll ask before using location or sending match reminders.</Text></View>

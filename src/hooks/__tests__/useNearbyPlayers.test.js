@@ -119,3 +119,13 @@ it('keeps following the match after its invite expires and catches the end on fo
   await act(async () => { listeners.forEach((handler) => handler('active')); });
   expect(current.sharedLiveMatch.status).toBe('ended');
 });
+
+it('picks up the host starting the match within three seconds when realtime misses it', async () => {
+  listMatchInvites.mockResolvedValue({ incoming: [], outgoing: [], joinedInvite: { ...invite, live_match_id: null }, removedInvite: null });
+  await mount();
+  expect(current.sharedLiveMatch).toBeNull();
+  listMatchInvites.mockResolvedValue({ incoming: [], outgoing: [], joinedInvite: invite, removedInvite: null });
+  await act(async () => { jest.advanceTimersByTime(3000); });
+  await act(async () => {});
+  expect(current.sharedLiveMatch.status).toBe('live');
+});

@@ -406,6 +406,15 @@ export async function findDirectConversation(playerId) {
   return normalizeDirectConversation(row);
 }
 
+// Online status for any list of players (follows and teammates). Returns a
+// Map of id → { isOnline, lastActiveAt }; empty when activity cannot load.
+export async function listPlayerActivity(ids) {
+  const uniqueIds = [...new Set((ids || []).filter(Boolean))];
+  if (DEMO_MODE || !uniqueIds.length) return new Map();
+  const activity = await getPlayerActivity(requireSupabase(), uniqueIds);
+  return new Map([...activity].map(([id, row]) => [id, { isOnline: Boolean(row.is_online), lastActiveAt: row.last_active_at || null }]));
+}
+
 // The other participant's last app check-in, for Sent / Delivered receipts.
 // Non-essential: before the migration is applied, or on any error, receipts
 // simply stay at Sent.

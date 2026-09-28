@@ -6,6 +6,7 @@ import { requireSupabase, SUPABASE_ANON_KEY, SUPABASE_URL } from '../lib/supabas
 import { cleanCourtText, courtLabel } from './playCourts';
 import { announcePlayerStatusChange } from './playerStatus';
 import { DEMO_MODE } from '../config/demoMode';
+import { recordPlayerEvent } from './playerFunnel';
 import {
   DEMO_VENUE_ROWS, DEMO_QUOTE, DEMO_TEAMS, DEMO_MATCHES, DEMO_TEAM_ID,
   DEMO_TEAM_MESSAGE_ROWS,
@@ -1401,6 +1402,7 @@ export async function saveCompletedMatch(userId, result, userName) {
     console.warn('Post-match rating refresh failed:', ratingError.message);
   }
   await clearLocalUnfinishedMatch(userId).catch((cleanupError) => console.warn('Completed-match cleanup failed:', cleanupError.message));
+  recordPlayerEvent('match_completed');
   return match;
 }
 

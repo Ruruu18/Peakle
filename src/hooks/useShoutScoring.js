@@ -16,8 +16,8 @@ const MIN_AUDIBLE_VOLUME = 0;
 // more likely a mis-hearing of background noise than an actual shouted word.
 const MIN_CONFIDENCE = 0.35;
 const MAX_ERROR_BACKOFF_MS = 4000;
-// Browsers get Peakle's Web Speech API adapter (which can fall back to on-device
-// recognition); native builds load the optional native module so Expo Go still opens
+// Browsers get Peakle's web adapter (the Web Speech API, falling back to free
+// in-browser Whisper recognition); native builds load the optional native module so Expo Go still opens
 // without it.
 const speechRecognitionModule = Platform.OS === 'web'
   ? require('../services/webSpeechRecognition').default
@@ -25,7 +25,9 @@ const speechRecognitionModule = Platform.OS === 'web'
 
 const RECOVERABLE_ERRORS = new Set(['audio-capture', 'network', 'busy', 'client', 'unknown', 'bad-grammar', 'interrupted']);
 const SILENCE_ERRORS = new Set(['no-speech', 'speech-timeout']);
-const FATAL_ERRORS = new Set(['not-allowed', 'service-not-allowed', 'language-not-supported']);
+const FATAL_ERRORS = new Set(['not-allowed', 'service-not-allowed', 'language-not-supported', 'model-unavailable']);
+// Browser recognizer failures that the in-browser recognizer can take over from.
+const WEB_LOCAL_FALLBACK_ERRORS = new Set(['network', 'service-not-allowed']);
 
 function unavailableMessage(code, nativeMessage = '') {
   if (code === 'native-module-missing') {
@@ -36,6 +38,9 @@ function unavailableMessage(code, nativeMessage = '') {
   }
   if (Platform.OS === 'web' && code === 'service-not-allowed') {
     return 'This browser cannot recognize speech. Use Chrome, Edge or Safari, or score with taps.';
+  }
+  if (code === 'model-unavailable') {
+    return 'Speech recognition could not be downloaded. Check your connection, then select Listen again.';
   }
   if (Platform.OS === 'web' && code === 'network') {
     if (typeof navigator !== 'undefined' && navigator.onLine === false) {
@@ -88,6 +93,8 @@ export default function useShoutScoring({
   const [volume, setVolume] = useState(-2);
   const [permissionDenied, setPermissionDenied] = useState(false);
   const [failure, setFailure] = useState(null);
+  const [preparingOnDevice, setPreparingOnDevice] = useState(false);
+  const [needsTap, setNeedsTap] = useState(false);
 
   const activeRef = useRef(active);
   const playersRef = useRef(players);
@@ -155,6 +162,8 @@ export default function useShoutScoring({
     clearRestartTimer();
     setListening(false);
     setVolume(-2);
+    setPreparingOnDevice(false);
+    setNeedsTap(false);
     setPermissionDenied(code === 'not-allowed');
     setFailure({ code, message: unavailableMessage(code, nativeMessage) });
   }, [clearRestartTimer]);
@@ -217,6 +226,9 @@ export default function useShoutScoring({
           // Apple's confirmation hint is intended for short words and phrases.
           // These are short multi-word commands, not yes/no or single-word answers.
           iosTaskHint: 'search',
+          // Apple's voice processing suppresses background noise and removes the app's
+          // own spoken score announcements, so they are not heard as commands.
+          iosVoiceProcessingEnabled: true,
         } : {}),
         ...(Platform.OS === 'android' ? {
           // Short-phrase model instead of free-form dictation — better suited to a single
@@ -275,7 +287,20 @@ export default function useShoutScoring({
     };
   }, [active, startListening, clearRestartTimer, clearPendingFragment]);
 
+  // The in-browser recognizer is downloading its model before the first session.
+  useSpeechRecognitionEvent('preparing', () => {
+    setPreparingOnDevice(true);
+  });
+
+  // The browser is holding audio until the page gets a tap or key press.
+  useSpeechRecognitionEvent('needsgesture', () => {
+    setPreparingOnDevice(false);
+    setNeedsTap(true);
+  });
+
   useSpeechRecognitionEvent('start', () => {
+    setPreparingOnDevice(false);
+    setNeedsTap(false);
     bestSessionTranscriptRef.current = '';
     finalHandledInSessionRef.current = false;
     setListening(true);
@@ -322,29 +347,20 @@ export default function useShoutScoring({
   });
 
   useSpeechRecognitionEvent('error', (event) => {
+    if (Platform.OS === 'web'
+      && WEB_LOCAL_FALLBACK_ERRORS.has(event.error)
+      && !speechRecognitionModule.isUsingLocalRecognition()
+      && speechRecognitionModule.useLocalRecognition()) {
+      // The browser's own recognizer is missing or unreachable. The `end` that follows
+      // restarts listening on the in-browser recognizer.
+      errorStreakRef.current = 0;
+      return;
+    }
     if (FATAL_ERRORS.has(event.error)) {
       blockRecognition(event.error, event.message);
       return;
     }
     if (SILENCE_ERRORS.has(event.error) || event.error === 'aborted') return;
-    if (Platform.OS === 'web' && event.error === 'network' && !speechRecognitionModule.isUsingOnDevice()) {
-      // The browser's cloud recognizer is unreachable. Hold the mic closed while trying
-      // Chrome's on-device recognizer; the `end` handler must not restart meanwhile.
-      blockedRef.current = true;
-      clearRestartTimer();
-      speechRecognitionModule.enableOnDeviceRecognition().then((enabled) => {
-        if (!mountedRef.current || !activeRef.current) return;
-        if (!enabled) {
-          blockRecognition('network', event.message);
-          return;
-        }
-        blockedRef.current = false;
-        errorStreakRef.current = 0;
-        sessionActiveRef.current = false;
-        scheduleRestart(50);
-      });
-      return;
-    }
     if (RECOVERABLE_ERRORS.has(event.error)) {
       errorStreakRef.current = Math.min(errorStreakRef.current + 1, 5);
       if (errorStreakRef.current >= 3) blockRecognition(event.error, event.message);
@@ -446,6 +462,8 @@ export default function useShoutScoring({
     lastHeard,
     volume,
     permissionDenied,
+    preparingOnDevice,
+    needsTap,
     unavailable: Boolean(failure),
     errorCode: failure?.code || null,
     errorMessage: failure?.message || '',

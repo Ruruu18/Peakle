@@ -27,6 +27,7 @@ import { DEMO_NEARBY_PLAYERS } from '../config/demoData';
 
 const REFRESH_MS = 20_000;
 const LIVE_MATCH_REFRESH_MS = 3_000;
+const WAITING_FOR_HOST_WINDOW_MS = 15 * 60 * 1000;
 // Must stay well under the 45 second silence take_over_nearby_live_scorer requires.
 const SCORER_CHECK_IN_MS = 20_000;
 const PRESENCE_AVAILABILITY = { free: 'available', away: 'offline', in_play: 'busy' };
@@ -264,6 +265,28 @@ export default function useNearbyPlayers(radiusKm = 25) {
     }, LIVE_MATCH_REFRESH_MS);
     return () => clearInterval(timer);
   }, [liveMatchId, liveMatchFinished, refreshLiveMatch, user?.id]);
+
+  // A joined player only learns the host started (or restarted, for a rematch)
+  // through the invite row or a finished session flipping back to live. If
+  // realtime misses that update, the slow refresh leaves them stuck on the
+  // waiting screen, so check quickly until the match is live for them.
+  const liveMatchActive = ['live', 'paused'].includes(sharedLiveMatch?.status);
+  const waitingForHost = !liveMatchActive && (
+    Boolean(joinedInvite)
+    || (liveMatchFinished && sharedLiveMatch?.host_id !== user?.id
+      && Date.now() - new Date(sharedLiveMatch?.updated_at || 0).getTime() < WAITING_FOR_HOST_WINDOW_MS)
+  );
+  useEffect(() => {
+    if (!waitingForHost || !user?.id) return undefined;
+    const check = () => {
+      if (['inactive', 'background'].includes(appStateRef.current)) return;
+      refreshInvites();
+      if (liveMatchIdRef.current) refreshLiveMatch();
+      recoverActiveLiveMatch();
+    };
+    const timer = setInterval(check, LIVE_MATCH_REFRESH_MS);
+    return () => clearInterval(timer);
+  }, [recoverActiveLiveMatch, refreshInvites, refreshLiveMatch, user?.id, waitingForHost]);
 
   useEffect(() => {
     const listener = AppState.addEventListener('change', (nextState) => {

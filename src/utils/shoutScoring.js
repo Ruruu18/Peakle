@@ -1,5 +1,10 @@
 const TEAM_ONE_PHRASES = ['team one', 'team 1', 'teamone'];
 const TEAM_TWO_PHRASES = ['team two', 'team 2', 'teamtwo'];
+// Command words the recognizer should favor over similar-sounding chatter.
+const SCORING_PHRASES = [
+  'point', 'point team one', 'point team two', 'side out', 'fault', 'score', 'serving',
+  'server one', 'server two', 'serving team', 'receiving team', 'undo',
+];
 
 export function normalizeShout(text) {
   return String(text || '')
@@ -73,7 +78,7 @@ export function resolveShoutToTeam(transcriptOrList, players) {
  * recognizer favors these exact words over unrelated crowd/background noise.
  */
 export function buildContextualStrings(players) {
-  const strings = new Set([...TEAM_ONE_PHRASES, ...TEAM_TWO_PHRASES]);
+  const strings = new Set([...TEAM_ONE_PHRASES, ...TEAM_TWO_PHRASES, ...SCORING_PHRASES]);
   (players || []).forEach((team) => {
     (team || []).forEach((name) => {
       const trimmed = String(name || '').trim();

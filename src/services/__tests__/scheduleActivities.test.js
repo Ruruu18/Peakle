@@ -98,7 +98,7 @@ it('rejects invalid dates and durations without sending a request', async () => 
 it('keeps personal activities visible during a database rollout using filtered table queries', async () => {
   const row = (id, hostId) => ({ id, host_id: hostId, status: 'scheduled', capacity: 4, starts_at: '2026-10-01T01:00:00Z', ends_at: '2026-10-01T03:00:00Z' });
   const queries = [];
-  const from = jest.fn(() => {
+  const from = jest.fn((table) => {
     const filters = {};
     const query = {
       select: jest.fn().mockReturnThis(), gte: jest.fn().mockReturnThis(), lt: jest.fn().mockReturnThis(), order: jest.fn().mockReturnThis(),
@@ -106,7 +106,7 @@ it('keeps personal activities visible during a database rollout using filtered t
       limit: jest.fn().mockResolvedValue({ data: [], error: null }),
       range: jest.fn(() => Promise.resolve({ data: [filters.host_id ? row('hosted', 'host') : row('invited', 'friend')], error: null })),
     };
-    queries.push(query);
+    if (table === 'scheduled_games') queries.push(query);
     return query;
   });
   const unavailable = { select: jest.fn().mockReturnThis(), order: jest.fn().mockReturnThis(), range: jest.fn().mockResolvedValue({ data: null, error: { code: 'PGRST202' } }) };
@@ -161,5 +161,68 @@ describe('sharing scheduled activities', () => {
   it('explains when the sharing migration is not deployed yet', async () => {
     rpc.mockResolvedValueOnce({ data: null, error: { code: 'PGRST202', message: 'missing' } });
     await expect(getScheduledGameShareUrl('game-1')).rejects.toThrow('not available yet');
+  });
+});
+
+describe('player beta growth', () => {
+  const schedule = require('../schedule');
+  const game = {
+    sourceId: 'g1', kind: 'game', title: 'Sunday doubles', startsAt: '2026-10-04T10:00:00.000Z', endsAt: '2026-10-04T11:30:00.000Z',
+    matchType: 'doubles', mode: 'casual', visibility: 'invite', capacity: 4, court: { name: 'Community Courts', area: 'Pasig' },
+    notes: 'Bring balls', skillLevel: 'beginner', courtCost: '₱150', hostId: 'host',
+    going: [{ id: 'host', name: 'Host' }, { id: 'p1', name: 'Pat', avatar: null }],
+  };
+
+  it('drafts the same activity a week later with the players who went', () => {
+    expect(schedule.nextWeekDraft(game)).toMatchObject({
+      day: '2026-10-11', startMinutes: 18 * 60, durationMinutes: 90, court: game.court, skillLevel: 'beginner', courtCost: '₱150',
+      invitees: [{ id: 'p1', name: 'Pat', avatar: null }],
+    });
+  });
+
+  it('saves skill level and court cost after creating the activity', async () => {
+    await createScheduledActivity({ ...details, kind: 'game', skillLevel: 'beginner', courtCost: ' Free ' });
+    expect(rpc).toHaveBeenLastCalledWith('update_scheduled_game', { p_game_id: 'new-activity', p_skill_level: 'beginner', p_court_cost: 'Free' });
+  });
+
+  it('keeps a created activity when the database has no detail columns yet', async () => {
+    rpc.mockResolvedValueOnce({ data: { id: 'new-activity' }, error: null }).mockResolvedValueOnce({ data: null, error: { code: 'PGRST202' } });
+    await expect(createScheduledActivity({ ...details, kind: 'game', skillLevel: 'advanced' })).resolves.toEqual({ id: 'new-activity' });
+  });
+
+  it('only sends the fields a host changed', async () => {
+    await schedule.updateScheduledGame('g1', { skillLevel: 'any', courtCost: '' });
+    expect(rpc).toHaveBeenLastCalledWith('update_scheduled_game', { p_game_id: 'g1', p_skill_level: 'any', p_court_cost: '' });
+    await schedule.updateScheduledGame('g1', { startsAt: '2026-10-11T10:00:00.000Z', durationMinutes: 60, court: { name: 'Listed', venueId: 'v1', courtId: 'c1' } });
+    expect(rpc).toHaveBeenLastCalledWith('update_scheduled_game', expect.objectContaining({
+      p_starts_at: '2026-10-11T10:00:00.000Z', p_ends_at: '2026-10-11T11:00:00.000Z', p_venue_id: 'v1', p_court_id: 'c1', p_latitude: null,
+    }));
+    await expect(schedule.updateScheduledGame('g1', { startsAt: '2026-10-11T10:00:00.000Z', durationMinutes: 0 })).rejects.toThrow('valid start time');
+  });
+
+  it('filters Discover by area either way round, and by skill', () => {
+    const entry = { isPlayerScheduled: true, area: 'Kapitolyo, Pasig', place: 'Community Courts', skillLevel: 'beginner' };
+    expect(schedule.matchesArea(entry, 'pasig')).toBe(true);
+    expect(schedule.matchesArea({ ...entry, area: 'Pasig' }, 'Pasig City')).toBe(true);
+    expect(schedule.matchesArea(entry, 'Makati')).toBe(false);
+    expect(schedule.matchesArea(entry, '')).toBe(true);
+    expect(schedule.matchesSkill(entry, 'beginner')).toBe(true);
+    expect(schedule.matchesSkill(entry, 'advanced')).toBe(false);
+    expect(schedule.matchesSkill({ ...entry, skillLevel: 'any' }, 'advanced')).toBe(true);
+  });
+
+  it('shows a player their waitlist place and a host the waitlist size', async () => {
+    const row = { id: 'full', host_id: 'other', activity_kind: 'game', status: 'scheduled', visibility: 'open', capacity: 2, starts_at: '2026-10-01T01:00:00Z', ends_at: '2026-10-01T03:00:00Z',
+      scheduled_game_players: [{ user_id: 'other', status: 'going' }, { user_id: 'p2', status: 'going' }] };
+    const table = () => {
+      const query = { select: jest.fn().mockReturnThis(), eq: jest.fn().mockReturnThis(), gte: jest.fn().mockReturnThis(), lt: jest.fn().mockReturnThis(), order: jest.fn().mockReturnThis() };
+      query.limit = jest.fn().mockResolvedValue({ data: [row], error: null });
+      return query;
+    };
+    const personal = { select: jest.fn().mockReturnThis(), order: jest.fn().mockReturnThis(), range: jest.fn().mockResolvedValue({ data: [], error: null }) };
+    const places = Promise.resolve({ data: [{ game_id: 'full', place: 2, waiting: 2 }], error: null });
+    requireSupabase.mockReturnValue({ auth: { getSession: jest.fn().mockResolvedValue({ data: { session: { user: { id: 'me' } } } }) }, rpc: jest.fn((name) => (name === 'list_scheduled_game_waitlists' ? places : personal)), from: jest.fn(table) });
+    const [entry] = await listScheduledGames({ from: '2026-10-01', to: '2026-11-01' });
+    expect(entry).toMatchObject({ spotsLeft: 0, waitlistPlace: 2, waitlistCount: 2 });
   });
 });

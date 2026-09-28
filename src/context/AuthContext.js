@@ -7,6 +7,7 @@ import { isSupabaseConfigured, requireSupabase, supabase } from '../lib/supabase
 import { readCachedData, withTimeout, writeCachedData } from '../lib/asyncData';
 import { DEMO_MODE } from '../config/demoMode';
 import { GOOGLE_HANDOFF_PARAM, cleanAuthUrl, clearAppHandoff, createHandoffId, readAuthParams, rememberAppHandoff, safariHandoffUrl } from '../lib/authLinks';
+import { authReturnPath } from '../lib/pendingDestination';
 import GoogleHandoffNotice from '../components/GoogleHandoffNotice';
 import { isAccountAccessError } from '../lib/accountAccess';
 import { DEMO_USER } from '../config/demoData';
@@ -350,7 +351,7 @@ export function AuthProvider({ children }) {
         .then((isRecovery) => { if (active && isRecovery) setPasswordRecovery(true); })
         .catch((error) => { if (active) setAuthLinkError(error.message || 'This sign-in link is invalid or expired.'); })
         .finally(() => {
-          if (Platform.OS === 'web' && active) window.history.replaceState(window.history.state, '', cleanAuthUrl(url));
+          if (Platform.OS === 'web' && active) window.history.replaceState(window.history.state, '', cleanAuthUrl(url, authReturnPath(new URL(url).pathname)));
         });
     };
     const linkListener = Linking.addEventListener('url', openUrl);

@@ -24,6 +24,7 @@ import {
   cancelScheduledGame, clockFromMinutes, createScheduledActivity, dateFromDayKey, dayKey, DURATION_STEP_MINUTES, earliestStartMinutes, entriesByDay, formatDayLabel, formatDuration, formatTime, GAME_DURATIONS,
   MAX_GAME_MINUTES, MIN_GAME_MINUTES, maskClockInput, parseClockInput, parseHoursInput,
   getScheduledGameShareUrl, googleCalendarUrl, inviteToScheduledGame, isOnMyCalendar, openScheduledGameLink, scheduledGameShareMessage, setScheduledGameVisibility, isPlayerScheduledEntry, listScheduledGames, listScheduleEvents, monthGrid, playSetupFromGame, respondToScheduledGame, shiftDayKey, shiftMonthKey,
+  clearGameAlert, getGameAlert, joinScheduledGameWaitlist, leaveScheduledGameWaitlist, matchesArea, matchesSkill, minutesOfDay, nextWeekDraft, setGameAlert as saveGameAlert, SKILL_LEVELS, skillLevelLabel, updateScheduledGame,
 } from '../services/schedule';
 import { getHostedOpenPlay, startHostedOpenPlay } from '../services/openPlayRegistration';
 import { dropShadow } from '../utils/shadow';
@@ -108,7 +109,7 @@ function EntryCard({ entry, onPress, past }) {
   const cancelled = entry.status === 'cancelled';
   const scheduled = isPlayerScheduledEntry(entry);
   const badge = scheduled
-    ? cancelled ? 'Cancelled' : entry.isHost ? 'Hosting' : entry.myStatus === 'invited' ? 'Invited' : entry.myStatus === 'going' ? 'Going' : entry.spotsLeft ? `${entry.spotsLeft} open` : 'Full'
+    ? cancelled ? 'Cancelled' : entry.isHost ? 'Hosting' : entry.myStatus === 'going' ? 'Going' : entry.waitlistPlace ? `Waitlist #${entry.waitlistPlace}` : entry.myStatus === 'invited' ? 'Invited' : entry.spotsLeft ? `${entry.spotsLeft} open` : 'Full · waitlist'
     : entry.joined ? 'Registered' : entry.availability;
   return (
     <Pressable accessibilityRole="button" accessibilityLabel={`${kind.label}: ${entry.title}, ${formatTime(entry.startsAt)}`} onPress={onPress} style={({ pressed }) => [styles.entry, (past || cancelled) && styles.entryMuted, pressed && styles.pressed]}>
@@ -120,7 +121,7 @@ function EntryCard({ entry, onPress, past }) {
         <Text numberOfLines={2} style={[styles.entryTitle, cancelled && styles.strike]}>{entry.title}</Text>
         <View style={styles.entryMeta}><AppIcon name="location-outline" size={13} color={palette.ink40} /><Text numberOfLines={1} style={styles.entryMetaText}>{[entry.place, entry.area].filter(Boolean).join(' · ')}</Text></View>
         <View style={styles.entryFoot}>
-          <View style={styles.kindTag}><AppIcon name={kind.icon} size={12} color={kind.color} /><Text style={[styles.kindTagText, { color: kind.color }]}>{entry.kind === 'game' ? `${entry.matchType === 'singles' ? 'Singles' : 'Doubles'} · ${entry.mode === 'ranked' ? 'Ranked' : 'Casual'}` : entry.typeLabel || kind.label}</Text></View>
+          <View style={styles.kindTag}><AppIcon name={kind.icon} size={12} color={kind.color} /><Text style={[styles.kindTagText, { color: kind.color }]}>{entry.kind === 'game' ? `${entry.matchType === 'singles' ? 'Singles' : 'Doubles'} · ${entry.mode === 'ranked' ? 'Ranked' : 'Casual'}` : entry.typeLabel || kind.label}{scheduled && entry.skillLevel && entry.skillLevel !== 'any' ? ` · ${skillLevelLabel(entry.skillLevel)}` : ''}</Text></View>
           {scheduled && entry.going?.length ? <View style={styles.avatarStack}>{entry.going.slice(0, 4).map((player, index) => <View key={player.id} style={[styles.avatarRing, index > 0 && styles.avatarOverlap]}><ProfilePhoto photo={player.avatar} name={player.name} size={22} /></View>)}</View> : null}
         </View>
       </View>
@@ -217,7 +218,7 @@ function HostedOpenPlayPanel({ game, onOpenRotation }) {
   );
 }
 
-function EntrySheet({ entry, onClose, onChanged, onStart, onOpenEvent, onOpenRotation }) {
+function EntrySheet({ entry, onClose, onChanged, onStart, onOpenEvent, onOpenRotation, onEdit, onPlayAgain }) {
   const { styles, palette } = usePalette();
   const insets = useSafeAreaInsets();
   const [busy, setBusy] = useState('');
@@ -234,6 +235,8 @@ function EntrySheet({ entry, onClose, onChanged, onStart, onOpenEvent, onOpenRot
   const game = isPlayerScheduledEntry(entry) ? entry : null;
   const activityName = entry.kind === 'game' ? 'game' : 'activity';
   const canStart = game?.kind === 'game' && !cancelled && game.myStatus === 'going' && now >= startsAt - START_WINDOW_MS && !ended;
+  // A full activity keeps a waitlist; the first player waiting gets the next freed spot.
+  const canWaitlist = game && !game.isHost && game.myStatus !== 'going' && !game.spotsLeft && (game.visibility === 'open' || game.myStatus === 'invited');
   const run = async (name, action) => {
     setBusy(name);
     setError('');
@@ -263,12 +266,15 @@ function EntrySheet({ entry, onClose, onChanged, onStart, onOpenEvent, onOpenRot
               <View style={styles.fact}><AppIcon name="calendar-outline" size={17} color={palette.teal} /><Text style={styles.factText}>{when}</Text></View>
               <View style={styles.fact}><AppIcon name="location-outline" size={17} color={palette.teal} /><Text style={styles.factText}>{[entry.place, entry.area].filter(Boolean).join(' · ')}</Text></View>
               {game ? <View style={styles.fact}><AppIcon name={kind.icon} size={17} color={palette.teal} /><Text style={styles.factText}>{game.kind === 'game' ? `${game.matchType === 'singles' ? 'Singles' : 'Doubles'} · ${game.mode === 'ranked' ? 'Ranked' : 'Casual'}` : kind.name} · {game.visibility === 'open' ? 'Public' : 'Private'}</Text></View> : null}
+              {game?.skillLevel && game.skillLevel !== 'any' ? <View style={styles.fact}><AppIcon name="stats-chart-outline" size={17} color={palette.teal} /><Text style={styles.factText}>{skillLevelLabel(game.skillLevel)}</Text></View> : null}
+              {game?.courtCost ? <View style={styles.fact}><AppIcon name="cash-outline" size={17} color={palette.teal} /><Text style={styles.factText}>Court cost: {game.courtCost}</Text></View> : null}
               {game?.notes ? <View style={styles.fact}><AppIcon name="document-text-outline" size={17} color={palette.teal} /><Text style={styles.factText}>{game.notes}</Text></View> : null}
             </View>
             {game ? <>
               <Text style={styles.groupLabel}>PLAYERS · {game.going.length}/{game.capacity}</Text>
               {game.roster.filter((player) => player.status !== 'declined').map((player) => <View key={player.id} style={styles.rosterRow}><ProfilePhoto photo={player.avatar} name={player.name} size={32} /><Text numberOfLines={1} style={styles.rosterName}>{player.name}{player.id === game.hostId ? ' · Host' : ''}</Text><Text style={[styles.rosterStatus, player.status === 'going' && styles.rosterGoing]}>{player.status === 'going' ? 'Going' : 'Invited'}</Text></View>)}
               {Array.from({ length: game.spotsLeft }, (_, index) => <View key={`open-${index}`} style={styles.rosterRow}><View style={styles.openSeat}><AppIcon name="add" size={15} color={palette.ink40} /></View><Text style={styles.rosterOpen}>Open spot</Text></View>)}
+              {game.isHost && game.waitlistCount ? <Text style={styles.helperText}>{game.waitlistCount} {game.waitlistCount === 1 ? 'player is' : 'players are'} on the waitlist. If someone drops out, the next player takes the spot automatically.</Text> : null}
             </> : null}
             {game && !cancelled && !ended && (game.isHost || game.visibility === 'open') ? <ShareActivityPanel game={game} onChanged={onChanged} /> : null}
             {error ? <View style={styles.errorBox}><AppIcon name="alert-circle-outline" size={17} color={palette.brick} /><Text style={styles.errorText}>{error}</Text></View> : null}
@@ -276,14 +282,20 @@ function EntrySheet({ entry, onClose, onChanged, onStart, onOpenEvent, onOpenRot
               {game?.kind === 'open_play' && !cancelled ? <HostedOpenPlayPanel game={game} onOpenRotation={onOpenRotation} /> : null}
               {game && !cancelled && !ended ? <>
                 {game.kind === 'game' && (game.isHost || game.myStatus === 'going') ? <Pressable accessibilityRole="button" accessibilityState={{ disabled: !canStart }} disabled={!canStart} onPress={() => onStart(game)} style={({ pressed }) => [styles.primary, !canStart && styles.disabled, pressed && styles.pressed]}><AppIcon name="play" size={16} color="#0E2321" /><Text style={styles.primaryText}>{canStart ? 'Start match' : 'Start opens 1 hour before'}</Text></Pressable> : null}
-                {!game.isHost && game.myStatus === 'invited' ? <View style={styles.actionRow}>
+                {!game.isHost && game.myStatus === 'invited' && game.spotsLeft ? <View style={styles.actionRow}>
                   <Pressable accessibilityRole="button" disabled={Boolean(busy)} onPress={() => run('yes', () => respondToScheduledGame(game.sourceId, true))} style={({ pressed }) => [styles.primary, styles.flex, pressed && styles.pressed]}>{busy === 'yes' ? <ActivityIndicator color="#0E2321" /> : <><AppIcon name="checkmark" size={16} color="#0E2321" /><Text style={styles.primaryText}>I’m going</Text></>}</Pressable>
                   <Pressable accessibilityRole="button" disabled={Boolean(busy)} onPress={() => run('no', () => respondToScheduledGame(game.sourceId, false))} style={({ pressed }) => [styles.secondary, styles.flex, pressed && styles.pressed]}>{busy === 'no' ? <ActivityIndicator color={palette.teal} /> : <Text style={styles.secondaryText}>Can’t make it</Text>}</Pressable>
                 </View> : null}
-                {!game.isHost && !game.myStatus && game.visibility === 'open' ? <Pressable accessibilityRole="button" disabled={Boolean(busy) || !game.spotsLeft} onPress={() => run('join', () => respondToScheduledGame(game.sourceId, true))} style={({ pressed }) => [styles.primary, !game.spotsLeft && styles.disabled, pressed && styles.pressed]}>{busy === 'join' ? <ActivityIndicator color="#0E2321" /> : <><AppIcon name="add" size={16} color="#0E2321" /><Text style={styles.primaryText}>{game.spotsLeft ? `Join ${activityName}` : 'No spots left'}</Text></>}</Pressable> : null}
-                {!game.isHost && (game.myStatus === 'going' || game.myStatus === 'declined') ? <Pressable accessibilityRole="button" disabled={Boolean(busy)} onPress={() => run('toggle', () => respondToScheduledGame(game.sourceId, game.myStatus !== 'going'))} style={({ pressed }) => [styles.secondary, pressed && styles.pressed]}>{busy === 'toggle' ? <ActivityIndicator color={palette.teal} /> : <Text style={styles.secondaryText}>{game.myStatus === 'going' ? 'I can’t make it anymore' : 'I can make it after all'}</Text>}</Pressable> : null}
+                {canWaitlist ? (game.waitlistPlace
+                  ? <View style={styles.confirmBox}><Text style={styles.confirmText}>You’re #{game.waitlistPlace} on the waitlist. If a spot opens, you’ll get it automatically and we’ll let you know.</Text><Pressable accessibilityRole="button" disabled={Boolean(busy)} onPress={() => run('unwait', () => leaveScheduledGameWaitlist(game.sourceId))} style={({ pressed }) => [styles.secondary, pressed && styles.pressed]}>{busy === 'unwait' ? <ActivityIndicator color={palette.teal} /> : <Text style={styles.secondaryText}>Leave the waitlist</Text>}</Pressable></View>
+                  : <Pressable accessibilityRole="button" disabled={Boolean(busy)} onPress={() => run('wait', () => joinScheduledGameWaitlist(game.sourceId))} style={({ pressed }) => [styles.primary, pressed && styles.pressed]}>{busy === 'wait' ? <ActivityIndicator color="#0E2321" /> : <><AppIcon name="hourglass-outline" size={16} color="#0E2321" /><Text style={styles.primaryText}>Full: join the waitlist</Text></>}</Pressable>) : null}
+                {!game.isHost && game.myStatus === 'invited' && !game.spotsLeft ? <Pressable accessibilityRole="button" disabled={Boolean(busy)} onPress={() => run('no', () => respondToScheduledGame(game.sourceId, false))} style={({ pressed }) => [styles.textButton, pressed && styles.pressed]}><Text style={styles.secondaryText}>Can’t make it</Text></Pressable> : null}
+                {!game.isHost && !game.myStatus && game.visibility === 'open' && game.spotsLeft ? <Pressable accessibilityRole="button" disabled={Boolean(busy) || !game.spotsLeft} onPress={() => run('join', () => respondToScheduledGame(game.sourceId, true))} style={({ pressed }) => [styles.primary, !game.spotsLeft && styles.disabled, pressed && styles.pressed]}>{busy === 'join' ? <ActivityIndicator color="#0E2321" /> : <><AppIcon name="add" size={16} color="#0E2321" /><Text style={styles.primaryText}>{game.spotsLeft ? `Join ${activityName}` : 'No spots left'}</Text></>}</Pressable> : null}
+                {!game.isHost && (game.myStatus === 'going' || (game.myStatus === 'declined' && game.spotsLeft)) ? <Pressable accessibilityRole="button" disabled={Boolean(busy)} onPress={() => run('toggle', () => respondToScheduledGame(game.sourceId, game.myStatus !== 'going'))} style={({ pressed }) => [styles.secondary, pressed && styles.pressed]}>{busy === 'toggle' ? <ActivityIndicator color={palette.teal} /> : <Text style={styles.secondaryText}>{game.myStatus === 'going' ? 'I can’t make it anymore' : 'I can make it after all'}</Text>}</Pressable> : null}
               </> : null}
               {!game ? <Pressable accessibilityRole="button" onPress={() => onOpenEvent(entry)} style={({ pressed }) => [styles.primary, pressed && styles.pressed]}><AppIcon name="open-outline" size={16} color="#0E2321" /><Text style={styles.primaryText}>{entry.joined ? 'View your registration' : 'View event'}</Text></Pressable> : null}
+              {game?.isHost && !cancelled && !ended ? <Pressable accessibilityRole="button" onPress={() => onEdit(game)} style={({ pressed }) => [styles.secondary, pressed && styles.pressed]}><AppIcon name="create-outline" size={16} color={palette.teal} /><Text style={styles.secondaryText}>Change time, court or details</Text></Pressable> : null}
+              {game?.isHost && !cancelled ? <Pressable accessibilityRole="button" onPress={() => onPlayAgain(game)} style={({ pressed }) => [ended ? styles.primary : styles.secondary, pressed && styles.pressed]}><AppIcon name="repeat" size={16} color={ended ? '#0E2321' : palette.teal} /><Text style={ended ? styles.primaryText : styles.secondaryText}>Play again next week</Text></Pressable> : null}
               {!cancelled && !ended ? <Pressable accessibilityRole="link" onPress={() => Linking.openURL(googleCalendarUrl(entry))} style={({ pressed }) => [styles.secondary, pressed && styles.pressed]}><AppIcon name="calendar-outline" size={16} color={palette.teal} /><Text style={styles.secondaryText}>Add to Google Calendar</Text></Pressable> : null}
               {game?.isHost && !cancelled && !ended ? (confirmCancel
                 ? <View style={styles.confirmBox}><Text style={styles.confirmText}>Cancel this {activityName} for everyone? Players will be notified.</Text><View style={styles.actionRow}><Pressable accessibilityRole="button" onPress={() => setConfirmCancel(false)} style={({ pressed }) => [styles.secondary, styles.flex, pressed && styles.pressed]}><Text style={styles.secondaryText}>Keep {activityName}</Text></Pressable><Pressable accessibilityRole="button" disabled={Boolean(busy)} onPress={() => run('cancel', () => cancelScheduledGame(game.sourceId))} style={({ pressed }) => [styles.destructive, styles.flex, pressed && styles.pressed]}>{busy === 'cancel' ? <ActivityIndicator color="#FFFFFF" /> : <Text style={styles.destructiveText}>Cancel {activityName}</Text>}</Pressable></View></View>
@@ -576,7 +588,9 @@ function ActivityTypePicker({ value, onChange }) {
   );
 }
 
-function NewActivitySheet({ visible, initialDay, todayKey, onClose, onCreated }) {
+// Also edits an activity (editing: the game) and starts "Play again next week"
+// (draft: nextWeekDraft(game)), so every path uses the same time and court steps.
+function NewActivitySheet({ visible, initialDay, todayKey, onClose, onCreated, draft = null, editing = null, onEdited }) {
   const { styles, palette } = usePalette();
   const insets = useSafeAreaInsets();
   const { width } = useWindowDimensions();
@@ -597,6 +611,8 @@ function NewActivitySheet({ visible, initialDay, todayKey, onClose, onCreated })
   const [court, setCourt] = useState(null);
   const [invitees, setInvitees] = useState([]);
   const [notes, setNotes] = useState('');
+  const [skillLevel, setSkillLevel] = useState('any');
+  const [courtCost, setCourtCost] = useState('');
   const [courtsOpen, setCourtsOpen] = useState(false);
   const [recentCourts, setRecentCourts] = useState([]);
   const [saving, setSaving] = useState(false);
@@ -609,7 +625,17 @@ function NewActivitySheet({ visible, initialDay, todayKey, onClose, onCreated })
     // Late in the evening, today has no start times left; open on tomorrow instead.
     const start = earliestStartMinutes(earliest) !== null ? earliest : shiftDayKey(earliest, 1);
     setStep('when'); setDay(start); setMonthKey(start.slice(0, 7)); setStartMinutes(null); setDuration(90);
-    setTitle(''); setKind('game'); setCapacity(16); setMatchType('doubles'); setMode('casual'); setVisibility('invite'); setCourt(null); setInvitees([]); setNotes(''); setError('');
+    setTitle(''); setKind('game'); setCapacity(16); setMatchType('doubles'); setMode('casual'); setVisibility('invite'); setCourt(null); setInvitees([]); setNotes(''); setSkillLevel('any'); setCourtCost(''); setError('');
+    const prefill = editing ? { ...nextWeekDraft(editing), day: dayKey(editing.startsAt), startMinutes: minutesOfDay(editing.startsAt), invitees: [] } : draft;
+    if (prefill) {
+      const open = earliestStartMinutes(prefill.day);
+      setDay(prefill.day); setMonthKey(prefill.day.slice(0, 7));
+      setStartMinutes(open !== null && prefill.startMinutes >= open ? prefill.startMinutes : null);
+      setDuration(prefill.durationMinutes || 90); setTitle(prefill.title || ''); setKind(prefill.kind || 'game');
+      setCapacity(prefill.capacity || 16); setMatchType(prefill.matchType || 'doubles'); setMode(prefill.mode || 'casual');
+      setVisibility(prefill.visibility || 'invite'); setCourt(prefill.court || null); setInvitees(prefill.invitees || []);
+      setNotes(prefill.notes || ''); setSkillLevel(prefill.skillLevel || 'any'); setCourtCost(prefill.courtCost || '');
+    }
     loadRecentCourts(user?.id).then(setRecentCourts);
   }, [visible]);
 
@@ -629,7 +655,19 @@ function NewActivitySheet({ visible, initialDay, todayKey, onClose, onCreated })
     setSaving(true);
     setError('');
     try {
-      const created = await createScheduledActivity({ kind, title: title.trim() || defaultTitle, startsAt: slot.startsAt, durationMinutes: duration, matchType, mode, visibility, capacity, court, notes, invitees });
+      if (editing) {
+        const timeChanged = slot.startsAt !== new Date(editing.startsAt).toISOString() || duration !== Math.round((new Date(editing.endsAt) - new Date(editing.startsAt)) / 60000);
+        const courtChanged = courtLabel(court) !== courtLabel(editing.court) || (court.area || '') !== (editing.area || '');
+        await updateScheduledGame(editing.sourceId, {
+          ...(timeChanged ? { startsAt: slot.startsAt, durationMinutes: duration } : {}),
+          ...(courtChanged ? { court } : {}),
+          skillLevel, courtCost, notes, title: title.trim() || defaultTitle,
+        });
+        if (courtChanged) rememberCourt(user?.id, court);
+        onEdited(day, editing.sourceId);
+        return;
+      }
+      const created = await createScheduledActivity({ kind, title: title.trim() || defaultTitle, startsAt: slot.startsAt, durationMinutes: duration, matchType, mode, visibility, capacity, court, notes, invitees, skillLevel, courtCost });
       rememberCourt(user?.id, court);
       onCreated(day, kind, created?.id);
     } catch (createError) {
@@ -642,8 +680,8 @@ function NewActivitySheet({ visible, initialDay, todayKey, onClose, onCreated })
 
   const whenStep = (
     <View>
-      <Text style={styles.groupLabel}>ACTIVITY TYPE</Text>
-      <ActivityTypePicker value={kind} onChange={setKind} />
+      {!editing ? <><Text style={styles.groupLabel}>ACTIVITY TYPE</Text>
+      <ActivityTypePicker value={kind} onChange={setKind} /></> : null}
       <View style={[styles.newGameWhen, wide && styles.newGameWhenWide]}>
         <View style={wide ? styles.newGameCalendarCol : null}>
           <MonthCalendar monthKey={monthKey} selectedKey={day} todayKey={todayKey} markers={{}} minKey={todayKey} onSelect={(key) => { setDay(key); setStartMinutes((current) => { const open = earliestStartMinutes(key); return current !== null && open !== null && current >= open ? current : null; }); }} onMonth={(delta) => setMonthKey((current) => shiftMonthKey(current, delta))} />
@@ -662,22 +700,27 @@ function NewActivitySheet({ visible, initialDay, todayKey, onClose, onCreated })
       <Pressable accessibilityRole="button" accessibilityLabel="Change date and time" onPress={() => setStep('when')} style={({ pressed }) => [styles.summaryCard, pressed && styles.pressed]}><AppIcon name="calendar" size={18} color={palette.teal} /><Text style={styles.summaryText}>{summary}</Text><Text style={styles.summaryEdit}>Change</Text></Pressable>
       <Text style={styles.groupLabel}>COURT</Text>
       <Pressable accessibilityRole="button" onPress={() => setCourtsOpen(true)} style={({ pressed }) => [styles.courtButton, court && styles.courtButtonChosen, pressed && styles.pressed]}><View style={styles.courtButtonIcon}><AppIcon name={court ? 'tennisball-outline' : 'location-outline'} size={19} color="#FFFFFF" /></View><View style={styles.flex}><Text numberOfLines={1} style={styles.rosterName}>{court ? courtLabel(court) : 'Where are you playing?'}</Text><Text numberOfLines={1} style={styles.helperInline}>{court ? court.area || 'Your court' : 'Pick a recent court or add any venue'}</Text></View><AppIcon name={court ? 'create-outline' : 'chevron-forward'} size={19} color={palette.teal} /></Pressable>
-      {kind === 'game' ? <><Text style={styles.groupLabel}>FORMAT</Text>
+      {editing ? null : kind === 'game' ? <><Text style={styles.groupLabel}>FORMAT</Text>
       <Segmented accessibilityLabel="Match format" styles={styles} value={matchType} onChange={setMatchType} options={[{ value: 'doubles', label: 'Doubles' }, { value: 'singles', label: 'Singles' }]} />
       <View style={styles.spacer} />
       <Segmented accessibilityLabel="Match mode" styles={styles} value={mode} onChange={setMode} options={[{ value: 'casual', label: 'Casual' }, { value: 'ranked', label: 'Ranked' }]} /></>
         : <><Text style={styles.groupLabel}>PLAYER LIMIT</Text><Segmented accessibilityLabel="Player limit" styles={styles} value={capacity} onChange={setCapacity} options={[4, 8, 12, 16].map((count) => ({ value: count, label: `${count} players` }))} /><Text style={styles.helperText}>Includes you and the players who join.</Text></>}
-      <Text style={styles.groupLabel}>WHO CAN JOIN</Text>
+      <Text style={styles.groupLabel}>SKILL LEVEL</Text>
+      <Segmented accessibilityLabel="Skill level" styles={styles} value={skillLevel} onChange={setSkillLevel} options={SKILL_LEVELS.map((level) => ({ ...level, label: level.value === 'beginner' ? 'Beginner' : level.value === 'any' ? 'All' : level.label }))} />
+      <Text style={styles.helperText}>{skillLevel === 'beginner' ? 'New players will see this is a friendly place to start.' : 'Helps players find a game at their level.'}</Text>
+      <Text style={styles.groupLabel}>COURT COST (OPTIONAL)</Text>
+      <TextInput accessibilityLabel="Court cost" value={courtCost} onChangeText={(value) => setCourtCost(value.slice(0, 60))} placeholder="Free, or ₱150 each" placeholderTextColor={palette.ink40} style={styles.field} />
+      {!editing ? <><Text style={styles.groupLabel}>WHO CAN JOIN</Text>
       <Segmented accessibilityLabel="Who can join" styles={styles} value={visibility} onChange={setVisibility} options={VISIBILITY_OPTIONS} />
       <Text style={styles.helperText}>{VISIBILITY_HELP[visibility]}</Text>
       <Text style={styles.groupLabel}>INVITE PLAYERS · {invitees.length}/{maxInvites}</Text>
-      <PlayerInvitePicker selected={invitees} onChange={setInvitees} max={maxInvites} userId={user?.id} />
+      <PlayerInvitePicker selected={invitees} onChange={setInvitees} max={maxInvites} userId={user?.id} /></> : <Text style={styles.helperText}>Players who are invited or going are notified if you change the time or court.</Text>}
       <Text style={styles.groupLabel}>TITLE (OPTIONAL)</Text>
       <TextInput accessibilityLabel="Activity title" value={title} onChangeText={(value) => setTitle(value.slice(0, 80))} placeholder={defaultTitle} placeholderTextColor={palette.ink40} style={styles.field} />
       <Text style={styles.groupLabel}>NOTE FOR PLAYERS (OPTIONAL)</Text>
       <TextInput accessibilityLabel="Note for players" value={notes} onChangeText={(value) => setNotes(value.slice(0, 500))} placeholder="Bring balls, meet at the gate…" placeholderTextColor={palette.ink40} multiline style={[styles.field, styles.fieldMultiline]} />
       {error ? <View style={styles.errorBox}><AppIcon name="alert-circle-outline" size={17} color={palette.brick} /><Text style={styles.errorText}>{error}</Text></View> : null}
-      <Pressable accessibilityRole="button" accessibilityLabel="Save activity" accessibilityState={{ disabled: !court || saving }} disabled={!court || saving} onPress={submit} style={({ pressed }) => [styles.primary, styles.submit, !court && styles.slotNextIdle, saving && styles.disabled, pressed && styles.pressed]}>{saving ? <ActivityIndicator color="#0E2321" /> : <><AppIcon name={court ? 'checkmark' : 'location-outline'} size={17} color={court ? '#0E2321' : palette.ink70} /><Text style={[styles.primaryText, !court && styles.slotNextIdleText]}>{court ? `Schedule ${KINDS[kind].name.toLowerCase()}` : 'Choose a court to continue'}</Text></>}</Pressable>
+      <Pressable accessibilityRole="button" accessibilityLabel="Save activity" accessibilityState={{ disabled: !court || saving }} disabled={!court || saving} onPress={submit} style={({ pressed }) => [styles.primary, styles.submit, !court && styles.slotNextIdle, saving && styles.disabled, pressed && styles.pressed]}>{saving ? <ActivityIndicator color="#0E2321" /> : <><AppIcon name={court ? 'checkmark' : 'location-outline'} size={17} color={court ? '#0E2321' : palette.ink70} /><Text style={[styles.primaryText, !court && styles.slotNextIdleText]}>{!court ? 'Choose a court to continue' : editing ? 'Save changes' : `Schedule ${KINDS[kind].name.toLowerCase()}`}</Text></>}</Pressable>
       <CourtPickerSheet visible={courtsOpen} selected={court} recentCourts={recentCourts} defaultArea={areaFromLocationLabel(userLocation?.label)} onClose={() => setCourtsOpen(false)} onSelect={(selected) => { setCourt(selected); setCourtsOpen(false); }} />
     </View>
   );
@@ -689,7 +732,7 @@ function NewActivitySheet({ visible, initialDay, todayKey, onClose, onCreated })
           <View {...webDialog('handle')} style={styles.handle} />
           <View style={styles.sheetHead}>
             {step === 'details' ? <Pressable accessibilityRole="button" accessibilityLabel="Back to date and time" onPress={() => setStep('when')} style={styles.close}><AppIcon name="arrow-back" size={20} color={palette.ink} /></Pressable> : null}
-            <View style={styles.flex}><Text style={styles.eyebrow}>NEW ACTIVITY · STEP {step === 'when' ? 1 : 2} OF 2</Text><Text style={styles.sheetTitle}>{step === 'when' ? 'Pick a type, date & time' : `${KINDS[kind].name} details`}</Text></View>
+            <View style={styles.flex}><Text style={styles.eyebrow}>{editing ? 'EDIT ACTIVITY' : draft ? 'PLAY AGAIN' : 'NEW ACTIVITY'} · STEP {step === 'when' ? 1 : 2} OF 2</Text><Text style={styles.sheetTitle}>{step === 'when' ? (editing ? 'Change the date & time' : 'Pick a type, date & time') : `${KINDS[kind].name} details`}</Text></View>
             <Pressable accessibilityRole="button" accessibilityLabel="Close" onPress={onClose} style={styles.close}><AppIcon name="close" size={20} color={palette.ink} /></Pressable>
           </View>
           <ScrollView contentContainerStyle={styles.sheetContent} keyboardShouldPersistTaps="handled">{step === 'when' ? whenStep : detailsStep}</ScrollView>
@@ -719,6 +762,13 @@ export default function ScheduleScreen({ navigation, route }) {
   const [error, setError] = useState('');
   const [openEntryId, setOpenEntryId] = useState(null);
   const [newGameDay, setNewGameDay] = useState(null);
+  const [activityDraft, setActivityDraft] = useState(null);
+  const [editingGame, setEditingGame] = useState(null);
+  const homeArea = areaFromLocationLabel(user?.location);
+  const [areaFilter, setAreaFilter] = useState(homeArea);
+  const [skillFilter, setSkillFilter] = useState('any');
+  const [gameAlert, setGameAlert] = useState(undefined);
+  const [alertBusy, setAlertBusy] = useState(false);
   const handledTokens = useRef({});
 
   const range = useMemo(() => {
@@ -739,6 +789,24 @@ export default function ScheduleScreen({ navigation, route }) {
   }, [range]);
 
   useFocusEffect(useCallback(() => { load(); }, [load]));
+  useEffect(() => {
+    if (view !== 'discover' || gameAlert !== undefined) return;
+    getGameAlert().then(setGameAlert).catch(() => setGameAlert(null));
+  }, [view, gameAlert]);
+  const alertArea = areaFilter.trim() || homeArea;
+  const toggleGameAlert = async () => {
+    if (alertBusy || !alertArea) return;
+    setAlertBusy(true);
+    setError('');
+    try {
+      if (gameAlert && gameAlert.area.toLowerCase() === alertArea.toLowerCase()) { await clearGameAlert(); setGameAlert(null); }
+      else setGameAlert(await saveGameAlert(alertArea));
+    } catch (alertError) {
+      setError(alertError.message || 'Game alerts could not be updated.');
+    } finally {
+      setAlertBusy(false);
+    }
+  };
 
   useEffect(() => {
     const newToken = route?.params?.newGameToken;
@@ -781,7 +849,9 @@ export default function ScheduleScreen({ navigation, route }) {
   // My schedule is what you're in; Discover is only what you could still join.
   const scoped = useMemo(() => allEntries.filter((entry) => (view === 'mine'
     ? isOnMyCalendar(entry)
-    : !isOnMyCalendar(entry) && entry.status !== 'cancelled' && (!isPlayerScheduledEntry(entry) || (entry.visibility === 'open' && entry.status === 'scheduled' && entry.spotsLeft > 0)))), [allEntries, view]);
+    // Full public activities stay listed so players can join the waitlist.
+    : !isOnMyCalendar(entry) && entry.status !== 'cancelled' && (!isPlayerScheduledEntry(entry) || (entry.visibility === 'open' && entry.status === 'scheduled'))
+      && matchesArea(entry, areaFilter) && matchesSkill(entry, skillFilter))), [allEntries, view, areaFilter, skillFilter]);
   const visible = useMemo(() => scoped.filter((entry) => !hiddenKinds.includes(entry.kind)), [scoped, hiddenKinds]);
   const byDay = useMemo(() => entriesByDay(visible), [visible]);
   const dayEntries = (byDay[selectedKey] || []).slice().sort((a, b) => new Date(a.startsAt) - new Date(b.startsAt));
@@ -886,6 +956,15 @@ export default function ScheduleScreen({ navigation, route }) {
         <View style={styles.flex}><Text style={styles.agendaDay}>Find your next activity</Text><Text style={styles.agendaDate}>Games and activities you can join</Text></View>
         <Text style={styles.agendaCount}>{discoverDays.length ? `${discoverDays.reduce((total, [, rows]) => total + rows.length, 0)} upcoming` : ''}</Text>
       </View>
+      <View style={styles.discoverFilters}>
+        <View style={styles.areaField}><AppIcon name="location-outline" size={16} color={palette.teal} /><TextInput accessibilityLabel="Area" value={areaFilter} onChangeText={(value) => setAreaFilter(value.slice(0, 80))} placeholder="Any area" placeholderTextColor={palette.ink40} style={styles.areaInput} />{areaFilter ? <Pressable accessibilityRole="button" accessibilityLabel="Show every area" onPress={() => setAreaFilter('')} hitSlop={8}><AppIcon name="close-circle" size={17} color={palette.ink40} /></Pressable> : homeArea ? <Pressable accessibilityRole="button" accessibilityLabel={`Show games in ${homeArea}`} onPress={() => setAreaFilter(homeArea)} hitSlop={8}><Text style={styles.linkText}>{homeArea}</Text></Pressable> : null}</View>
+        <Segmented accessibilityLabel="Skill level" styles={styles} value={skillFilter} onChange={setSkillFilter} options={SKILL_LEVELS.map((level) => ({ value: level.value, label: level.value === 'any' ? 'All levels' : level.value === 'beginner' ? 'Beginner' : level.label }))} />
+      </View>
+      {alertArea ? <Pressable accessibilityRole="switch" accessibilityState={{ checked: Boolean(gameAlert && gameAlert.area.toLowerCase() === alertArea.toLowerCase()) }} disabled={alertBusy} onPress={toggleGameAlert} style={({ pressed }) => [styles.alertCard, pressed && styles.pressed]}>
+        <AppIcon name={gameAlert && gameAlert.area.toLowerCase() === alertArea.toLowerCase() ? 'notifications' : 'notifications-outline'} size={19} color={palette.teal} />
+        <View style={styles.flex}><Text style={styles.rosterName}>{gameAlert && gameAlert.area.toLowerCase() === alertArea.toLowerCase() ? `We’ll tell you when a game opens in ${gameAlert.area}` : `Tell me when a game opens in ${alertArea}`}</Text><Text style={styles.helperInline}>{gameAlert && gameAlert.area.toLowerCase() !== alertArea.toLowerCase() ? `Currently on for ${gameAlert.area}. Tap to switch.` : 'You don’t have to host. We’ll send a notification when a public game is posted.'}</Text></View>
+        {alertBusy ? <ActivityIndicator color={palette.teal} /> : <Text style={styles.linkText}>{gameAlert && gameAlert.area.toLowerCase() === alertArea.toLowerCase() ? 'Turn off' : 'Notify me'}</Text>}
+      </Pressable> : null}
       {loading && !allEntries.length ? <View style={styles.loadingBox}><ActivityIndicator color={palette.teal} /><Text style={styles.helperText}>Finding games and events…</Text></View>
         : discoverDays.length ? discoverDays.map(([key, rows]) => (
           <View key={key}>
@@ -893,7 +972,7 @@ export default function ScheduleScreen({ navigation, route }) {
             {rows.map((entry) => <EntryCard key={entry.id} entry={entry} onPress={() => setOpenEntryId(entry.id)} />)}
           </View>
         ))
-          : <View style={styles.empty}><View style={styles.emptyIcon}><AppIcon name="compass-outline" size={24} color={palette.teal} /></View><Text style={styles.emptyTitle}>Nothing open to join right now</Text><Text style={styles.emptyText}>Activities hosted by players will appear here as they’re posted. Anything you’ve joined is under My schedule.</Text><Pressable accessibilityRole="button" onPress={() => setNewGameDay(todayKey)} style={({ pressed }) => [styles.secondary, styles.emptyAction, pressed && styles.pressed]}><AppIcon name="add" size={16} color={palette.teal} /><Text style={styles.secondaryText}>Plan an activity</Text></Pressable></View>}
+          : <View style={styles.empty}><View style={styles.emptyIcon}><AppIcon name="compass-outline" size={24} color={palette.teal} /></View><Text style={styles.emptyTitle}>{areaFilter ? `Nothing open in ${areaFilter} yet` : 'Nothing open to join right now'}</Text><Text style={styles.emptyText}>{areaFilter ? 'Turn on the alert above and we’ll tell you when one is posted, or clear the area to see every game.' : 'Activities hosted by players will appear here as they’re posted. Anything you’ve joined is under My schedule.'}</Text><Pressable accessibilityRole="button" onPress={() => setNewGameDay(todayKey)} style={({ pressed }) => [styles.secondary, styles.emptyAction, pressed && styles.pressed]}><AppIcon name="add" size={16} color={palette.teal} /><Text style={styles.secondaryText}>Plan an activity</Text></Pressable></View>}
     </View>
   );
 
@@ -914,8 +993,13 @@ export default function ScheduleScreen({ navigation, route }) {
           </View>
         )}
       </ScrollView>
-      {openEntry ? <EntrySheet entry={openEntry} onClose={() => setOpenEntryId(null)} onChanged={() => load()} onStart={startGame} onOpenEvent={openEvent} onOpenRotation={openRotation} /> : null}
-      <NewActivitySheet visible={Boolean(newGameDay)} initialDay={newGameDay || todayKey} todayKey={todayKey} onClose={() => setNewGameDay(null)} onCreated={(key, kind, id) => { setNewGameDay(null); setView('mine'); setHiddenKinds((current) => current.filter((item) => item !== kind)); selectDay(key); if (key.startsWith(monthKey)) load(); if (id) setOpenEntryId(`game:${id}`); }} />
+      {openEntry ? <EntrySheet entry={openEntry} onClose={() => setOpenEntryId(null)} onChanged={() => load()} onStart={startGame} onOpenEvent={openEvent} onOpenRotation={openRotation}
+        onEdit={(game) => { setOpenEntryId(null); setActivityDraft(null); setEditingGame(game); setNewGameDay(dayKey(game.startsAt)); }}
+        onPlayAgain={(game) => { const next = nextWeekDraft(game); setOpenEntryId(null); setEditingGame(null); setActivityDraft(next); setNewGameDay(next.day); }} /> : null}
+      <NewActivitySheet visible={Boolean(newGameDay)} initialDay={newGameDay || todayKey} todayKey={todayKey} draft={activityDraft} editing={editingGame}
+        onClose={() => { setNewGameDay(null); setActivityDraft(null); setEditingGame(null); }}
+        onEdited={(key, id) => { setNewGameDay(null); setEditingGame(null); setView('mine'); selectDay(key); load(); setOpenEntryId(`game:${id}`); }}
+        onCreated={(key, kind, id) => { setNewGameDay(null); setActivityDraft(null); setView('mine'); setHiddenKinds((current) => current.filter((item) => item !== kind)); selectDay(key); if (key.startsWith(monthKey)) load(); if (id) setOpenEntryId(`game:${id}`); }} />
     </SafeAreaView>
   );
 }
@@ -1013,6 +1097,11 @@ const lightStyles = StyleSheet.create({
   emptyText: { maxWidth: 320, marginTop: 5, color: C.ink40, fontSize: 12, lineHeight: 17, textAlign: 'center' },
   emptyAction: { maxWidth: '100%', marginTop: 18, paddingHorizontal: 14 },
   discoverLink: { minHeight: 44, marginTop: 6, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6 },
+  discoverFilters: { marginBottom: 12, gap: 10 },
+  areaField: { minHeight: 46, paddingHorizontal: 12, flexDirection: 'row', alignItems: 'center', gap: 8, borderRadius: 12, borderWidth: 1, borderColor: C.line, backgroundColor: C.surface },
+  areaInput: { flex: 1, minHeight: 44, color: C.ink, fontSize: 13, fontWeight: '600' },
+  alertCard: { minHeight: 60, marginBottom: 14, paddingHorizontal: 14, paddingVertical: 11, flexDirection: 'row', alignItems: 'center', gap: 11, borderRadius: 14, borderWidth: 1, borderColor: C.line, backgroundColor: C.surface },
+  linkText: { color: C.teal, fontSize: 11, fontWeight: '900' },
   upcomingRow: { minHeight: 58, marginTop: 6, paddingHorizontal: 10, flexDirection: 'row', alignItems: 'center', gap: 10, borderRadius: 12, borderWidth: 1, borderColor: C.line, backgroundColor: C.surface },
   upcomingDate: { width: 38, alignItems: 'center' },
   upcomingMonth: { color: C.brick, fontSize: 8, fontWeight: '900', letterSpacing: .6 },

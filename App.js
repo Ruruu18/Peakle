@@ -7,6 +7,7 @@ import AppNavigator from './src/navigation/AppNavigator';
 import { LocationProvider } from './src/context/LocationContext';
 import { AuthProvider, useAuth } from './src/context/AuthContext';
 import AuthFlowScreen from './src/screens/AuthFlowScreen';
+import SharedGamePreview, { sharedGameCode } from './src/components/SharedGamePreview';
 import { ThemeProvider, useTheme } from './src/context/ThemeContext';
 import { OperationsProvider } from './src/context/OperationsContext';
 import { NearbyPlayersProvider } from './src/context/NearbyPlayersContext';
@@ -20,6 +21,7 @@ import DemoAutopilot from './src/components/DemoAutopilot';
 import { DEMO_MODE } from './src/config/demoMode';
 import { COURT_BOOKING_ENABLED } from './src/config/features';
 import { webNavigationState } from './src/lib/webNavigation';
+import { readPendingDestination, rememberPendingDestination, restorePendingDestination } from './src/lib/pendingDestination';
 import { formatPageTitle } from './src/web/BrowserNavigation';
 
 function setWebTitle(title) {
@@ -27,6 +29,9 @@ function setWebTitle(title) {
 }
 
 const Notifications = Platform.OS === 'web' ? null : require('expo-notifications');
+// Keep a shared game/event link opened in the browser so it is still the
+// destination after sign-up, Google sign-in, email verification and onboarding.
+if (Platform.OS === 'web' && typeof window !== 'undefined') rememberPendingDestination(window.location.pathname);
 const colors = { ink: '#0E2321', optic: '#D6E94A', surface: '#FFFFFF' };
 const BALL_IMAGE = require('./public/images/ball_green.png');
 const MINIMUM_LAUNCH_MS = Platform.OS === 'web' ? 150 : 2500;
@@ -177,6 +182,9 @@ function Root() {
   const hasFinishedLaunch = useRef(false);
   const handledNotificationResponse = useRef(null);
   const pendingJoinedMatch = useRef(null);
+  // A signed-out browser on a shared game link sees the game before signing up.
+  const [previewAuthScreen, setPreviewAuthScreen] = useState(null);
+  const previewCode = Platform.OS === 'web' && typeof window !== 'undefined' ? sharedGameCode(window.location.pathname) : null;
   const startupReady = authHydrated && minimumLaunchElapsed;
   if (startupReady) hasFinishedLaunch.current = true;
   const appBackground = isDark ? colors.ink : '#F3F5EF';
@@ -254,9 +262,17 @@ function Root() {
   if (!hasFinishedLaunch.current) { setWebTitle('Loading'); return <LaunchScreen edition={null} />; }
   if (signingOut) { setWebTitle('Logging Out'); return <LaunchScreen edition={null} status="LOGGING OUT" accessibilityLabel="Logging out of Peakle" />; }
   if (passwordRecovery) { setWebTitle('Reset Password'); return <AuthFlowScreen key="password-recovery" initialScreen="reset-password" />; }
-  if (!user) { setWebTitle('Sign In'); return <AuthFlowScreen key="login" initialScreen="login" />; }
-  if (!user.onboardingCompleted) { setWebTitle('Get Started'); return <AuthFlowScreen key={`new-user-setup-${user.id}`} initialScreen="new-user-overview" />; }
-  return <View key={`player-session-${user.id}`} style={[styles.appShell, { backgroundColor: appBackground }]}><NavigationContainer ref={navigationRef} theme={navigationTheme} linking={linking} documentTitle={{ formatter: formatPageTitle }}><AppNavigator /></NavigationContainer><MatchInviteOverlay onAccepted={openAcceptedMatch} /><MessageBanner navigationRef={navigationRef} />{!DEMO_MODE ? <FeedbackPrompt navigationRef={navigationRef} /> : null}{Platform.OS !== 'web' ? <SupportBubble navigationRef={navigationRef} /> : null}{DEMO_MODE && Platform.OS !== 'web' ? <DemoAutopilot navigationRef={navigationRef} /> : null}</View>;
+  if (!user && previewCode && !previewAuthScreen) { setWebTitle('You’re Invited'); return <SharedGamePreview code={previewCode} onSignUp={() => setPreviewAuthScreen('create')} onLogIn={() => setPreviewAuthScreen('login')} />; }
+  if (!user) { setWebTitle('Sign In'); return <AuthFlowScreen key={`auth-${previewAuthScreen || 'login'}`} initialScreen={previewAuthScreen || 'login'} />; }
+  // A player who arrived from a shared game goes straight to the short profile.
+  if (!user.onboardingCompleted) { setWebTitle('Get Started'); return <AuthFlowScreen key={`new-user-setup-${user.id}`} initialScreen={Platform.OS === 'web' && readPendingDestination() ? 'complete-profile' : 'new-user-overview'} />; }
+  return <PlayerShell key={`player-session-${user.id}`} style={[styles.appShell, { backgroundColor: appBackground }]}><NavigationContainer ref={navigationRef} theme={navigationTheme} linking={linking} documentTitle={{ formatter: formatPageTitle }}><AppNavigator /></NavigationContainer><MatchInviteOverlay onAccepted={openAcceptedMatch} /><MessageBanner navigationRef={navigationRef} />{!DEMO_MODE ? <FeedbackPrompt navigationRef={navigationRef} /> : null}{Platform.OS !== 'web' ? <SupportBubble navigationRef={navigationRef} /> : null}{DEMO_MODE && Platform.OS !== 'web' ? <DemoAutopilot navigationRef={navigationRef} /> : null}</PlayerShell>;
+}
+
+// The initializer runs before the navigator below reads the address bar.
+function PlayerShell({ style, children }) {
+  useState(() => (Platform.OS === 'web' ? restorePendingDestination() : null));
+  return <View style={style}>{children}</View>;
 }
 
 export default function App() {
@@ -295,6 +311,6 @@ const styles = StyleSheet.create({
   launchName: { color: colors.surface, fontSize: 24, fontWeight: '900', letterSpacing: -0.8 },
   launchEditionSlot: { width: 29, height: 16, justifyContent: 'center' },
   launchEditionText: { position: 'absolute', left: 0 },
-  launchPlayerPro: { color: '#DDE4E8', fontSize: 10, fontWeight: '900', letterSpacing: 1.2, textShadowColor: 'rgba(255,255,255,.9)', textShadowOffset: { width: 0, height: 0 }, textShadowRadius: 6 },
+  launchPlayerPro: { color: '#DDE4E8', fontSize: 10, fontWeight: '900', letterSpacing: 1.2, ...Platform.select({ web: { textShadow: '0px 0px 6px rgba(255,255,255,.9)' }, default: { textShadowColor: 'rgba(255,255,255,.9)', textShadowOffset: { width: 0, height: 0 }, textShadowRadius: 6 } }) },
   launchStatus: { marginTop: 9, color: colors.optic, fontSize: 8, fontWeight: '900', letterSpacing: 1.4 },
 });

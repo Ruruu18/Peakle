@@ -1,14 +1,48 @@
-// Web Speech API adapter with the same surface useShoutScoring uses from
-// expo-speech-recognition. The library's web module always uses the browser's cloud
-// recognizer, which fails with a `network` error in browsers that ship the API without
-// Google's speech service (Brave, Arc, Opera, embedded webviews) or behind firewalls.
-// This adapter can switch to Chrome's on-device recognizer (Chrome 139+) instead.
+// Web speech adapter with the same surface useShoutScoring uses from
+// expo-speech-recognition. It prefers the browser's Web Speech API, whose recognizer
+// is a cloud service in Chrome/Edge and Dictation in Safari. Many browsers ship the API
+// with nothing behind it (Brave, Arc, Opera, embedded webviews), Safari needs Dictation
+// switched on, and firewalls block Chrome's service. In those cases, and in browsers
+// without the API at all, it switches to free in-browser Whisper recognition.
+
+import {
+  abortWhisperSession,
+  isWhisperSupported,
+  startWhisperSession,
+  stopWhisperSession,
+} from './webWhisperRecognition';
 
 const LANG = 'en-US';
+// Remembers that this browser's own recognizer failed, so later matches start on the
+// local recognizer straight away instead of failing once first.
+const LOCAL_PREFERENCE_KEY = 'peakle.speech.useLocalRecognizer';
 
 function recognitionClass() {
   if (typeof window === 'undefined') return null;
   return window.SpeechRecognition || window.webkitSpeechRecognition || null;
+}
+
+function readLocalPreference() {
+  try {
+    return window.localStorage.getItem(LOCAL_PREFERENCE_KEY) === '1';
+  } catch {
+    return false;
+  }
+}
+
+function writeLocalPreference() {
+  try {
+    window.localStorage.setItem(LOCAL_PREFERENCE_KEY, '1');
+  } catch {
+    // Private windows can refuse storage; the fallback still applies for this visit.
+  }
+}
+
+function initialUseLocal() {
+  if (typeof window === 'undefined') return false;
+  // Brave exposes the API but never ships a recognizer for it.
+  if (!recognitionClass() || navigator.brave) return true;
+  return readLocalPreference();
 }
 
 function mapResultEvent(ev) {
@@ -46,10 +80,15 @@ const EVENT_MAPPERS = {
 
 const listeners = new Map();
 let recognition = null;
-let processLocally = false;
+let useLocal = null;
 
 function emit(eventName, payload) {
   listeners.get(eventName)?.forEach((listener) => listener(payload));
+}
+
+function usingLocal() {
+  if (useLocal === null) useLocal = initialUseLocal();
+  return useLocal;
 }
 
 const webSpeechRecognition = {
@@ -60,7 +99,7 @@ const webSpeechRecognition = {
   },
 
   isRecognitionAvailable() {
-    return Boolean(recognitionClass());
+    return Boolean(recognitionClass()) || isWhisperSupported();
   },
 
   // The browser asks for the microphone itself when recognition starts.
@@ -68,40 +107,34 @@ const webSpeechRecognition = {
     return Promise.resolve({ granted: true, canAskAgain: true, expires: 'never', status: 'granted' });
   },
 
-  isUsingOnDevice() {
-    return processLocally;
+  isUsingLocalRecognition() {
+    return usingLocal();
   },
 
-  // Switches future sessions to on-device recognition when the browser supports it,
-  // downloading the English language pack if needed. Resolves false when unsupported.
-  async enableOnDeviceRecognition() {
-    if (processLocally) return true;
-    const Recognition = recognitionClass();
-    if (typeof Recognition?.available !== 'function') return false;
-    const options = { langs: [LANG], processLocally: true };
-    try {
-      let status = await Recognition.available(options);
-      if ((status === 'downloadable' || status === 'downloading') && typeof Recognition.install === 'function') {
-        status = (await Recognition.install(options)) ? 'available' : status;
-      }
-      processLocally = status === 'available';
-    } catch {
-      processLocally = false;
-    }
-    return processLocally;
+  // Switches future sessions to the in-browser recognizer. Returns false when this
+  // browser cannot run it either.
+  useLocalRecognition() {
+    if (!isWhisperSupported()) return false;
+    useLocal = true;
+    writeLocalPreference();
+    return true;
   },
 
   start(options = {}) {
+    recognition?.abort();
+    recognition = null;
+    if (usingLocal()) {
+      startWhisperSession(emit);
+      return;
+    }
+
     const Recognition = recognitionClass();
     if (!Recognition) throw new Error('Speech recognition is not supported in this browser.');
-    recognition?.abort();
-
     const instance = new Recognition();
     instance.lang = options.lang || LANG;
     instance.interimResults = Boolean(options.interimResults);
     instance.maxAlternatives = options.maxAlternatives || 1;
     instance.continuous = Boolean(options.continuous);
-    if (processLocally && 'processLocally' in instance) instance.processLocally = true;
 
     Object.entries(EVENT_MAPPERS).forEach(([eventName, mapEvent]) => {
       instance.addEventListener(eventName, (ev) => {
@@ -116,11 +149,13 @@ const webSpeechRecognition = {
   },
 
   stop() {
-    recognition?.stop();
+    if (recognition) recognition.stop();
+    else stopWhisperSession();
   },
 
   abort() {
-    recognition?.abort();
+    if (recognition) recognition.abort();
+    else abortWhisperSession();
   },
 };
 

@@ -22,7 +22,8 @@
     "test:activity-safety": "node supabase/tests/activity-creation-safety.mjs",
     "test:player-suggestions": "node supabase/tests/player-suggestions.mjs",
     "test:follows": "node supabase/tests/instagram-follows.mjs",
-    "test:hosted-open-play": "node supabase/tests/hosted-open-play.mjs"
+    "test:hosted-open-play": "node supabase/tests/hosted-open-play.mjs",
+    "test:player-beta-growth": "node supabase/tests/player-beta-growth.mjs"
   },
   "jest": {
     "preset": "jest-expo",
